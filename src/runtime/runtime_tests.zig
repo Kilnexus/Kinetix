@@ -1,6 +1,7 @@
 const graph = @import("graph");
 const weights_mod = @import("weights");
 const execute = @import("execute.zig");
+const psa = @import("psa.zig");
 const spec = @import("spec.zig");
 const Tensor = @import("types.zig").Tensor;
 const Activation = @import("types.zig").Activation;
@@ -146,4 +147,58 @@ test "runC3k2 executes variant with bottleneck child" {
     defer output.deinit();
 
     try testing.expectEqualSlices(usize, &[_]usize{ 1, 256, 8, 8 }, &output.shape);
+}
+
+test "runAttention executes exported PSA attention block" {
+    const testing = @import("std").testing;
+
+    var model_graph = try graph.load(testing.allocator, "artifacts/graph.json");
+    defer model_graph.deinit();
+    var weights_blob = try weights_mod.WeightsBlob.load(testing.allocator, "artifacts/weights.bin");
+    defer weights_blob.deinit();
+
+    var input = try Tensor.init(testing.allocator, 1, 256, 10, 10);
+    defer input.deinit();
+    input.fill(0.0);
+
+    var output = try psa.runAttention(testing.allocator, &model_graph, &weights_blob, "model.model.10.m.0.attn", &input);
+    defer output.deinit();
+
+    try testing.expectEqualSlices(usize, &[_]usize{ 1, 256, 10, 10 }, &output.shape);
+}
+
+test "runPSABlock executes attention plus ffn residual block" {
+    const testing = @import("std").testing;
+
+    var model_graph = try graph.load(testing.allocator, "artifacts/graph.json");
+    defer model_graph.deinit();
+    var weights_blob = try weights_mod.WeightsBlob.load(testing.allocator, "artifacts/weights.bin");
+    defer weights_blob.deinit();
+
+    var input = try Tensor.init(testing.allocator, 1, 256, 10, 10);
+    defer input.deinit();
+    input.fill(0.0);
+
+    var output = try psa.runPSABlock(testing.allocator, &model_graph, &weights_blob, "model.model.10.m.0", &input);
+    defer output.deinit();
+
+    try testing.expectEqualSlices(usize, &[_]usize{ 1, 256, 10, 10 }, &output.shape);
+}
+
+test "runC2PSA executes exported layer 10 block" {
+    const testing = @import("std").testing;
+
+    var model_graph = try graph.load(testing.allocator, "artifacts/graph.json");
+    defer model_graph.deinit();
+    var weights_blob = try weights_mod.WeightsBlob.load(testing.allocator, "artifacts/weights.bin");
+    defer weights_blob.deinit();
+
+    var input = try Tensor.init(testing.allocator, 1, 512, 10, 10);
+    defer input.deinit();
+    input.fill(0.0);
+
+    var output = try psa.runC2PSA(testing.allocator, &model_graph, &weights_blob, "model.model.10", &input);
+    defer output.deinit();
+
+    try testing.expectEqualSlices(usize, &[_]usize{ 1, 512, 10, 10 }, &output.shape);
 }

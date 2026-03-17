@@ -2,6 +2,7 @@ const std = @import("std");
 const graph = @import("graph");
 const ops = @import("ops");
 const weights_mod = @import("weights");
+const psa = @import("psa.zig");
 const spec = @import("spec.zig");
 const types = @import("types.zig");
 const utils = @import("utils.zig");
@@ -257,6 +258,15 @@ pub fn runModule(
     }
     if (std.mem.eql(u8, module.kind, "C3k2")) {
         return runC3k2(allocator, model_graph, weights_blob, module_path, input);
+    }
+    if (std.mem.eql(u8, module.kind, "Attention")) {
+        return psa.runAttention(allocator, model_graph, weights_blob, module_path, input);
+    }
+    if (std.mem.eql(u8, module.kind, "PSABlock")) {
+        return psa.runPSABlock(allocator, model_graph, weights_blob, module_path, input);
+    }
+    if (std.mem.eql(u8, module.kind, "C2PSA")) {
+        return psa.runC2PSA(allocator, model_graph, weights_blob, module_path, input);
     }
     return error.InvalidModuleKind;
 }

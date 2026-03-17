@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("types.zig");
 const spec = @import("spec.zig");
 const execute = @import("execute.zig");
+const psa = @import("psa.zig");
 
 pub const TensorDesc = types.TensorDesc;
 pub const Tensor = types.Tensor;
@@ -20,6 +21,9 @@ pub const runSPPF = execute.runSPPF;
 pub const runC3k = execute.runC3k;
 pub const runC3k2 = execute.runC3k2;
 pub const runModule = execute.runModule;
+pub const runAttention = psa.runAttention;
+pub const runPSABlock = psa.runPSABlock;
+pub const runC2PSA = psa.runC2PSA;
 
 pub fn printRoadmap(writer: anytype) !void {
     try writer.writeAll(
