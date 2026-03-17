@@ -1,0 +1,7 @@
+{
+  "graph": "graph.json",
+  "weights": "weights.bin",
+  "weights_sha_placeholder": null,
+  "tensor_count": 175,
+  "weights_bytes": 37740984
+}
