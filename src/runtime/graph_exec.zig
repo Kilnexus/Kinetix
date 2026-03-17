@@ -111,7 +111,7 @@ pub fn runGraph(
     return detect_output orelse error.ModuleNotFound;
 }
 
-fn resolveInput(
+pub fn resolveInput(
     from: i64,
     node_index: usize,
     input: *const Tensor,
@@ -129,7 +129,7 @@ fn resolveInput(
     return null;
 }
 
-fn modulePathForNode(buffer: []u8, path: []const u8) RuntimeError![]const u8 {
+pub fn modulePathForNode(buffer: []u8, path: []const u8) RuntimeError![]const u8 {
     if (!std.mem.startsWith(u8, path, "model.")) return error.InvalidAttributeType;
     return std.fmt.bufPrint(buffer, "model.model.{s}", .{path["model.".len..]}) catch return error.BufferTooSmall;
 }

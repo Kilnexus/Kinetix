@@ -38,6 +38,7 @@ pub fn runAttention(
     const head_dim = channels / num_heads;
     if (qkv.shape[1] < channels or (qkv.shape[1] - channels) % (2 * num_heads) != 0) return error.InvalidAttributeType;
     const key_dim = (qkv.shape[1] - channels) / (2 * num_heads);
+    const per_head_span = 2 * key_dim + head_dim;
     const scale: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(key_dim)));
     const spatial = input.shape[2] * input.shape[3];
     const batch_heads = input.shape[0] * num_heads;
@@ -55,8 +56,8 @@ pub fn runAttention(
                 for (0..spatial) |key_idx| {
                     var acc: f32 = 0.0;
                     for (0..key_dim) |kd| {
-                        const q_channel = head * key_dim + kd;
-                        const k_channel = num_heads * key_dim + head * key_dim + kd;
+                        const q_channel = head * per_head_span + kd;
+                        const k_channel = head * per_head_span + key_dim + kd;
                         acc +=
                             qkv.data[(n * qkv.shape[1] + q_channel) * spatial + query_idx] *
                             qkv.data[(n * qkv.shape[1] + k_channel) * spatial + key_idx];
@@ -79,7 +80,7 @@ pub fn runAttention(
 
             for (0..head_dim) |hd| {
                 const out_channel = head * head_dim + hd;
-                const v_channel = 2 * num_heads * key_dim + out_channel;
+                const v_channel = head * per_head_span + 2 * key_dim + hd;
                 for (0..spatial) |out_idx| {
                     var acc: f32 = 0.0;
                     for (0..spatial) |key_idx| {
@@ -96,10 +97,14 @@ pub fn runAttention(
     var value_tensor = try Tensor.init(allocator, input.shape[0], channels, input.shape[2], input.shape[3]);
     defer value_tensor.deinit();
     for (0..input.shape[0]) |n| {
-        for (0..channels) |c| {
-            const src_channel = 2 * num_heads * key_dim + c;
-            for (0..spatial) |idx| {
-                value_tensor.data[(n * channels + c) * spatial + idx] = qkv.data[(n * qkv.shape[1] + src_channel) * spatial + idx];
+        for (0..num_heads) |head| {
+            for (0..head_dim) |hd| {
+                const dst_channel = head * head_dim + hd;
+                const src_channel = head * per_head_span + 2 * key_dim + hd;
+                for (0..spatial) |idx| {
+                    value_tensor.data[(n * channels + dst_channel) * spatial + idx] =
+                        qkv.data[(n * qkv.shape[1] + src_channel) * spatial + idx];
+                }
             }
         }
     }

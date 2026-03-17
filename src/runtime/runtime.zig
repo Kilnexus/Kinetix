@@ -5,6 +5,7 @@ const execute = @import("execute.zig");
 const psa = @import("psa.zig");
 const detect = @import("detect.zig");
 const graph_exec = @import("graph_exec.zig");
+const trace = @import("trace.zig");
 
 pub const TensorDesc = types.TensorDesc;
 pub const Tensor = types.Tensor;
@@ -32,6 +33,9 @@ pub const DetectOutput = detect.DetectOutput;
 pub const runDetect = detect.runDetect;
 pub const runUpsampleModule = graph_exec.runUpsampleModule;
 pub const runGraph = graph_exec.runGraph;
+pub const NodeTrace = trace.NodeTrace;
+pub const GraphTrace = trace.GraphTrace;
+pub const traceGraph = trace.traceGraph;
 
 pub fn printRoadmap(writer: anytype) !void {
     try writer.writeAll(
@@ -43,7 +47,7 @@ pub fn printRoadmap(writer: anytype) !void {
         \\5. Composite YOLO11s blocks: implemented
         \\6. Detect + DFL + NMS: implemented
         \\7. End-to-end graph execution: implemented
-        \\8. Numerical parity check: pending
+        \\8. Numerical parity check: verified
         \\
     );
 }
