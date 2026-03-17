@@ -255,3 +255,18 @@ test "runGraph executes the full 24-node model on a small input" {
     try testing.expectEqual(@as(usize, 64 + 16 + 4), output.candidate_count);
     try testing.expect(output.detections.len <= 84);
 }
+
+test "inspectModel reports exported graph as fully supported" {
+    const testing = @import("std").testing;
+
+    var model_graph = try graph.load(testing.allocator, "artifacts/graph.json");
+    defer model_graph.deinit();
+
+    var report = try runtime.inspectModel(testing.allocator, &model_graph);
+    defer report.deinit();
+
+    try testing.expect(report.supportsEndToEnd());
+    try testing.expectEqual(@as(usize, 1), report.detect_nodes);
+    try testing.expectEqual(@as(usize, 0), report.unsupported_execution_kinds.len);
+    try testing.expectEqual(@as(usize, 0), report.unsupported_module_kinds.len);
+}

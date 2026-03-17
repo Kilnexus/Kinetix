@@ -6,6 +6,7 @@ const psa = @import("modules/psa.zig");
 const detect = @import("modules/detect.zig");
 const graph_exec = @import("engine/graph_exec.zig");
 const trace = @import("engine/trace.zig");
+const inspect = @import("model/inspect.zig");
 
 pub const TensorDesc = types.TensorDesc;
 pub const Tensor = types.Tensor;
@@ -36,6 +37,11 @@ pub const runGraph = graph_exec.runGraph;
 pub const NodeTrace = trace.NodeTrace;
 pub const GraphTrace = trace.GraphTrace;
 pub const traceGraph = trace.traceGraph;
+pub const KindCount = inspect.KindCount;
+pub const SupportReport = inspect.SupportReport;
+pub const inspectModel = inspect.inspectModel;
+pub const isSupportedExecutionKind = inspect.isSupportedExecutionKind;
+pub const isSupportedModuleKind = inspect.isSupportedModuleKind;
 
 pub fn printRoadmap(writer: anytype) !void {
     try writer.writeAll(

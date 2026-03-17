@@ -22,6 +22,8 @@ pub fn main() !void {
 
     var weights_blob = try weights.WeightsBlob.load(allocator, weights_path);
     defer weights_blob.deinit();
+    var support = try runtime.inspectModel(allocator, &model_graph);
+    defer support.deinit();
 
     const first_tensor = &model_graph.tensors[0];
     const first_tensor_data = weights_blob.slice(first_tensor);
@@ -34,10 +36,34 @@ pub fn main() !void {
     try stdout.print("execution_nodes: {d}\n", .{model_graph.execution_nodes.len});
     try stdout.print("tensor_count: {d}\n", .{model_graph.tensors.len});
     try stdout.print("class_count: {d}\n", .{model_graph.class_count});
+    try stdout.print("detect_nodes: {d}\n", .{support.detect_nodes});
+    try stdout.print("runtime_compatible: {s}\n", .{if (support.supportsEndToEnd()) "true" else "false"});
+    try stdout.print(
+        "supported_execution_nodes: {d}/{d}\n",
+        .{ support.supported_execution_nodes, support.execution_nodes },
+    );
+    try stdout.print(
+        "supported_module_nodes: {d}/{d}\n",
+        .{ support.supported_module_nodes, support.module_nodes },
+    );
     try stdout.print(
         "first_tensor: {s} len={d} first_value={d:.6}\n",
         .{ first_tensor.name, first_tensor_data.len, first_tensor_data[0] },
     );
+    if (support.unsupported_execution_kinds.len > 0) {
+        try stdout.writeAll("unsupported_execution_kinds:");
+        for (support.unsupported_execution_kinds) |entry| {
+            try stdout.print(" {s}({d})", .{ entry.kind, entry.count });
+        }
+        try stdout.writeByte('\n');
+    }
+    if (support.unsupported_module_kinds.len > 0) {
+        try stdout.writeAll("unsupported_module_kinds:");
+        for (support.unsupported_module_kinds) |entry| {
+            try stdout.print(" {s}({d})", .{ entry.kind, entry.count });
+        }
+        try stdout.writeByte('\n');
+    }
 
     if (mode_arg) |value| {
         if (std.fmt.parseInt(usize, value, 10)) |size| {
