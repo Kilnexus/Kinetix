@@ -200,6 +200,152 @@ pub fn runSPPF(
     return try runConvModule(allocator, model_graph, weights_blob, cv2_path, &concat);
 }
 
+pub fn runC3k(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module_path: []const u8,
+    input: *const Tensor,
+) !Tensor {
+    const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
+    if (!std.mem.eql(u8, module.kind, "C3k")) return error.InvalidModuleKind;
+
+    var cv1_buffer: [256]u8 = undefined;
+    const cv1_path = try childModulePath(&cv1_buffer, module_path, "cv1");
+    var cv2_buffer: [256]u8 = undefined;
+    const cv2_path = try childModulePath(&cv2_buffer, module_path, "cv2");
+    var cv3_buffer: [256]u8 = undefined;
+    const cv3_path = try childModulePath(&cv3_buffer, module_path, "cv3");
+    var seq_buffer: [256]u8 = undefined;
+    const seq_path = try childModulePath(&seq_buffer, module_path, "m");
+
+    var left = try runConvModule(allocator, model_graph, weights_blob, cv1_path, input);
+    defer left.deinit();
+
+    const seq = model_graph.findModule(seq_path) orelse return error.ModuleNotFound;
+    for (seq.children) |child| {
+        const next = try runModule(allocator, model_graph, weights_blob, child.path, &left);
+        left.deinit();
+        left = next;
+    }
+
+    var right = try runConvModule(allocator, model_graph, weights_blob, cv2_path, input);
+    defer right.deinit();
+
+    var concat = try Tensor.init(
+        allocator,
+        left.shape[0],
+        left.shape[1] + right.shape[1],
+        left.shape[2],
+        left.shape[3],
+    );
+    defer concat.deinit();
+
+    const inputs = [_]*const Tensor{ &left, &right };
+    try ops.concatChannels(&inputs, &concat);
+
+    return try runConvModule(allocator, model_graph, weights_blob, cv3_path, &concat);
+}
+
+pub fn runC3k2(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module_path: []const u8,
+    input: *const Tensor,
+) !Tensor {
+    const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
+    if (!std.mem.eql(u8, module.kind, "C3k2")) return error.InvalidModuleKind;
+
+    const chunk_channels: usize = @intCast(
+        (module.getAttr("c") orelse return error.MissingAttribute).asInteger() orelse return error.InvalidAttributeType,
+    );
+
+    var cv1_buffer: [256]u8 = undefined;
+    const cv1_path = try childModulePath(&cv1_buffer, module_path, "cv1");
+    var cv2_buffer: [256]u8 = undefined;
+    const cv2_path = try childModulePath(&cv2_buffer, module_path, "cv2");
+    var list_buffer: [256]u8 = undefined;
+    const list_path = try childModulePath(&list_buffer, module_path, "m");
+
+    var stem = try runConvModule(allocator, model_graph, weights_blob, cv1_path, input);
+    defer stem.deinit();
+
+    if (stem.shape[1] != chunk_channels * 2) return ops.OpError.ShapeMismatch;
+
+    const module_list = model_graph.findModule(list_path) orelse return error.ModuleNotFound;
+    var parts = try allocator.alloc(Tensor, 2 + module_list.children.len);
+    defer allocator.free(parts);
+
+    var initialized_parts: usize = 0;
+    errdefer {
+        for (parts[0..initialized_parts]) |*part| part.deinit();
+    }
+
+    parts[0] = try sliceChannels(allocator, &stem, 0, chunk_channels);
+    initialized_parts += 1;
+    parts[1] = try sliceChannels(allocator, &stem, chunk_channels, chunk_channels);
+    initialized_parts += 1;
+
+    var current_index: usize = 1;
+    for (module_list.children) |child| {
+        parts[initialized_parts] = try runModule(allocator, model_graph, weights_blob, child.path, &parts[current_index]);
+        current_index = initialized_parts;
+        initialized_parts += 1;
+    }
+    defer {
+        for (parts[0..initialized_parts]) |*part| part.deinit();
+    }
+
+    var input_ptrs = try allocator.alloc(*const Tensor, initialized_parts);
+    defer allocator.free(input_ptrs);
+
+    var concat_channels: usize = 0;
+    for (parts[0..initialized_parts], 0..) |*part, index| {
+        input_ptrs[index] = part;
+        concat_channels += part.shape[1];
+    }
+
+    var concat = try Tensor.init(
+        allocator,
+        stem.shape[0],
+        concat_channels,
+        stem.shape[2],
+        stem.shape[3],
+    );
+    defer concat.deinit();
+    try ops.concatChannels(input_ptrs, &concat);
+
+    return try runConvModule(allocator, model_graph, weights_blob, cv2_path, &concat);
+}
+
+pub fn runModule(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module_path: []const u8,
+    input: *const Tensor,
+) !Tensor {
+    const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
+
+    if (std.mem.eql(u8, module.kind, "Conv") or std.mem.eql(u8, module.kind, "DWConv") or std.mem.eql(u8, module.kind, "Conv2d")) {
+        return runConvModule(allocator, model_graph, weights_blob, module_path, input);
+    }
+    if (std.mem.eql(u8, module.kind, "Bottleneck")) {
+        return runBottleneck(allocator, model_graph, weights_blob, module_path, input);
+    }
+    if (std.mem.eql(u8, module.kind, "SPPF")) {
+        return runSPPF(allocator, model_graph, weights_blob, module_path, input);
+    }
+    if (std.mem.eql(u8, module.kind, "C3k")) {
+        return runC3k(allocator, model_graph, weights_blob, module_path, input);
+    }
+    if (std.mem.eql(u8, module.kind, "C3k2")) {
+        return runC3k2(allocator, model_graph, weights_blob, module_path, input);
+    }
+    return error.InvalidModuleKind;
+}
+
 pub fn weightPrefixForModulePath(buffer: []u8, module_path: []const u8) RuntimeError![]const u8 {
     if (std.mem.eql(u8, module_path, "model.model")) {
         return std.fmt.bufPrint(buffer, "model", .{}) catch return error.BufferTooSmall;
@@ -270,6 +416,34 @@ fn pairFromValue(value: *const graph.AttrValue) RuntimeError![2]usize {
         @intCast(items[0].asInteger() orelse return error.InvalidAttributeType),
         @intCast(items[1].asInteger() orelse return error.InvalidAttributeType),
     };
+}
+
+fn sliceChannels(
+    allocator: std.mem.Allocator,
+    input: *const Tensor,
+    channel_start: usize,
+    channel_count: usize,
+) !Tensor {
+    if (channel_start + channel_count > input.shape[1]) return ops.OpError.ShapeMismatch;
+
+    var output = try Tensor.init(
+        allocator,
+        input.shape[0],
+        channel_count,
+        input.shape[2],
+        input.shape[3],
+    );
+
+    for (0..input.shape[0]) |n| {
+        for (0..channel_count) |c| {
+            for (0..input.shape[2]) |y| {
+                for (0..input.shape[3]) |x| {
+                    output.set(n, c, y, x, input.get(n, channel_start + c, y, x));
+                }
+            }
+        }
+    }
+    return output;
 }
 
 fn tensorView(meta: *const graph.TensorMeta, data: []const f32) Tensor {
@@ -378,4 +552,58 @@ test "runSPPF executes pooled projection block" {
     defer output.deinit();
 
     try testing.expectEqualSlices(usize, &[_]usize{ 1, 512, 4, 4 }, &output.shape);
+}
+
+test "runC3k executes composite branch block from exported weights" {
+    const testing = std.testing;
+
+    var model_graph = try graph.load(testing.allocator, "artifacts/graph.json");
+    defer model_graph.deinit();
+    var weights_blob = try weights_mod.WeightsBlob.load(testing.allocator, "artifacts/weights.bin");
+    defer weights_blob.deinit();
+
+    var input = try Tensor.init(testing.allocator, 1, 128, 8, 8);
+    defer input.deinit();
+    input.fill(0.0);
+
+    var output = try runC3k(testing.allocator, &model_graph, &weights_blob, "model.model.6.m.0", &input);
+    defer output.deinit();
+
+    try testing.expectEqualSlices(usize, &[_]usize{ 1, 128, 8, 8 }, &output.shape);
+}
+
+test "runC3k2 executes variant with nested C3k child" {
+    const testing = std.testing;
+
+    var model_graph = try graph.load(testing.allocator, "artifacts/graph.json");
+    defer model_graph.deinit();
+    var weights_blob = try weights_mod.WeightsBlob.load(testing.allocator, "artifacts/weights.bin");
+    defer weights_blob.deinit();
+
+    var input = try Tensor.init(testing.allocator, 1, 256, 8, 8);
+    defer input.deinit();
+    input.fill(0.0);
+
+    var output = try runC3k2(testing.allocator, &model_graph, &weights_blob, "model.model.6", &input);
+    defer output.deinit();
+
+    try testing.expectEqualSlices(usize, &[_]usize{ 1, 256, 8, 8 }, &output.shape);
+}
+
+test "runC3k2 executes variant with bottleneck child" {
+    const testing = std.testing;
+
+    var model_graph = try graph.load(testing.allocator, "artifacts/graph.json");
+    defer model_graph.deinit();
+    var weights_blob = try weights_mod.WeightsBlob.load(testing.allocator, "artifacts/weights.bin");
+    defer weights_blob.deinit();
+
+    var input = try Tensor.init(testing.allocator, 1, 768, 8, 8);
+    defer input.deinit();
+    input.fill(0.0);
+
+    var output = try runC3k2(testing.allocator, &model_graph, &weights_blob, "model.model.13", &input);
+    defer output.deinit();
+
+    try testing.expectEqualSlices(usize, &[_]usize{ 1, 256, 8, 8 }, &output.shape);
 }
