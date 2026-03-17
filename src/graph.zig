@@ -1,5 +1,122 @@
 const std = @import("std");
 
+pub const AttrEntry = struct {
+    key: []u8,
+    value: AttrValue,
+
+    pub fn deinit(self: *AttrEntry, allocator: std.mem.Allocator) void {
+        allocator.free(self.key);
+        self.value.deinit(allocator);
+        self.* = undefined;
+    }
+};
+
+pub const AttrValue = union(enum) {
+    null_value,
+    bool_value: bool,
+    integer_value: i64,
+    float_value: f64,
+    string_value: []u8,
+    array_value: []AttrValue,
+    object_value: []AttrEntry,
+
+    pub fn deinit(self: *AttrValue, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .string_value => |value| allocator.free(value),
+            .array_value => |items| {
+                for (items) |*item| item.deinit(allocator);
+                allocator.free(items);
+            },
+            .object_value => |entries| {
+                for (entries) |*entry| entry.deinit(allocator);
+                allocator.free(entries);
+            },
+            else => {},
+        }
+        self.* = undefined;
+    }
+
+    pub fn get(self: *const AttrValue, key: []const u8) ?*const AttrValue {
+        return switch (self.*) {
+            .object_value => |entries| blk: {
+                for (entries) |*entry| {
+                    if (std.mem.eql(u8, entry.key, key)) break :blk &entry.value;
+                }
+                break :blk null;
+            },
+            else => null,
+        };
+    }
+
+    pub fn asBool(self: *const AttrValue) ?bool {
+        return switch (self.*) {
+            .bool_value => |value| value,
+            else => null,
+        };
+    }
+
+    pub fn asInteger(self: *const AttrValue) ?i64 {
+        return switch (self.*) {
+            .integer_value => |value| value,
+            else => null,
+        };
+    }
+
+    pub fn asFloat(self: *const AttrValue) ?f64 {
+        return switch (self.*) {
+            .float_value => |value| value,
+            .integer_value => |value| @floatFromInt(value),
+            else => null,
+        };
+    }
+
+    pub fn asString(self: *const AttrValue) ?[]const u8 {
+        return switch (self.*) {
+            .string_value => |value| value,
+            else => null,
+        };
+    }
+
+    pub fn asArray(self: *const AttrValue) ?[]const AttrValue {
+        return switch (self.*) {
+            .array_value => |value| value,
+            else => null,
+        };
+    }
+};
+
+pub const ModuleNode = struct {
+    path: []u8,
+    kind: []u8,
+    attrs: []AttrEntry,
+    children: []ModuleNode,
+
+    pub fn deinit(self: *ModuleNode, allocator: std.mem.Allocator) void {
+        allocator.free(self.path);
+        allocator.free(self.kind);
+        for (self.attrs) |*entry| entry.deinit(allocator);
+        allocator.free(self.attrs);
+        for (self.children) |*child| child.deinit(allocator);
+        allocator.free(self.children);
+        self.* = undefined;
+    }
+
+    pub fn findByPath(self: *const ModuleNode, target_path: []const u8) ?*const ModuleNode {
+        if (std.mem.eql(u8, self.path, target_path)) return self;
+        for (self.children) |*child| {
+            if (child.findByPath(target_path)) |found| return found;
+        }
+        return null;
+    }
+
+    pub fn getAttr(self: *const ModuleNode, key: []const u8) ?*const AttrValue {
+        for (self.attrs) |*entry| {
+            if (std.mem.eql(u8, entry.key, key)) return &entry.value;
+        }
+        return null;
+    }
+};
+
 pub const TensorMeta = struct {
     name: []u8,
     rank: usize,
@@ -26,6 +143,7 @@ pub const Graph = struct {
     class_count: i64,
     tensors: []TensorMeta,
     execution_nodes: []ExecutionNode,
+    module_tree: ModuleNode,
 
     pub fn deinit(self: *Graph) void {
         self.allocator.free(self.model_name);
@@ -37,7 +155,19 @@ pub const Graph = struct {
             self.allocator.free(node.from);
         }
         self.allocator.free(self.execution_nodes);
+        self.module_tree.deinit(self.allocator);
         self.* = undefined;
+    }
+
+    pub fn findModule(self: *const Graph, target_path: []const u8) ?*const ModuleNode {
+        return self.module_tree.findByPath(target_path);
+    }
+
+    pub fn findTensor(self: *const Graph, tensor_name: []const u8) ?*const TensorMeta {
+        for (self.tensors) |*tensor| {
+            if (std.mem.eql(u8, tensor.name, tensor_name)) return tensor;
+        }
+        return null;
     }
 };
 
@@ -54,6 +184,23 @@ pub fn load(allocator: std.mem.Allocator, graph_path: []const u8) !Graph {
     const contents = try cwd.readFileAlloc(allocator, graph_path, 64 * 1024 * 1024);
     defer allocator.free(contents);
 
+    return try parseGraph(allocator, contents);
+}
+
+pub fn loadSummary(allocator: std.mem.Allocator, graph_path: []const u8) !Summary {
+    var model_graph = try load(allocator, graph_path);
+    defer model_graph.deinit();
+
+    return .{
+        .format_version = model_graph.format_version,
+        .model_name = try allocator.dupe(u8, model_graph.model_name),
+        .tensor_count = model_graph.tensors.len,
+        .execution_nodes = model_graph.execution_nodes.len,
+        .class_count = model_graph.class_count,
+    };
+}
+
+fn parseGraph(allocator: std.mem.Allocator, contents: []const u8) !Graph {
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, contents, .{});
     defer parsed.deinit();
 
@@ -61,6 +208,7 @@ pub fn load(allocator: std.mem.Allocator, graph_path: []const u8) !Graph {
     const metadata = root.get("metadata").?.object;
     const tensors_json = root.get("tensors").?.array;
     const execution_plan_json = root.get("execution_plan").?.array;
+    const module_tree_json = root.get("module_tree").?;
 
     var tensors = try allocator.alloc(TensorMeta, tensors_json.items.len);
     errdefer allocator.free(tensors);
@@ -83,8 +231,9 @@ pub fn load(allocator: std.mem.Allocator, graph_path: []const u8) !Graph {
     }
 
     var execution_nodes = try allocator.alloc(ExecutionNode, execution_plan_json.items.len);
+    var initialized_nodes: usize = 0;
     errdefer {
-        for (execution_nodes[0..execution_plan_json.items.len]) |node| {
+        for (execution_nodes[0..initialized_nodes]) |node| {
             allocator.free(node.path);
             allocator.free(node.kind);
             allocator.free(node.from);
@@ -105,7 +254,11 @@ pub fn load(allocator: std.mem.Allocator, graph_path: []const u8) !Graph {
             .kind = try allocator.dupe(u8, node_object.get("kind").?.string),
             .from = from,
         };
+        initialized_nodes += 1;
     }
+
+    var module_tree = try parseModuleNode(allocator, module_tree_json);
+    errdefer module_tree.deinit(allocator);
 
     return .{
         .allocator = allocator,
@@ -114,18 +267,139 @@ pub fn load(allocator: std.mem.Allocator, graph_path: []const u8) !Graph {
         .class_count = metadata.get("class_count").?.integer,
         .tensors = tensors,
         .execution_nodes = execution_nodes,
+        .module_tree = module_tree,
     };
 }
 
-pub fn loadSummary(allocator: std.mem.Allocator, graph_path: []const u8) !Summary {
-    var model_graph = try load(allocator, graph_path);
-    defer model_graph.deinit();
+fn parseModuleNode(allocator: std.mem.Allocator, node_value: std.json.Value) !ModuleNode {
+    const node_object = node_value.object;
+    const attrs_object = node_object.get("attrs").?.object;
+    const children_array = node_object.get("children").?.array;
+
+    var attrs = try allocator.alloc(AttrEntry, attrs_object.count());
+    var initialized_attrs: usize = 0;
+    errdefer {
+        for (attrs[0..initialized_attrs]) |*entry| entry.deinit(allocator);
+        allocator.free(attrs);
+    }
+
+    var attr_iter = attrs_object.iterator();
+    while (attr_iter.next()) |entry| {
+        attrs[initialized_attrs] = .{
+            .key = try allocator.dupe(u8, entry.key_ptr.*),
+            .value = try parseAttrValue(allocator, entry.value_ptr.*),
+        };
+        initialized_attrs += 1;
+    }
+
+    var children = try allocator.alloc(ModuleNode, children_array.items.len);
+    var initialized_children: usize = 0;
+    errdefer {
+        for (children[0..initialized_children]) |*child| child.deinit(allocator);
+        allocator.free(children);
+    }
+
+    for (children_array.items) |child_value| {
+        children[initialized_children] = try parseModuleNode(allocator, child_value);
+        initialized_children += 1;
+    }
 
     return .{
-        .format_version = model_graph.format_version,
-        .model_name = try allocator.dupe(u8, model_graph.model_name),
-        .tensor_count = model_graph.tensors.len,
-        .execution_nodes = model_graph.execution_nodes.len,
-        .class_count = model_graph.class_count,
+        .path = try allocator.dupe(u8, node_object.get("path").?.string),
+        .kind = try allocator.dupe(u8, node_object.get("kind").?.string),
+        .attrs = attrs,
+        .children = children,
     };
+}
+
+fn parseAttrValue(allocator: std.mem.Allocator, value: std.json.Value) !AttrValue {
+    return switch (value) {
+        .null => .null_value,
+        .bool => |item| .{ .bool_value = item },
+        .integer => |item| .{ .integer_value = item },
+        .float => |item| .{ .float_value = item },
+        .string => |item| .{ .string_value = try allocator.dupe(u8, item) },
+        .array => |items| blk: {
+            var values = try allocator.alloc(AttrValue, items.items.len);
+            var initialized: usize = 0;
+            errdefer {
+                for (values[0..initialized]) |*owned| owned.deinit(allocator);
+                allocator.free(values);
+            }
+
+            for (items.items) |child| {
+                values[initialized] = try parseAttrValue(allocator, child);
+                initialized += 1;
+            }
+            break :blk .{ .array_value = values };
+        },
+        .object => |object| blk: {
+            var entries = try allocator.alloc(AttrEntry, object.count());
+            var initialized: usize = 0;
+            errdefer {
+                for (entries[0..initialized]) |*entry| entry.deinit(allocator);
+                allocator.free(entries);
+            }
+
+            var iter = object.iterator();
+            while (iter.next()) |entry| {
+                entries[initialized] = .{
+                    .key = try allocator.dupe(u8, entry.key_ptr.*),
+                    .value = try parseAttrValue(allocator, entry.value_ptr.*),
+                };
+                initialized += 1;
+            }
+            break :blk .{ .object_value = entries };
+        },
+        else => error.UnsupportedJsonValue,
+    };
+}
+
+test "parseGraph exposes module tree and attrs" {
+    const testing = std.testing;
+
+    const raw =
+        \\{
+        \\  "format_version": 1,
+        \\  "model_name": "mini",
+        \\  "metadata": { "class_count": 2 },
+        \\  "tensors": [],
+        \\  "execution_plan": [
+        \\    { "index": 0, "path": "model.0", "kind": "Conv", "from": [-1] }
+        \\  ],
+        \\  "module_tree": {
+        \\    "path": "model",
+        \\    "kind": "Root",
+        \\    "attrs": {},
+        \\    "children": [
+        \\      {
+        \\        "path": "model.0",
+        \\        "kind": "Conv",
+        \\        "attrs": {
+        \\          "activation": "SiLU",
+        \\          "conv2d": {
+        \\            "out_channels": 16,
+        \\            "kernel_size": [3, 3]
+        \\          }
+        \\        },
+        \\        "children": []
+        \\      }
+        \\    ]
+        \\  }
+        \\}
+    ;
+
+    var model_graph = try parseGraph(testing.allocator, raw);
+    defer model_graph.deinit();
+
+    const conv = model_graph.findModule("model.0").?;
+    try testing.expectEqualStrings("Conv", conv.kind);
+    try testing.expectEqualStrings("SiLU", conv.getAttr("activation").?.asString().?);
+
+    const conv2d = conv.getAttr("conv2d").?;
+    try testing.expectEqual(@as(i64, 16), conv2d.get("out_channels").?.asInteger().?);
+
+    const kernel = conv2d.get("kernel_size").?.asArray().?;
+    try testing.expectEqual(@as(i64, 3), kernel[0].asInteger().?);
+    try testing.expectEqual(@as(i64, 3), kernel[1].asInteger().?);
 }
