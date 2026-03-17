@@ -1,25 +1,15 @@
 const std = @import("std");
+const imaging = @import("imaging");
 
 const c = @cImport({
     @cInclude("stb_image.h");
 });
 
-pub const ImageError = error{
+pub const ImageError = imaging.ImageError || error{
     ImageDecodeFailed,
-    InvalidImageDimensions,
 };
 
-pub const ImageU8 = struct {
-    width: usize,
-    height: usize,
-    channels: usize,
-    data: []u8,
-
-    pub fn deinit(self: *ImageU8) void {
-        c.stbi_image_free(self.data.ptr);
-        self.* = undefined;
-    }
-};
+pub const ImageU8 = imaging.ImageU8;
 
 pub fn loadRgb8(allocator: std.mem.Allocator, path: []const u8) !ImageU8 {
     var path_z = try allocator.allocSentinel(u8, path.len, 0);
@@ -38,12 +28,10 @@ pub fn loadRgb8(allocator: std.mem.Allocator, path: []const u8) !ImageU8 {
 
     const width_usize: usize = @intCast(width);
     const height_usize: usize = @intCast(height);
-    const len = width_usize * height_usize * 3;
+    var image = try ImageU8.init(allocator, width_usize, height_usize, 3);
+    errdefer image.deinit();
 
-    return .{
-        .width = width_usize,
-        .height = height_usize,
-        .channels = 3,
-        .data = pixels[0..len],
-    };
+    @memcpy(image.data, pixels[0 .. width_usize * height_usize * 3]);
+    c.stbi_image_free(pixels);
+    return image;
 }

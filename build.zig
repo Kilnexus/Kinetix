@@ -26,6 +26,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     weights_mod.addImport("graph", graph_mod);
+    const imaging_mod = b.createModule(.{
+        .root_source_file = b.path("src/imaging/imaging.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     const runtime_mod = b.createModule(.{
         .root_source_file = b.path("src/runtime/runtime.zig"),
@@ -49,6 +54,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addIncludePath(b.path("third_party/stb"));
     exe.addCSourceFile(.{ .file = b.path("src/vision/stb_image_impl.c") });
     exe.root_module.addImport("graph", graph_mod);
+    exe.root_module.addImport("imaging", imaging_mod);
     exe.root_module.addImport("runtime", runtime_mod);
     exe.root_module.addImport("weights", weights_mod);
 
@@ -71,6 +77,7 @@ pub fn build(b: *std.Build) void {
     unit_tests.root_module.addImport("tensor", tensor_mod);
     unit_tests.root_module.addImport("ops", ops_mod);
     unit_tests.root_module.addImport("weights", weights_mod);
+    unit_tests.root_module.addImport("imaging", imaging_mod);
     unit_tests.root_module.addImport("runtime", runtime_mod);
 
     const run_tests = b.addRunArtifact(unit_tests);
