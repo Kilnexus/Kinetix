@@ -1,11 +1,11 @@
 const std = @import("std");
-const types = @import("types.zig");
-const spec = @import("spec.zig");
-const execute = @import("execute.zig");
-const psa = @import("psa.zig");
-const detect = @import("detect.zig");
-const graph_exec = @import("graph_exec.zig");
-const trace = @import("trace.zig");
+const types = @import("base/types.zig");
+const spec = @import("base/spec.zig");
+const blocks = @import("modules/blocks.zig");
+const psa = @import("modules/psa.zig");
+const detect = @import("modules/detect.zig");
+const graph_exec = @import("engine/graph_exec.zig");
+const trace = @import("engine/trace.zig");
 
 pub const TensorDesc = types.TensorDesc;
 pub const Tensor = types.Tensor;
@@ -18,12 +18,12 @@ pub const resolveConvSpec = spec.resolveConvSpec;
 pub const weightPrefixForModulePath = spec.weightPrefixForModulePath;
 pub const getNodePair = spec.getNodePair;
 
-pub const runConvModule = execute.runConvModule;
-pub const runBottleneck = execute.runBottleneck;
-pub const runSPPF = execute.runSPPF;
-pub const runC3k = execute.runC3k;
-pub const runC3k2 = execute.runC3k2;
-pub const runModule = execute.runModule;
+pub const runConvModule = blocks.runConvModule;
+pub const runBottleneck = blocks.runBottleneck;
+pub const runSPPF = blocks.runSPPF;
+pub const runC3k = blocks.runC3k;
+pub const runC3k2 = blocks.runC3k2;
+pub const runModule = blocks.runModule;
 pub const runAttention = psa.runAttention;
 pub const runPSABlock = psa.runPSABlock;
 pub const runC2PSA = psa.runC2PSA;
@@ -50,8 +50,4 @@ pub fn printRoadmap(writer: anytype) !void {
         \\8. Numerical parity check: verified
         \\
     );
-}
-
-test {
-    _ = @import("runtime_tests.zig");
 }

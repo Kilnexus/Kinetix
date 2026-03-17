@@ -1,8 +1,8 @@
 const std = @import("std");
 const graph = @import("graph");
-const execute = @import("execute.zig");
+const blocks = @import("../modules/blocks.zig");
 const graph_exec = @import("graph_exec.zig");
-const types = @import("types.zig");
+const types = @import("../base/types.zig");
 const weights_mod = @import("weights");
 
 pub const Tensor = types.Tensor;
@@ -90,7 +90,7 @@ pub fn traceGraph(
             if (std.mem.eql(u8, node.kind, "Upsample")) {
                 break :blk try graph_exec.runUpsampleModule(allocator, model_graph, module_path, source);
             }
-            break :blk try execute.runModule(allocator, model_graph, weights_blob, module_path, source);
+            break :blk try blocks.runModule(allocator, model_graph, weights_blob, module_path, source);
         };
 
         outputs[node_index] = output;

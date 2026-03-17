@@ -1,9 +1,9 @@
 const std = @import("std");
 const graph = @import("graph");
-const execute = @import("execute.zig");
-const spec = @import("spec.zig");
-const types = @import("types.zig");
-const utils = @import("utils.zig");
+const blocks = @import("blocks.zig");
+const spec = @import("../base/spec.zig");
+const types = @import("../base/types.zig");
+const utils = @import("../base/utils.zig");
 const weights_mod = @import("weights");
 
 pub const Tensor = types.Tensor;
@@ -158,7 +158,7 @@ fn runNodeChain(
         return current;
     }
 
-    return execute.runModule(allocator, model_graph, weights_blob, node.path, input);
+    return blocks.runModule(allocator, model_graph, weights_blob, node.path, input);
 }
 
 fn dflExpectation(

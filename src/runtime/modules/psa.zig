@@ -2,9 +2,9 @@ const std = @import("std");
 const graph = @import("graph");
 const ops = @import("ops");
 const weights_mod = @import("weights");
-const execute = @import("execute.zig");
-const types = @import("types.zig");
-const utils = @import("utils.zig");
+const blocks = @import("blocks.zig");
+const types = @import("../base/types.zig");
+const utils = @import("../base/utils.zig");
 
 pub const Tensor = types.Tensor;
 pub const RuntimeError = types.RuntimeError;
@@ -31,7 +31,7 @@ pub fn runAttention(
     var pe_path_buffer: [256]u8 = undefined;
     const pe_path = try utils.childModulePath(&pe_path_buffer, module_path, "pe");
 
-    var qkv = try execute.runConvModule(allocator, model_graph, weights_blob, qkv_path, input);
+    var qkv = try blocks.runConvModule(allocator, model_graph, weights_blob, qkv_path, input);
     defer qkv.deinit();
 
     const channels = input.shape[1];
@@ -109,11 +109,11 @@ pub fn runAttention(
         }
     }
 
-    var pe = try execute.runConvModule(allocator, model_graph, weights_blob, pe_path, &value_tensor);
+    var pe = try blocks.runConvModule(allocator, model_graph, weights_blob, pe_path, &value_tensor);
     defer pe.deinit();
     for (attended.data, pe.data) |*dst, src| dst.* += src;
 
-    return try execute.runConvModule(allocator, model_graph, weights_blob, proj_path, &attended);
+    return try blocks.runConvModule(allocator, model_graph, weights_blob, proj_path, &attended);
 }
 
 pub fn runPSABlock(
@@ -144,7 +144,7 @@ pub fn runPSABlock(
     defer current.deinit();
 
     for (ffn.children) |child| {
-        const next = try execute.runModule(allocator, model_graph, weights_blob, child.path, &current);
+        const next = try blocks.runModule(allocator, model_graph, weights_blob, child.path, &current);
         current.deinit();
         current = next;
     }
@@ -178,7 +178,7 @@ pub fn runC2PSA(
     var seq_buffer: [256]u8 = undefined;
     const seq_path = try utils.childModulePath(&seq_buffer, module_path, "m");
 
-    var stem = try execute.runConvModule(allocator, model_graph, weights_blob, cv1_path, input);
+    var stem = try blocks.runConvModule(allocator, model_graph, weights_blob, cv1_path, input);
     defer stem.deinit();
     if (stem.shape[1] != hidden_channels * 2) return ops.OpError.ShapeMismatch;
 
@@ -189,7 +189,7 @@ pub fn runC2PSA(
 
     const seq = model_graph.findModule(seq_path) orelse return error.ModuleNotFound;
     for (seq.children) |child| {
-        const next = try execute.runModule(allocator, model_graph, weights_blob, child.path, &right);
+        const next = try blocks.runModule(allocator, model_graph, weights_blob, child.path, &right);
         right.deinit();
         right = next;
     }
@@ -199,5 +199,5 @@ pub fn runC2PSA(
     const inputs = [_]*const Tensor{ &left, &right };
     try ops.concatChannels(&inputs, &concat);
 
-    return try execute.runConvModule(allocator, model_graph, weights_blob, cv2_path, &concat);
+    return try blocks.runConvModule(allocator, model_graph, weights_blob, cv2_path, &concat);
 }

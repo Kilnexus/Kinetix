@@ -42,7 +42,7 @@ def main() -> None:
 
         export_cmd = [
             args.python,
-            "tools/export_reference_trace.py",
+            "tools/parity/export_reference_trace.py",
             "--graph",
             graph_path.as_posix(),
             "--size",
@@ -72,7 +72,7 @@ def main() -> None:
         run(
             [
                 args.python,
-                "tools/compare_trace.py",
+                "tools/parity/compare_trace.py",
                 "--reference",
                 reference_trace.as_posix(),
                 "--zig",
@@ -85,7 +85,7 @@ def main() -> None:
 
         compare_cmd = [
             args.python,
-            "tools/compare_zero_parity.py",
+            "tools/parity/compare_zero_parity.py",
             "--graph",
             graph_path.as_posix(),
             "--weights-bin",

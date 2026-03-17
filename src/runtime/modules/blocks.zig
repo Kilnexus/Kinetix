@@ -3,9 +3,9 @@ const graph = @import("graph");
 const ops = @import("ops");
 const weights_mod = @import("weights");
 const psa = @import("psa.zig");
-const spec = @import("spec.zig");
-const types = @import("types.zig");
-const utils = @import("utils.zig");
+const spec = @import("../base/spec.zig");
+const types = @import("../base/types.zig");
+const utils = @import("../base/utils.zig");
 
 pub const Tensor = types.Tensor;
 pub const RuntimeError = types.RuntimeError;

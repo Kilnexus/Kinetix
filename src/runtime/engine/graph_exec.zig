@@ -1,9 +1,9 @@
 const std = @import("std");
 const graph = @import("graph");
 const ops = @import("ops");
-const detect = @import("detect.zig");
-const execute = @import("execute.zig");
-const types = @import("types.zig");
+const detect = @import("../modules/detect.zig");
+const blocks = @import("../modules/blocks.zig");
+const types = @import("../base/types.zig");
 const weights_mod = @import("weights");
 
 pub const Tensor = types.Tensor;
@@ -104,7 +104,7 @@ pub fn runGraph(
         const output = if (std.mem.eql(u8, node.kind, "Upsample"))
             try runUpsampleModule(allocator, model_graph, module_path, source)
         else
-            try execute.runModule(allocator, model_graph, weights_blob, module_path, source);
+            try blocks.runModule(allocator, model_graph, weights_blob, module_path, source);
         outputs[node_index] = output;
     }
 

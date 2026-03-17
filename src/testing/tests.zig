@@ -4,4 +4,5 @@ test {
     _ = @import("ops");
     _ = @import("runtime");
     _ = @import("weights");
+    _ = @import("runtime/runtime_tests.zig");
 }
