@@ -3,6 +3,8 @@ const types = @import("types.zig");
 const spec = @import("spec.zig");
 const execute = @import("execute.zig");
 const psa = @import("psa.zig");
+const detect = @import("detect.zig");
+const graph_exec = @import("graph_exec.zig");
 
 pub const TensorDesc = types.TensorDesc;
 pub const Tensor = types.Tensor;
@@ -24,6 +26,12 @@ pub const runModule = execute.runModule;
 pub const runAttention = psa.runAttention;
 pub const runPSABlock = psa.runPSABlock;
 pub const runC2PSA = psa.runC2PSA;
+pub const Detection = detect.Detection;
+pub const DetectOptions = detect.DetectOptions;
+pub const DetectOutput = detect.DetectOutput;
+pub const runDetect = detect.runDetect;
+pub const runUpsampleModule = graph_exec.runUpsampleModule;
+pub const runGraph = graph_exec.runGraph;
 
 pub fn printRoadmap(writer: anytype) !void {
     try writer.writeAll(
@@ -32,9 +40,10 @@ pub fn printRoadmap(writer: anytype) !void {
         \\2. Zig graph loader: ready
         \\3. Primitive tensor ops: implemented
         \\4. Module-tree spec resolution: implemented
-        \\5. Composite YOLO11s blocks: pending
-        \\6. Detect + DFL + NMS: pending
-        \\7. End-to-end parity check: pending
+        \\5. Composite YOLO11s blocks: implemented
+        \\6. Detect + DFL + NMS: implemented
+        \\7. End-to-end graph execution: implemented
+        \\8. Numerical parity check: pending
         \\
     );
 }

@@ -1,5 +1,6 @@
 const graph = @import("graph");
 const weights_mod = @import("weights");
+const detect = @import("detect.zig");
 const execute = @import("execute.zig");
 const psa = @import("psa.zig");
 const spec = @import("spec.zig");
@@ -201,4 +202,59 @@ test "runC2PSA executes exported layer 10 block" {
     defer output.deinit();
 
     try testing.expectEqualSlices(usize, &[_]usize{ 1, 512, 10, 10 }, &output.shape);
+}
+
+test "runDetect decodes three feature maps into bounded detections" {
+    const testing = @import("std").testing;
+
+    var model_graph = try graph.load(testing.allocator, "artifacts/graph.json");
+    defer model_graph.deinit();
+    var weights_blob = try weights_mod.WeightsBlob.load(testing.allocator, "artifacts/weights.bin");
+    defer weights_blob.deinit();
+
+    var p3 = try Tensor.init(testing.allocator, 1, 128, 40, 40);
+    defer p3.deinit();
+    p3.fill(0.0);
+
+    var p4 = try Tensor.init(testing.allocator, 1, 256, 20, 20);
+    defer p4.deinit();
+    p4.fill(0.0);
+
+    var p5 = try Tensor.init(testing.allocator, 1, 512, 10, 10);
+    defer p5.deinit();
+    p5.fill(0.0);
+
+    const features = [_]*const Tensor{ &p3, &p4, &p5 };
+    var output = try detect.runDetect(testing.allocator, &model_graph, &weights_blob, "model.model.23", &features, .{
+        .score_threshold = 0.0,
+        .iou_threshold = 0.7,
+        .max_det = 300,
+    });
+    defer output.deinit();
+
+    try testing.expectEqual(@as(usize, 40 * 40 + 20 * 20 + 10 * 10), output.candidate_count);
+    try testing.expect(output.detections.len <= 300);
+}
+
+test "runGraph executes the full 24-node model on a small input" {
+    const testing = @import("std").testing;
+
+    var model_graph = try graph.load(testing.allocator, "artifacts/graph.json");
+    defer model_graph.deinit();
+    var weights_blob = try weights_mod.WeightsBlob.load(testing.allocator, "artifacts/weights.bin");
+    defer weights_blob.deinit();
+
+    var input = try Tensor.init(testing.allocator, 1, 3, 64, 64);
+    defer input.deinit();
+    input.fill(0.0);
+
+    var output = try @import("graph_exec.zig").runGraph(testing.allocator, &model_graph, &weights_blob, &input, .{
+        .score_threshold = 0.0,
+        .iou_threshold = 0.7,
+        .max_det = 300,
+    });
+    defer output.deinit();
+
+    try testing.expectEqual(@as(usize, 64 + 16 + 4), output.candidate_count);
+    try testing.expect(output.detections.len <= 84);
 }

@@ -241,7 +241,7 @@ pub fn runModule(
     weights_blob: *const weights_mod.WeightsBlob,
     module_path: []const u8,
     input: *const Tensor,
-) !Tensor {
+) anyerror!Tensor {
     const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
 
     if (std.mem.eql(u8, module.kind, "Conv") or std.mem.eql(u8, module.kind, "DWConv") or std.mem.eql(u8, module.kind, "Conv2d")) {

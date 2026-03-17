@@ -14,6 +14,7 @@ pub fn main() !void {
     _ = args.next();
     const graph_path = args.next() orelse "artifacts/graph.json";
     const weights_path = args.next() orelse "artifacts/weights.bin";
+    const zero_infer_size = if (args.next()) |value| try std.fmt.parseInt(usize, value, 10) else null;
 
     var model_graph = try graph.load(allocator, graph_path);
     defer model_graph.deinit();
@@ -36,5 +37,30 @@ pub fn main() !void {
         "first_tensor: {s} len={d} first_value={d:.6}\n",
         .{ first_tensor.name, first_tensor_data.len, first_tensor_data[0] },
     );
+
+    if (zero_infer_size) |size| {
+        var input = try runtime.Tensor.init(allocator, 1, 3, size, size);
+        defer input.deinit();
+        input.fill(0.0);
+
+        var detections = try runtime.runGraph(allocator, &model_graph, &weights_blob, &input, .{
+            .score_threshold = 0.0,
+            .iou_threshold = 0.7,
+            .max_det = 300,
+        });
+        defer detections.deinit();
+
+        try stdout.print("zero_infer_size: {d}\n", .{size});
+        try stdout.print("detect_candidates: {d}\n", .{detections.candidate_count});
+        try stdout.print("detect_kept: {d}\n", .{detections.detections.len});
+        if (detections.detections.len > 0) {
+            const det = detections.detections[0];
+            try stdout.print(
+                "top_detection: cls={d} score={d:.6} box=[{d:.3}, {d:.3}, {d:.3}, {d:.3}]\n",
+                .{ det.class_id, det.score, det.x1, det.y1, det.x2, det.y2 },
+            );
+        }
+    }
+
     try runtime.printRoadmap(stdout);
 }

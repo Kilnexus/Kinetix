@@ -141,12 +141,14 @@ pub const Graph = struct {
     format_version: i64,
     model_name: []u8,
     class_count: i64,
+    strides: []f32,
     tensors: []TensorMeta,
     execution_nodes: []ExecutionNode,
     module_tree: ModuleNode,
 
     pub fn deinit(self: *Graph) void {
         self.allocator.free(self.model_name);
+        self.allocator.free(self.strides);
         for (self.tensors) |tensor| self.allocator.free(tensor.name);
         self.allocator.free(self.tensors);
         for (self.execution_nodes) |node| {
@@ -206,9 +208,16 @@ fn parseGraph(allocator: std.mem.Allocator, contents: []const u8) !Graph {
 
     const root = parsed.value.object;
     const metadata = root.get("metadata").?.object;
+    const strides_json = metadata.get("stride").?.array;
     const tensors_json = root.get("tensors").?.array;
     const execution_plan_json = root.get("execution_plan").?.array;
     const module_tree_json = root.get("module_tree").?;
+
+    var strides = try allocator.alloc(f32, strides_json.items.len);
+    errdefer allocator.free(strides);
+    for (strides_json.items, 0..) |stride_value, index| {
+        strides[index] = @floatCast(stride_value.float);
+    }
 
     var tensors = try allocator.alloc(TensorMeta, tensors_json.items.len);
     errdefer allocator.free(tensors);
@@ -265,6 +274,7 @@ fn parseGraph(allocator: std.mem.Allocator, contents: []const u8) !Graph {
         .format_version = root.get("format_version").?.integer,
         .model_name = try allocator.dupe(u8, root.get("model_name").?.string),
         .class_count = metadata.get("class_count").?.integer,
+        .strides = strides,
         .tensors = tensors,
         .execution_nodes = execution_nodes,
         .module_tree = module_tree,
@@ -362,7 +372,7 @@ test "parseGraph exposes module tree and attrs" {
         \\{
         \\  "format_version": 1,
         \\  "model_name": "mini",
-        \\  "metadata": { "class_count": 2 },
+        \\  "metadata": { "class_count": 2, "stride": [8.0, 16.0] },
         \\  "tensors": [],
         \\  "execution_plan": [
         \\    { "index": 0, "path": "model.0", "kind": "Conv", "from": [-1] }
@@ -391,6 +401,9 @@ test "parseGraph exposes module tree and attrs" {
 
     var model_graph = try parseGraph(testing.allocator, raw);
     defer model_graph.deinit();
+
+    try testing.expectEqual(@as(usize, 2), model_graph.strides.len);
+    try testing.expectApproxEqAbs(@as(f32, 8.0), model_graph.strides[0], 1e-6);
 
     const conv = model_graph.findModule("model.0").?;
     try testing.expectEqualStrings("Conv", conv.kind);
