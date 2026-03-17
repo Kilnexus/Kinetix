@@ -1,7 +1,7 @@
 const std = @import("std");
-const graph = @import("graph.zig");
-const runtime = @import("runtime.zig");
-const weights = @import("weights.zig");
+const graph = @import("graph");
+const runtime = @import("runtime");
+const weights = @import("weights");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

@@ -1,5 +1,5 @@
 const std = @import("std");
-const graph = @import("graph.zig");
+const graph = @import("graph");
 
 pub const WeightsBlob = struct {
     allocator: std.mem.Allocator,

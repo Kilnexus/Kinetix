@@ -1,5 +1,5 @@
 const std = @import("std");
-const tensor_mod = @import("tensor.zig");
+const tensor_mod = @import("tensor");
 
 pub const Tensor = tensor_mod.Tensor;
 

@@ -1,8 +1,8 @@
 const std = @import("std");
-const graph = @import("graph.zig");
-const ops = @import("ops.zig");
-const tensor_mod = @import("tensor.zig");
-const weights_mod = @import("weights.zig");
+const graph = @import("graph");
+const ops = @import("ops");
+const tensor_mod = @import("tensor");
+const weights_mod = @import("weights");
 
 pub const TensorDesc = struct {
     shape: [4]usize,
