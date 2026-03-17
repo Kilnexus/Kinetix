@@ -2,6 +2,7 @@ const std = @import("std");
 const graph = @import("graph");
 const runtime = @import("runtime");
 const weights = @import("weights");
+const vision = @import("vision/preprocess.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -14,9 +15,7 @@ pub fn main() !void {
     _ = args.next();
     const graph_path = args.next() orelse "artifacts/graph.json";
     const weights_path = args.next() orelse "artifacts/weights.bin";
-    const zero_infer_size = if (args.next()) |value| try std.fmt.parseInt(usize, value, 10) else null;
-    const json_out_path = args.next();
-    const trace_json_out_path = args.next();
+    const mode_arg = args.next();
 
     var model_graph = try graph.load(allocator, graph_path);
     defer model_graph.deinit();
@@ -40,43 +39,135 @@ pub fn main() !void {
         .{ first_tensor.name, first_tensor_data.len, first_tensor_data[0] },
     );
 
-    if (zero_infer_size) |size| {
-        var input = try runtime.Tensor.init(allocator, 1, 3, size, size);
-        defer input.deinit();
-        input.fill(0.0);
+    if (mode_arg) |value| {
+        if (std.fmt.parseInt(usize, value, 10)) |size| {
+            const json_out_path = args.next();
+            const trace_json_out_path = args.next();
+            try runZeroMode(allocator, &model_graph, &weights_blob, size, json_out_path, trace_json_out_path);
+        } else |_| {
+            const image_path = value;
+            const maybe_size_or_json = args.next();
+            var image_size: usize = 640;
+            var json_out_path: ?[]const u8 = null;
+            var trace_json_out_path: ?[]const u8 = null;
 
-        var detections = try runtime.runGraph(allocator, &model_graph, &weights_blob, &input, .{
-            .score_threshold = 0.0,
-            .iou_threshold = 0.7,
-            .max_det = 300,
-        });
-        defer detections.deinit();
+            if (maybe_size_or_json) |arg4| {
+                if (std.fmt.parseInt(usize, arg4, 10)) |parsed| {
+                    image_size = parsed;
+                    json_out_path = args.next();
+                    trace_json_out_path = args.next();
+                } else |_| {
+                    json_out_path = arg4;
+                    trace_json_out_path = args.next();
+                }
+            }
 
-        try stdout.print("zero_infer_size: {d}\n", .{size});
-        try stdout.print("detect_candidates: {d}\n", .{detections.candidate_count});
-        try stdout.print("detect_kept: {d}\n", .{detections.detections.len});
-        if (detections.detections.len > 0) {
-            const det = detections.detections[0];
-            try stdout.print(
-                "top_detection: cls={d} score={d:.6} box=[{d:.3}, {d:.3}, {d:.3}, {d:.3}]\n",
-                .{ det.class_id, det.score, det.x1, det.y1, det.x2, det.y2 },
+            try runImageMode(
+                allocator,
+                &model_graph,
+                &weights_blob,
+                image_path,
+                image_size,
+                json_out_path,
+                trace_json_out_path,
             );
-        }
-
-        if (json_out_path) |path| {
-            try writeDetectionsJson(path, &detections);
-            try stdout.print("json_out: {s}\n", .{path});
-        }
-
-        if (trace_json_out_path) |path| {
-            var trace = try runtime.traceGraph(allocator, &model_graph, &weights_blob, &input);
-            defer trace.deinit();
-            try writeTraceJson(path, &trace);
-            try stdout.print("trace_json_out: {s}\n", .{path});
         }
     }
 
     try runtime.printRoadmap(stdout);
+}
+
+fn runZeroMode(
+    allocator: std.mem.Allocator,
+    model_graph: *graph.Graph,
+    weights_blob: *weights.WeightsBlob,
+    size: usize,
+    json_out_path: ?[]const u8,
+    trace_json_out_path: ?[]const u8,
+) !void {
+    const stdout = std.fs.File.stdout().deprecatedWriter();
+    var input = try runtime.Tensor.init(allocator, 1, 3, size, size);
+    defer input.deinit();
+    input.fill(0.0);
+
+    var detections = try runtime.runGraph(allocator, model_graph, weights_blob, &input, .{
+        .score_threshold = 0.0,
+        .iou_threshold = 0.7,
+        .max_det = 300,
+    });
+    defer detections.deinit();
+
+    try stdout.print("zero_infer_size: {d}\n", .{size});
+    try stdout.print("detect_candidates: {d}\n", .{detections.candidate_count});
+    try stdout.print("detect_kept: {d}\n", .{detections.detections.len});
+    if (detections.detections.len > 0) {
+        const det = detections.detections[0];
+        try stdout.print(
+            "top_detection: cls={d} score={d:.6} box=[{d:.3}, {d:.3}, {d:.3}, {d:.3}]\n",
+            .{ det.class_id, det.score, det.x1, det.y1, det.x2, det.y2 },
+        );
+    }
+
+    if (json_out_path) |path| {
+        try writeDetectionsJson(path, &detections);
+        try stdout.print("json_out: {s}\n", .{path});
+    }
+
+    if (trace_json_out_path) |path| {
+        var trace = try runtime.traceGraph(allocator, model_graph, weights_blob, &input);
+        defer trace.deinit();
+        try writeTraceJson(path, &trace);
+        try stdout.print("trace_json_out: {s}\n", .{path});
+    }
+}
+
+fn runImageMode(
+    allocator: std.mem.Allocator,
+    model_graph: *graph.Graph,
+    weights_blob: *weights.WeightsBlob,
+    image_path: []const u8,
+    image_size: usize,
+    json_out_path: ?[]const u8,
+    trace_json_out_path: ?[]const u8,
+) !void {
+    const stdout = std.fs.File.stdout().deprecatedWriter();
+    var prepared = try vision.loadImageAsTensor(allocator, image_path, image_size);
+    defer prepared.deinit();
+
+    var detections = try runtime.runGraph(allocator, model_graph, weights_blob, &prepared.tensor, .{
+        .score_threshold = 0.25,
+        .iou_threshold = 0.7,
+        .max_det = 300,
+    });
+    defer detections.deinit();
+    vision.remapDetectionsToSource(detections.detections, prepared.info);
+
+    try stdout.print("image_infer_path: {s}\n", .{image_path});
+    try stdout.print("image_infer_size: {d}\n", .{image_size});
+    try stdout.print("image_source_size: {d}x{d}\n", .{ prepared.info.src_width, prepared.info.src_height });
+    try stdout.print("image_resized_size: {d}x{d}\n", .{ prepared.info.resized_width, prepared.info.resized_height });
+    try stdout.print("image_padding: left={d} top={d}\n", .{ prepared.info.pad_left, prepared.info.pad_top });
+    try stdout.print("detect_candidates: {d}\n", .{detections.candidate_count});
+    try stdout.print("detect_kept: {d}\n", .{detections.detections.len});
+    if (detections.detections.len > 0) {
+        const det = detections.detections[0];
+        try stdout.print(
+            "top_detection: cls={d} score={d:.6} box=[{d:.3}, {d:.3}, {d:.3}, {d:.3}]\n",
+            .{ det.class_id, det.score, det.x1, det.y1, det.x2, det.y2 },
+        );
+    }
+
+    if (json_out_path) |path| {
+        try writeDetectionsJson(path, &detections);
+        try stdout.print("json_out: {s}\n", .{path});
+    }
+
+    if (trace_json_out_path) |path| {
+        var trace = try runtime.traceGraph(allocator, model_graph, weights_blob, &prepared.tensor);
+        defer trace.deinit();
+        try writeTraceJson(path, &trace);
+        try stdout.print("trace_json_out: {s}\n", .{path});
+    }
 }
 
 fn writeDetectionsJson(path: []const u8, detections: *const runtime.DetectOutput) !void {
