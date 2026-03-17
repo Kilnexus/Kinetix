@@ -50,7 +50,7 @@ pub fn printRoadmap(writer: anytype) !void {
         \\2. Zig graph loader: ready
         \\3. Primitive tensor ops: implemented
         \\4. Module-tree spec resolution: implemented
-        \\5. Composite YOLO11s blocks: implemented
+        \\5. Composite YOLO detect blocks: implemented
         \\6. Detect + DFL + NMS: implemented
         \\7. End-to-end graph execution: implemented
         \\8. Numerical parity check: verified

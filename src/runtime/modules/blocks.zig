@@ -244,6 +244,21 @@ pub fn runModule(
 ) anyerror!Tensor {
     const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
 
+    if (std.mem.eql(u8, module.kind, "Identity")) {
+        return input.clone();
+    }
+    if (std.mem.eql(u8, module.kind, "Sequential")) {
+        if (module.children.len == 0) return input.clone();
+
+        var current = try runModule(allocator, model_graph, weights_blob, module.children[0].path, input);
+        errdefer current.deinit();
+        for (module.children[1..]) |child| {
+            const next = try runModule(allocator, model_graph, weights_blob, child.path, &current);
+            current.deinit();
+            current = next;
+        }
+        return current;
+    }
     if (std.mem.eql(u8, module.kind, "Conv") or std.mem.eql(u8, module.kind, "DWConv") or std.mem.eql(u8, module.kind, "Conv2d")) {
         return runConvModule(allocator, model_graph, weights_blob, module_path, input);
     }

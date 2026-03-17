@@ -11,7 +11,7 @@ from ultralytics import YOLO
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Export PyTorch node trace summaries for zero-input YOLO11s.")
+    parser = argparse.ArgumentParser(description="Export PyTorch node trace summaries for a zero-input Ultralytics YOLO detect model.")
     parser.add_argument("--graph", type=Path, default=Path("artifacts/graph.json"))
     parser.add_argument("--weights", type=Path, default=None)
     parser.add_argument("--size", type=int, default=64)

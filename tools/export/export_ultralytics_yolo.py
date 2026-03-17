@@ -8,7 +8,7 @@ from typing import Any
 from ultralytics import YOLO
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Export a fused Ultralytics YOLO detect model into the Axionyx graph and weights format."
     )
@@ -16,7 +16,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts"), help="Directory for graph.json and weights.bin.")
     parser.add_argument("--model-name", type=str, default=None, help="Optional override for graph.model_name.")
     parser.add_argument("--input-size", type=int, default=640, help="Nominal square input size to record in graph metadata.")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def tensor_to_list(value: Any) -> Any:
@@ -110,8 +110,8 @@ def write_weights(model: Any, output_path: Path) -> list[dict[str, Any]]:
     return tensors_meta
 
 
-def main() -> None:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 

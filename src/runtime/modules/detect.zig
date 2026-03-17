@@ -58,18 +58,22 @@ pub fn runDetect(
 
     if (feature_inputs.len != nl or model_graph.strides.len != nl) return error.InvalidAttributeType;
 
-    var dfl_conv_buffer: [256]u8 = undefined;
-    const dfl_conv_path = try utils.childModulePath(&dfl_conv_buffer, module_path, "dfl.conv");
-    const dfl_spec = try spec.resolveConvSpec(model_graph, dfl_conv_path);
-    const dfl_weights = weights_blob.slice(dfl_spec.weight);
+    const reg_branch_name = resolveDetectBranchName(model_graph, module_path, "cv2", "one2one_cv2") orelse return error.ModuleNotFound;
+    const cls_branch_name = resolveDetectBranchName(model_graph, module_path, "cv3", "one2one_cv3") orelse return error.ModuleNotFound;
+    const dfl_weights = if (reg_max > 1) blk: {
+        var dfl_conv_buffer: [256]u8 = undefined;
+        const dfl_conv_path = try utils.childModulePath(&dfl_conv_buffer, module_path, "dfl.conv");
+        const dfl_spec = try spec.resolveConvSpec(model_graph, dfl_conv_path);
+        break :blk weights_blob.slice(dfl_spec.weight);
+    } else null;
 
     var candidates: std.ArrayListUnmanaged(Detection) = .empty;
     errdefer candidates.deinit(allocator);
 
     for (feature_inputs, 0..) |feature, level| {
-        var reg = try runDetectBranch(allocator, model_graph, weights_blob, module_path, "cv2", level, feature);
+        var reg = try runDetectBranch(allocator, model_graph, weights_blob, module_path, reg_branch_name, level, feature);
         defer reg.deinit();
-        var cls = try runDetectBranch(allocator, model_graph, weights_blob, module_path, "cv3", level, feature);
+        var cls = try runDetectBranch(allocator, model_graph, weights_blob, module_path, cls_branch_name, level, feature);
         defer cls.deinit();
 
         if (reg.shape[0] != cls.shape[0] or reg.shape[2] != cls.shape[2] or reg.shape[3] != cls.shape[3]) {
@@ -163,13 +167,18 @@ fn runNodeChain(
 
 fn dflExpectation(
     reg: *const Tensor,
-    dfl_weights: []const f32,
+    dfl_weights: ?[]const f32,
     reg_max: usize,
     batch: usize,
     side: usize,
     y: usize,
     x: usize,
 ) f32 {
+    if (reg_max == 1) {
+        return reg.get(batch, side, y, x);
+    }
+
+    const weights = dfl_weights orelse unreachable;
     const channel_base = side * reg_max;
     var max_logit = reg.get(batch, channel_base, y, x);
     for (1..reg_max) |bin| {
@@ -182,9 +191,26 @@ fn dflExpectation(
     for (0..reg_max) |bin| {
         const prob = @exp(reg.get(batch, channel_base + bin, y, x) - max_logit);
         denom += prob;
-        numer += prob * dfl_weights[bin];
+        numer += prob * weights[bin];
     }
     return numer / denom;
+}
+
+fn resolveDetectBranchName(
+    model_graph: *const graph.Graph,
+    module_path: []const u8,
+    primary: []const u8,
+    fallback: []const u8,
+) ?[]const u8 {
+    var branch_path_buffer: [256]u8 = undefined;
+    const primary_path = utils.childModulePath(&branch_path_buffer, module_path, primary) catch return null;
+    if (model_graph.findModule(primary_path) != null) return primary;
+
+    var fallback_path_buffer: [256]u8 = undefined;
+    const fallback_path = utils.childModulePath(&fallback_path_buffer, module_path, fallback) catch return null;
+    if (model_graph.findModule(fallback_path) != null) return fallback;
+
+    return null;
 }
 
 fn sigmoid(value: f32) f32 {
