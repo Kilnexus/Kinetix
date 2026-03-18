@@ -41,6 +41,36 @@ test "detectFormat recognizes png and bmp signatures" {
     try testing.expectEqual(imaging.ImageFormat.jpeg, imaging.detectFormat("\xff\xd8\xff\xe0"));
     try testing.expectEqual(imaging.ImageFormat.gif, imaging.detectFormat("GIF89arest"));
     try testing.expectEqual(imaging.ImageFormat.ico, imaging.detectFormat("\x00\x00\x01\x00rest"));
+    try testing.expectEqual(imaging.ImageFormat.webp, imaging.detectFormat("RIFF\x1a\x00\x00\x00WEBP"));
+}
+
+test "probeInfo reads repository sample png metadata" {
+    const testing = @import("std").testing;
+
+    const info = try imaging.probeFileInfo(testing.allocator, "data/archive/images/000_0001.png");
+    try testing.expectEqual(imaging.ImageFormat.png, info.format);
+    try testing.expectEqual(@as(usize, 134), info.width);
+    try testing.expectEqual(@as(usize, 128), info.height);
+    try testing.expectEqual(@as(usize, 3), info.channels);
+    try testing.expect(!info.has_alpha);
+}
+
+test "probeInfo reads lossless webp metadata" {
+    const std = @import("std");
+    const testing = std.testing;
+
+    const webp_base64 = "UklGRh4AAABXRUJQVlA4TBEAAAAvAQAAAA+w//Mf8x8VMqL/AQA=";
+    const decoded_len = try std.base64.standard.Decoder.calcSizeForSlice(webp_base64);
+    const webp = try testing.allocator.alloc(u8, decoded_len);
+    defer testing.allocator.free(webp);
+    try std.base64.standard.Decoder.decode(webp, webp_base64);
+
+    const info = try imaging.probeInfo(webp);
+    try testing.expectEqual(imaging.ImageFormat.webp, info.format);
+    try testing.expectEqual(@as(usize, 2), info.width);
+    try testing.expectEqual(@as(usize, 1), info.height);
+    try testing.expectEqual(@as(usize, 3), info.channels);
+    try testing.expect(!info.has_alpha);
 }
 
 test "decodeRgb8 decodes repository sample png natively" {
