@@ -50,9 +50,6 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    exe.linkLibC();
-    exe.root_module.addIncludePath(b.path("third_party/stb"));
-    exe.addCSourceFile(.{ .file = b.path("src/vision/stb_image_impl.c") });
     exe.root_module.addImport("graph", graph_mod);
     exe.root_module.addImport("imaging", imaging_mod);
     exe.root_module.addImport("runtime", runtime_mod);
