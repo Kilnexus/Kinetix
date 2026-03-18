@@ -4,11 +4,12 @@ const format = @import("format.zig");
 const png = @import("codecs/png.zig");
 const bmp = @import("codecs/bmp.zig");
 const jpeg = @import("codecs/jpeg.zig");
+const gif = @import("codecs/gif.zig");
 
 pub const ImageU8 = types.ImageU8;
 pub const ImageFormat = format.ImageFormat;
 
-pub const DecodeError = types.ImageError || png.PngError || bmp.BmpError || jpeg.JpegError || error{
+pub const DecodeError = types.ImageError || png.PngError || bmp.BmpError || jpeg.JpegError || gif.GifError || error{
     UnsupportedImageFormat,
 };
 
@@ -17,6 +18,7 @@ pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
         .png => png.decodeRgb8(allocator, bytes),
         .bmp => bmp.decodeRgb8(allocator, bytes),
         .jpeg => jpeg.decodeRgb8(allocator, bytes),
+        .gif => gif.decodeRgb8(allocator, bytes),
         else => error.UnsupportedImageFormat,
     };
 }

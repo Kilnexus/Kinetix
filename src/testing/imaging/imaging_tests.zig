@@ -39,6 +39,7 @@ test "detectFormat recognizes png and bmp signatures" {
     try testing.expectEqual(imaging.ImageFormat.png, imaging.detectFormat("\x89PNG\r\n\x1a\nrest"));
     try testing.expectEqual(imaging.ImageFormat.bmp, imaging.detectFormat("BMrest"));
     try testing.expectEqual(imaging.ImageFormat.jpeg, imaging.detectFormat("\xff\xd8\xff\xe0"));
+    try testing.expectEqual(imaging.ImageFormat.gif, imaging.detectFormat("GIF89arest"));
 }
 
 test "decodeRgb8 decodes repository sample png natively" {
@@ -104,4 +105,40 @@ test "decodeRgb8 decodes baseline jpeg" {
     try testing.expect(image.data[4] > image.data[3]);
     try testing.expect(image.data[4] > image.data[5]);
     try testing.expect(!std.mem.eql(u8, image.data[0..3], image.data[3..6]));
+}
+
+test "decodeRgb8 decodes palette gif" {
+    const std = @import("std");
+    const testing = std.testing;
+
+    const gif_base64 =
+        "R0lGODlhAgABAPcAAAAAAAAAMwAAZgAAmQAAzAAA/wArAAArMwArZgArmQArzAAr/wBVAABVMwBVZgBVmQBVzABV"
+        ++ "/wCAAACAMwCAZgCAmQCAzACA/wCqAACqMwCqZgCqmQCqzACq/wDVAADVMwDVZgDVmQDVzADV/wD/AAD/MwD/ZgD/"
+        ++ "mQD/zAD//zMAADMAMzMAZjMAmTMAzDMA/zMrADMrMzMrZjMrmTMrzDMr/zNVADNVMzNVZjNVmTNVzDNV/zOAADOA"
+        ++ "MzOAZjOAmTOAzDOA/zOqADOqMzOqZjOqmTOqzDOq/zPVADPVMzPVZjPVmTPVzDPV/zP/ADP/MzP/ZjP/mTP/zDP/"
+        ++ "/2YAAGYAM2YAZmYAmWYAzGYA/2YrAGYrM2YrZmYrmWYrzGYr/2ZVAGZVM2ZVZmZVmWZVzGZV/2aAAGaAM2aAZmaA"
+        ++ "mWaAzGaA/2aqAGaqM2aqZmaqmWaqzGaq/2bVAGbVM2bVZmbVmWbVzGbV/2b/AGb/M2b/Zmb/mWb/zGb//5kAAJkA"
+        ++ "M5kAZpkAmZkAzJkA/5krAJkrM5krZpkrmZkrzJkr/5lVAJlVM5lVZplVmZlVzJlV/5mAAJmAM5mAZpmAmZmAzJmA"
+        ++ "/5mqAJmqM5mqZpmqmZmqzJmq/5nVAJnVM5nVZpnVmZnVzJnV/5n/AJn/M5n/Zpn/mZn/zJn//8wAAMwAM8wAZswA"
+        ++ "mcwAzMwA/8wrAMwrM8wrZswrmcwrzMwr/8xVAMxVM8xVZsxVmcxVzMxV/8yAAMyAM8yAZsyAmcyAzMyA/8yqAMyq"
+        ++ "M8yqZsyqmcyqzMyq/8zVAMzVM8zVZszVmczVzMzV/8z/AMz/M8z/Zsz/mcz/zMz///8AAP8AM/8AZv8Amf8AzP8A"
+        ++ "//8rAP8rM/8rZv8rmf8rzP8r//9VAP9VM/9VZv9Vmf9VzP9V//+AAP+AM/+AZv+Amf+AzP+A//+qAP+qM/+qZv+q"
+        ++ "mf+qzP+q///VAP/VM//VZv/Vmf/VzP/V////AP//M///Zv//mf//zP///wAAAAAAAAAAAAAAACH5BAEAAPwALAAA"
+        ++ "AAACAAEAAAgFAKWRCAgAOw==";
+
+    const decoded_len = try std.base64.standard.Decoder.calcSizeForSlice(gif_base64);
+    const gif = try testing.allocator.alloc(u8, decoded_len);
+    defer testing.allocator.free(gif);
+    try std.base64.standard.Decoder.decode(gif, gif_base64);
+
+    var image = try imaging.decodeRgb8(testing.allocator, gif);
+    defer image.deinit();
+
+    try testing.expectEqual(@as(usize, 2), image.width);
+    try testing.expectEqual(@as(usize, 1), image.height);
+    try testing.expectEqual(@as(usize, 3), image.channels);
+    try testing.expect(image.data[0] > image.data[1]);
+    try testing.expect(image.data[0] > image.data[2]);
+    try testing.expect(image.data[4] > image.data[3]);
+    try testing.expect(image.data[4] > image.data[5]);
 }
