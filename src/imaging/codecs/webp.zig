@@ -673,17 +673,13 @@ fn decodeVp8lColorIndexedPayloadArgb(
     defer palette_image.deinit();
     restoreColorIndexPaletteInPlace(palette_image.pixels);
 
-    var reader = Vp8lBitReader.initAtBit(payload, palette_image.end_bit_pos);
-    const next_transform_present = try reader.readBits(1);
-    if (next_transform_present != 0) return error.UnsupportedWebpBitstream;
-
     const encoded_width = transform.next_image_width;
     const encoded_height = transform.next_image_height;
-    const main_header = try inspectImageDataAtBitPos(payload, reader.bit_pos, encoded_width, encoded_height, .argb);
+    const main_header_info = try findColorIndexedMainImageHeader(payload, palette_image.end_bit_pos, encoded_width, encoded_height);
     var indexed_image = try decodeVp8lImageDataSingleGroupArgb(
         allocator,
         payload,
-        main_header,
+        main_header_info.header,
         encoded_width,
         encoded_height,
     );
@@ -698,6 +694,39 @@ fn decodeVp8lColorIndexedPayloadArgb(
         info.height,
         indexed_image.end_bit_pos,
     );
+}
+
+const ColorIndexedMainHeader = struct {
+    start_bit_pos: usize,
+    header: Vp8lImageDataHeader,
+};
+
+fn findColorIndexedMainImageHeader(
+    payload: []const u8,
+    palette_end_bit_pos: usize,
+    encoded_width: usize,
+    encoded_height: usize,
+) !ColorIndexedMainHeader {
+    const direct_header = inspectImageDataAtBitPos(payload, palette_end_bit_pos, encoded_width, encoded_height, .argb);
+    if (direct_header) |header| {
+        if (header.prefix_codes_start_bit_pos != null) {
+            return .{
+                .start_bit_pos = palette_end_bit_pos,
+                .header = header,
+            };
+        }
+    } else |_| {}
+
+    var reader = Vp8lBitReader.initAtBit(payload, palette_end_bit_pos);
+    const next_transform_present = try reader.readBits(1);
+    if (next_transform_present != 0) return error.UnsupportedWebpBitstream;
+    const header = inspectImageDataAtBitPos(payload, reader.bit_pos, encoded_width, encoded_height, .argb) catch {
+        return error.UnsupportedWebpBitstream;
+    };
+    return .{
+        .start_bit_pos = reader.bit_pos,
+        .header = header,
+    };
 }
 
 fn restoreColorIndexPaletteInPlace(pixels: []u32) void {

@@ -1186,6 +1186,24 @@ test "decodeRgb8 decodes synthetic subtract-green lossless webp" {
     try testing.expectEqualSlices(u8, &[_]u8{ 11, 9, 16 }, image.data[3..6]);
 }
 
+test "decodeRgb8 decodes real color-indexed solid red webp" {
+    const std = @import("std");
+    const testing = std.testing;
+
+    const solid_red_base64 = "UklGRhwAAABXRUJQVlA4TA8AAAAvAAAAAAcQ/Y/+ByKi/wEA";
+    const decoded_len = try std.base64.standard.Decoder.calcSizeForSlice(solid_red_base64);
+    const webp = try testing.allocator.alloc(u8, decoded_len);
+    defer testing.allocator.free(webp);
+    try std.base64.standard.Decoder.decode(webp, solid_red_base64);
+
+    var image = try imaging.decodeRgb8(testing.allocator, webp);
+    defer image.deinit();
+
+    try testing.expectEqual(@as(usize, 1), image.width);
+    try testing.expectEqual(@as(usize, 1), image.height);
+    try testing.expectEqualSlices(u8, &[_]u8{ 255, 0, 0 }, image.data[0..3]);
+}
+
 test "decodeRgb8 decodes repository sample png natively" {
     const testing = @import("std").testing;
 
