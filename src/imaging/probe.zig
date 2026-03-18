@@ -173,6 +173,10 @@ pub fn decodeVp8lSingleGroupArgbAtBitPos(
     );
 }
 
+pub fn decodeVp8lPayloadArgb(allocator: std.mem.Allocator, payload: []const u8) !Vp8lArgbImage {
+    return webp.decodeVp8lPayloadArgb(allocator, payload);
+}
+
 fn probePng(bytes: []const u8) ImageInfo {
     const width = readU32be(bytes[16..20]);
     const height = readU32be(bytes[20..24]);

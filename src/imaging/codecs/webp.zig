@@ -610,25 +610,148 @@ pub fn inspectVp8lPayload(payload: []const u8) !Vp8lStreamInfo {
 
 pub fn decodeVp8lPayloadArgb(allocator: std.mem.Allocator, payload: []const u8) !Vp8lArgbImage {
     const info = try inspectVp8lPayload(payload);
-    if (info.transform_count != 0) return error.UnsupportedWebpBitstream;
-    if (!info.tail_flags_known) return error.UnsupportedWebpBitstream;
-    if (info.main_image_header == null) return error.InvalidWebpData;
+    if (info.tail_flags_known) {
+        if (info.main_image_header == null) return error.InvalidWebpData;
+        var image = try decodeVp8lImageDataSingleGroupArgb(
+            allocator,
+            payload,
+            info.main_image_header.?,
+            info.width,
+            info.height,
+        );
+        errdefer image.deinit();
+        try applySupportedTransformsInPlace(&image, info.transforms[0..info.transform_count]);
+        return image;
+    }
 
-    const main = info.main_image_header.?;
-    if (main.meta_prefix_present != null and main.meta_prefix_present.?) return error.UnsupportedWebpBitstream;
-    if (main.prefix_codes_start_bit_pos == null) return error.InvalidWebpData;
+    if (info.transform_count == 1 and info.transforms[0].kind == .color_indexing) {
+        return decodeVp8lColorIndexedPayloadArgb(allocator, payload, info, info.transforms[0]);
+    }
 
-    const cache_bits = main.color_cache_bits orelse 0;
+    return error.UnsupportedWebpBitstream;
+}
+
+fn decodeVp8lImageDataSingleGroupArgb(
+    allocator: std.mem.Allocator,
+    payload: []const u8,
+    header: Vp8lImageDataHeader,
+    width: usize,
+    height: usize,
+) !Vp8lArgbImage {
+    if (header.meta_prefix_present != null and header.meta_prefix_present.?) return error.UnsupportedWebpBitstream;
+    if (header.prefix_codes_start_bit_pos == null) return error.InvalidWebpData;
+
+    const cache_bits = header.color_cache_bits orelse 0;
     const green_alphabet_size = 256 + numLengthCodes + if (cache_bits == 0) @as(usize, 0) else (@as(usize, 1) << @intCast(cache_bits));
     return decodeVp8lSingleGroupArgbAtBitPos(
         allocator,
         payload,
-        main.prefix_codes_start_bit_pos.?,
+        header.prefix_codes_start_bit_pos.?,
         .{ green_alphabet_size, 256, 256, 256, numDistanceCodes },
-        info.width,
-        info.height,
+        width,
+        height,
         cache_bits,
     );
+}
+
+fn decodeVp8lColorIndexedPayloadArgb(
+    allocator: std.mem.Allocator,
+    payload: []const u8,
+    info: Vp8lStreamInfo,
+    transform: Vp8lTransform,
+) !Vp8lArgbImage {
+    const palette_header = transform.subimage_header orelse return error.InvalidWebpData;
+    const width_bits = transform.width_bits orelse return error.InvalidWebpData;
+
+    var palette_image = try decodeVp8lImageDataSingleGroupArgb(
+        allocator,
+        payload,
+        palette_header,
+        palette_header.width,
+        palette_header.height,
+    );
+    defer palette_image.deinit();
+    restoreColorIndexPaletteInPlace(palette_image.pixels);
+
+    var reader = Vp8lBitReader.initAtBit(payload, palette_image.end_bit_pos);
+    const next_transform_present = try reader.readBits(1);
+    if (next_transform_present != 0) return error.UnsupportedWebpBitstream;
+
+    const encoded_width = transform.next_image_width;
+    const encoded_height = transform.next_image_height;
+    const main_header = try inspectImageDataAtBitPos(payload, reader.bit_pos, encoded_width, encoded_height, .argb);
+    var indexed_image = try decodeVp8lImageDataSingleGroupArgb(
+        allocator,
+        payload,
+        main_header,
+        encoded_width,
+        encoded_height,
+    );
+    defer indexed_image.deinit();
+
+    return expandColorIndexedImage(
+        allocator,
+        indexed_image.pixels,
+        palette_image.pixels,
+        width_bits,
+        info.width,
+        info.height,
+        indexed_image.end_bit_pos,
+    );
+}
+
+fn restoreColorIndexPaletteInPlace(pixels: []u32) void {
+    var prev = packArgb(0, 0, 0, 0);
+    for (pixels) |*pixel_ptr| {
+        const pixel = pixel_ptr.*;
+        const restored = packArgb(
+            @intCast((((pixel >> 24) & 0xff) + ((prev >> 24) & 0xff)) & 0xff),
+            @intCast((((pixel >> 16) & 0xff) + ((prev >> 16) & 0xff)) & 0xff),
+            @intCast((((pixel >> 8) & 0xff) + ((prev >> 8) & 0xff)) & 0xff),
+            @intCast(((pixel & 0xff) + (prev & 0xff)) & 0xff),
+        );
+        pixel_ptr.* = restored;
+        prev = restored;
+    }
+}
+
+fn expandColorIndexedImage(
+    allocator: std.mem.Allocator,
+    indexed_pixels: []const u32,
+    palette: []const u32,
+    width_bits: usize,
+    output_width: usize,
+    output_height: usize,
+    end_bit_pos: usize,
+) !Vp8lArgbImage {
+    const pixels_per_index_byte = @as(usize, 1) << @intCast(width_bits);
+    const bits_per_index = 8 / pixels_per_index_byte;
+    const index_mask = (@as(usize, 1) << @intCast(bits_per_index)) - 1;
+    const output_len = output_width * output_height;
+
+    const pixels = try allocator.alloc(u32, output_len);
+    errdefer allocator.free(pixels);
+
+    var written: usize = 0;
+    for (indexed_pixels) |pixel| {
+        const packed_green = @as(usize, (pixel >> 8) & 0xff);
+        for (0..pixels_per_index_byte) |slot| {
+            if (written >= output_len) break;
+            const palette_index = (packed_green >> @intCast(slot * bits_per_index)) & index_mask;
+            if (palette_index >= palette.len) return error.InvalidWebpData;
+            pixels[written] = palette[palette_index];
+            written += 1;
+        }
+    }
+    if (written != output_len) return error.InvalidWebpData;
+
+    return .{
+        .allocator = allocator,
+        .width = output_width,
+        .height = output_height,
+        .end_bit_pos = end_bit_pos,
+        .pixels = pixels,
+    };
 }
 
 fn inspectImageDataAtBitPos(
@@ -1232,6 +1355,33 @@ fn updateColorCache(color_cache: ?[]u32, color_cache_bits: usize, pixel: u32) vo
     if (color_cache == null or color_cache_bits == 0) return;
     const index = (@as(usize, 0x1e35a7bd) * @as(usize, pixel)) >> @intCast(32 - color_cache_bits);
     color_cache.?[index] = pixel;
+}
+
+fn applySupportedTransformsInPlace(image: *Vp8lArgbImage, transforms: []const Vp8lTransform) !void {
+    var i = transforms.len;
+    while (i > 0) {
+        i -= 1;
+        switch (transforms[i].kind) {
+            .subtract_green => applySubtractGreenTransformInPlace(image.pixels),
+            else => return error.UnsupportedWebpBitstream,
+        }
+    }
+}
+
+fn applySubtractGreenTransformInPlace(pixels: []u32) void {
+    for (pixels) |*pixel_ptr| {
+        const pixel = pixel_ptr.*;
+        const alpha = (pixel >> 24) & 0xff;
+        const red_delta = (pixel >> 16) & 0xff;
+        const green = (pixel >> 8) & 0xff;
+        const blue_delta = pixel & 0xff;
+        const red = (red_delta + green) & 0xff;
+        const blue = (blue_delta + green) & 0xff;
+        pixel_ptr.* = (@as(u32, alpha) << 24) |
+            (@as(u32, red) << 16) |
+            (@as(u32, green) << 8) |
+            @as(u32, blue);
+    }
 }
 
 fn argbToRgb8(allocator: std.mem.Allocator, pixels: []const u32, width: usize, height: usize) !ImageU8 {

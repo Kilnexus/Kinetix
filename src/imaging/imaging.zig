@@ -51,6 +51,7 @@ pub const inspectVp8lPrefixCodeGroupAtBitPos = probe.inspectVp8lPrefixCodeGroupA
 pub const inspectVp8lEventStreamAtBitPos = probe.inspectVp8lEventStreamAtBitPos;
 pub const resolveMetaPrefixCode = probe.resolveMetaPrefixCode;
 pub const decodeVp8lSingleGroupArgbAtBitPos = probe.decodeVp8lSingleGroupArgbAtBitPos;
+pub const decodeVp8lPayloadArgb = probe.decodeVp8lPayloadArgb;
 pub const resizeBilinear = resize.resizeBilinear;
 pub const letterboxImage = letterbox.letterbox;
 pub const remapLetterboxedBoxToSource = geometry.remapLetterboxedBoxToSource;
