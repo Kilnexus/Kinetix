@@ -689,6 +689,138 @@ test "inspectVp8lPrefixCodeGroupAtBitPos parses mixed group with summaries" {
     try testing.expectEqual(@as(usize, 7), code4.canonical_summary.?.preview[0].symbol);
 }
 
+test "resolveMetaPrefixCode maps source pixel to prefix image group" {
+    const testing = @import("std").testing;
+
+    const entropy_image = [_]u32{
+        1 << 8, 2 << 8,
+        3 << 8, 4 << 8,
+    };
+
+    try testing.expectEqual(@as(usize, 1), try imaging.resolveMetaPrefixCode(&entropy_image, 1, 2, 0, 0));
+    try testing.expectEqual(@as(usize, 2), try imaging.resolveMetaPrefixCode(&entropy_image, 1, 2, 3, 0));
+    try testing.expectEqual(@as(usize, 3), try imaging.resolveMetaPrefixCode(&entropy_image, 1, 2, 0, 3));
+    try testing.expectEqual(@as(usize, 4), try imaging.resolveMetaPrefixCode(&entropy_image, 1, 2, 3, 3));
+    try testing.expectEqual(@as(usize, 0), try imaging.resolveMetaPrefixCode(null, 1, 2, 3, 3));
+}
+
+test "inspectVp8lEventStreamAtBitPos decodes literal-only stream" {
+    const testing = @import("std").testing;
+
+    var payload = [_]u8{0} ** 16;
+    var bit_pos: usize = 0;
+
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 1, 8);
+    writeBits(&payload, &bit_pos, 2, 8);
+
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 10, 8);
+
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 20, 8);
+
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 255, 8);
+
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 0, 8);
+
+    const group_start_bit_pos = 0;
+    const event_stream_start_bit_pos = bit_pos;
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 1);
+
+    const stream = try imaging.inspectVp8lEventStreamAtBitPos(
+        &payload,
+        group_start_bit_pos,
+        .{ 280, 256, 256, 256, 40 },
+        2,
+        1,
+        0,
+        8,
+    );
+    try testing.expectEqual(event_stream_start_bit_pos, stream.event_stream_start_bit_pos);
+    try testing.expectEqual(bit_pos, stream.end_bit_pos);
+    try testing.expectEqual(@as(usize, 2), stream.event_count);
+    try testing.expectEqual(@as(usize, 2), stream.emitted_pixels);
+    try testing.expectEqual(@as(usize, 2), stream.preview_len);
+    try testing.expectEqual(imaging.Vp8lEventKind.literal, stream.preview[0].kind);
+    try testing.expectEqual(@as(u16, 1), stream.preview[0].green);
+    try testing.expectEqual(@as(u16, 10), stream.preview[0].red);
+    try testing.expectEqual(@as(u16, 20), stream.preview[0].blue);
+    try testing.expectEqual(@as(u16, 255), stream.preview[0].alpha);
+    try testing.expectEqual(imaging.Vp8lEventKind.literal, stream.preview[1].kind);
+    try testing.expectEqual(@as(u16, 2), stream.preview[1].green);
+    try testing.expectEqual(@as(u16, 10), stream.preview[1].red);
+    try testing.expectEqual(@as(u16, 20), stream.preview[1].blue);
+    try testing.expectEqual(@as(u16, 255), stream.preview[1].alpha);
+}
+
+test "decodeVp8lSingleGroupArgbAtBitPos decodes literal-only pixels" {
+    const testing = @import("std").testing;
+
+    var payload = [_]u8{0} ** 16;
+    var bit_pos: usize = 0;
+
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 1, 8);
+    writeBits(&payload, &bit_pos, 2, 8);
+
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 10, 8);
+
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 20, 8);
+
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 255, 8);
+
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 0, 8);
+
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 1);
+
+    var image = try imaging.decodeVp8lSingleGroupArgbAtBitPos(
+        testing.allocator,
+        &payload,
+        0,
+        .{ 280, 256, 256, 256, 40 },
+        2,
+        1,
+        0,
+    );
+    defer image.deinit();
+
+    try testing.expectEqual(@as(usize, 2), image.width);
+    try testing.expectEqual(@as(usize, 1), image.height);
+    try testing.expectEqual(bit_pos, image.end_bit_pos);
+    try testing.expectEqual(@as(usize, 2), image.pixels.len);
+    try testing.expectEqual(@as(u32, 0xff0a0114), image.pixels[0]);
+    try testing.expectEqual(@as(u32, 0xff0a0214), image.pixels[1]);
+}
+
 test "decodeRgb8 decodes repository sample png natively" {
     const testing = @import("std").testing;
 

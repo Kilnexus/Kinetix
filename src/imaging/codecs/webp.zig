@@ -99,6 +99,49 @@ pub const Vp8lPrefixCodeGroupDetail = struct {
     group: Vp8lPrefixCodeGroup,
 };
 
+pub const Vp8lEventKind = enum {
+    literal,
+    copy,
+    color_cache,
+};
+
+pub const Vp8lEvent = struct {
+    kind: Vp8lEventKind,
+    green: u16 = 0,
+    red: u16 = 0,
+    blue: u16 = 0,
+    alpha: u16 = 0,
+    cache_index: ?usize = null,
+    length_symbol: ?usize = null,
+    length: ?usize = null,
+    distance_symbol: ?usize = null,
+    distance_code: ?usize = null,
+    distance: ?usize = null,
+};
+
+pub const Vp8lEventStream = struct {
+    prefix_group_start_bit_pos: usize,
+    event_stream_start_bit_pos: usize,
+    end_bit_pos: usize,
+    event_count: usize,
+    emitted_pixels: usize,
+    preview_len: usize,
+    preview: [32]Vp8lEvent,
+};
+
+pub const Vp8lArgbImage = struct {
+    allocator: std.mem.Allocator,
+    width: usize,
+    height: usize,
+    end_bit_pos: usize,
+    pixels: []u32,
+
+    pub fn deinit(self: *Vp8lArgbImage) void {
+        self.allocator.free(self.pixels);
+        self.* = undefined;
+    }
+};
+
 pub const Vp8lPrefixCodeHeader = struct {
     kind: Vp8lPrefixCodeKind,
     start_bit_pos: usize,
@@ -270,6 +313,157 @@ pub fn inspectVp8lPrefixCodeGroupAtBitPos(
         .end_bit_pos = reader.bit_pos,
         .alphabet_sizes = alphabet_sizes,
         .group = group,
+    };
+}
+
+pub fn inspectVp8lEventStreamAtBitPos(
+    payload: []const u8,
+    prefix_group_start_bit_pos: usize,
+    alphabet_sizes: [5]usize,
+    width: usize,
+    height: usize,
+    color_cache_bits: usize,
+    max_events: usize,
+) !Vp8lEventStream {
+    var reader = Vp8lBitReader.initAtBit(payload, prefix_group_start_bit_pos);
+    const runtime_group = try parseRuntimePrefixCodeGroup(&reader, alphabet_sizes);
+    const event_stream_start_bit_pos = reader.bit_pos;
+    const color_cache_size = if (color_cache_bits == 0) 0 else @as(usize, 1) << @intCast(color_cache_bits);
+    const max_pixels = width * height;
+
+    var preview = [_]Vp8lEvent{.{ .kind = .literal }} ** 32;
+    var preview_len: usize = 0;
+    var event_count: usize = 0;
+    var emitted_pixels: usize = 0;
+
+    while (emitted_pixels < max_pixels and event_count < max_events) : (event_count += 1) {
+        const symbol = try runtime_group.codes[0].readSymbol(&reader);
+        var event = Vp8lEvent{ .kind = .literal };
+        if (symbol < 256) {
+            event.kind = .literal;
+            event.green = @intCast(symbol);
+            event.red = @intCast(try runtime_group.codes[1].readSymbol(&reader));
+            event.blue = @intCast(try runtime_group.codes[2].readSymbol(&reader));
+            event.alpha = @intCast(try runtime_group.codes[3].readSymbol(&reader));
+            emitted_pixels += 1;
+        } else if (symbol < 256 + numLengthCodes) {
+            const length_symbol = symbol - 256;
+            const length = try readPrefixCodedValue(length_symbol, &reader);
+            const distance_symbol = try runtime_group.codes[4].readSymbol(&reader);
+            const distance_code = try readPrefixCodedValue(distance_symbol, &reader);
+            const distance = planeCodeToDistance(width, distance_code);
+            event.kind = .copy;
+            event.length_symbol = length_symbol;
+            event.length = length;
+            event.distance_symbol = distance_symbol;
+            event.distance_code = distance_code;
+            event.distance = distance;
+            emitted_pixels += length;
+        } else {
+            const cache_index = symbol - (256 + numLengthCodes);
+            if (cache_index >= color_cache_size) return error.InvalidWebpData;
+            event.kind = .color_cache;
+            event.cache_index = cache_index;
+            emitted_pixels += 1;
+        }
+
+        if (preview_len < preview.len) {
+            preview[preview_len] = event;
+            preview_len += 1;
+        }
+    }
+
+    return .{
+        .prefix_group_start_bit_pos = prefix_group_start_bit_pos,
+        .event_stream_start_bit_pos = event_stream_start_bit_pos,
+        .end_bit_pos = reader.bit_pos,
+        .event_count = event_count,
+        .emitted_pixels = emitted_pixels,
+        .preview_len = preview_len,
+        .preview = preview,
+    };
+}
+
+pub fn resolveMetaPrefixCode(
+    entropy_image: ?[]const u32,
+    prefix_bits: usize,
+    prefix_image_width: usize,
+    x: usize,
+    y: usize,
+) !usize {
+    if (entropy_image == null) return 0;
+    const image = entropy_image.?;
+    const position = (y >> @intCast(prefix_bits)) * prefix_image_width + (x >> @intCast(prefix_bits));
+    if (position >= image.len) return error.InvalidWebpData;
+    return (image[position] >> 8) & 0xffff;
+}
+
+pub fn decodeVp8lSingleGroupArgbAtBitPos(
+    allocator: std.mem.Allocator,
+    payload: []const u8,
+    prefix_group_start_bit_pos: usize,
+    alphabet_sizes: [5]usize,
+    width: usize,
+    height: usize,
+    color_cache_bits: usize,
+) !Vp8lArgbImage {
+    var reader = Vp8lBitReader.initAtBit(payload, prefix_group_start_bit_pos);
+    const runtime_group = try parseRuntimePrefixCodeGroup(&reader, alphabet_sizes);
+    const pixel_count = width * height;
+    const pixels = try allocator.alloc(u32, pixel_count);
+    errdefer allocator.free(pixels);
+
+    const color_cache_size = if (color_cache_bits == 0) 0 else @as(usize, 1) << @intCast(color_cache_bits);
+    const color_cache = if (color_cache_size == 0) null else try allocator.alloc(u32, color_cache_size);
+    defer if (color_cache) |cache| allocator.free(cache);
+    if (color_cache) |cache| @memset(cache, 0);
+
+    var written: usize = 0;
+    while (written < pixel_count) {
+        const symbol = try runtime_group.codes[0].readSymbol(&reader);
+        if (symbol < 256) {
+            const green: u8 = @intCast(symbol);
+            const red: u8 = @intCast(try runtime_group.codes[1].readSymbol(&reader));
+            const blue: u8 = @intCast(try runtime_group.codes[2].readSymbol(&reader));
+            const alpha: u8 = @intCast(try runtime_group.codes[3].readSymbol(&reader));
+            const pixel = packArgb(alpha, red, green, blue);
+            pixels[written] = pixel;
+            updateColorCache(color_cache, color_cache_bits, pixel);
+            written += 1;
+            continue;
+        }
+
+        if (symbol < 256 + numLengthCodes) {
+            const length_symbol = symbol - 256;
+            const length = try readPrefixCodedValue(length_symbol, &reader);
+            const distance_symbol = try runtime_group.codes[4].readSymbol(&reader);
+            const distance_code = try readPrefixCodedValue(distance_symbol, &reader);
+            const distance = planeCodeToDistance(width, distance_code);
+            if (distance == 0 or distance > written) return error.InvalidWebpData;
+            if (written + length > pixel_count) return error.InvalidWebpData;
+            for (0..length) |_| {
+                const pixel = pixels[written - distance];
+                pixels[written] = pixel;
+                updateColorCache(color_cache, color_cache_bits, pixel);
+                written += 1;
+            }
+            continue;
+        }
+
+        const cache_index = symbol - (256 + numLengthCodes);
+        if (cache_index >= color_cache_size or color_cache == null) return error.InvalidWebpData;
+        const pixel = color_cache.?[cache_index];
+        pixels[written] = pixel;
+        updateColorCache(color_cache, color_cache_bits, pixel);
+        written += 1;
+    }
+
+    return .{
+        .allocator = allocator,
+        .width = width,
+        .height = height,
+        .end_bit_pos = reader.bit_pos,
+        .pixels = pixels,
     };
 }
 
@@ -791,10 +985,16 @@ const codeLengthRepeatCode = 16;
 const defaultCodeLength: u8 = 8;
 const codeLengthExtraBits = [3]usize{ 2, 3, 7 };
 const codeLengthRepeatOffsets = [3]usize{ 3, 3, 11 };
+const numPrefixCodes = 5;
+const numLengthCodes = 24;
 
 const codeLengthCodeOrder = [19]usize{
     17, 18, 0, 1, 2, 3, 4, 5, 16, 6,
     7, 8, 9, 10, 11, 12, 13, 14, 15,
+};
+
+const RuntimePrefixCodeGroup = struct {
+    codes: [numPrefixCodes]CanonicalPrefixDecoder,
 };
 
 const CanonicalPrefixDecoder = struct {
@@ -919,6 +1119,87 @@ fn scanChunks(bytes: []const u8) !WebpScan {
         };
     }
     return error.MissingWebpChunk;
+}
+
+fn parseRuntimePrefixCodeGroup(reader: *Vp8lBitReader, alphabet_sizes: [numPrefixCodes]usize) !RuntimePrefixCodeGroup {
+    var decoders = [_]CanonicalPrefixDecoder{undefined} ** numPrefixCodes;
+    for (alphabet_sizes, 0..) |alphabet_size, i| {
+        decoders[i] = try parseRuntimePrefixCode(reader, alphabet_size);
+    }
+    return .{ .codes = decoders };
+}
+
+fn parseRuntimePrefixCode(reader: *Vp8lBitReader, alphabet_size: usize) !CanonicalPrefixDecoder {
+    if (alphabet_size == 0 or alphabet_size > maxPrefixAlphabetSize) return error.InvalidWebpData;
+    const is_simple = (try reader.readBits(1)) == 1;
+    var code_lengths = [_]u8{0} ** maxPrefixAlphabetSize;
+
+    if (is_simple) {
+        const num_symbols = (try reader.readBits(1)) + 1;
+        const is_first_8bits = (try reader.readBits(1)) == 1;
+        const symbol0 = try reader.readBits(if (is_first_8bits) 8 else 1);
+        if (symbol0 >= alphabet_size) return error.InvalidWebpData;
+        code_lengths[symbol0] = 1;
+        if (num_symbols == 2) {
+            const symbol1 = try reader.readBits(8);
+            if (symbol1 >= alphabet_size) return error.InvalidWebpData;
+            code_lengths[symbol1] = 1;
+        }
+        return CanonicalPrefixDecoder.initFromU8(code_lengths[0..alphabet_size]);
+    }
+
+    const num_code_length_codes = (try reader.readBits(4)) + 4;
+    var code_length_code_lengths = [_]usize{0} ** 19;
+    for (0..num_code_length_codes) |i| {
+        const symbol = codeLengthCodeOrder[i];
+        code_length_code_lengths[symbol] = try reader.readBits(3);
+    }
+
+    const use_explicit_max_symbol = (try reader.readBits(1)) == 1;
+    const length_nbits = if (use_explicit_max_symbol) 2 + 2 * (try reader.readBits(3)) else null;
+    const max_symbol = if (use_explicit_max_symbol) 2 + (try reader.readBits(length_nbits.?)) else alphabet_size;
+    if (max_symbol > alphabet_size) return error.InvalidWebpData;
+
+    _ = try inspectDecodedCodeLengths(reader, code_length_code_lengths, alphabet_size, max_symbol, &code_lengths);
+    return CanonicalPrefixDecoder.initFromU8(code_lengths[0..alphabet_size]);
+}
+
+fn readPrefixCodedValue(symbol: usize, reader: *Vp8lBitReader) !usize {
+    if (symbol < 4) return symbol + 1;
+    const extra_bits = (symbol - 2) >> 1;
+    const offset = ((2 + (symbol & 1)) << @intCast(extra_bits)) + 1;
+    return offset + (try reader.readBits(extra_bits));
+}
+
+fn planeCodeToDistance(width: usize, dist_code: usize) usize {
+    if (dist_code <= 120) return planeCodeToDistanceFast(width, dist_code);
+    return dist_code - 120;
+}
+
+fn planeCodeToDistanceFast(width: usize, dist_code: usize) usize {
+    if (dist_code <= 4) return dist_code;
+    const offset = dist_code - 5;
+    const row = offset / 12;
+    const col = offset % 12;
+    const y = @as(isize, @intCast(row / 2 + 1));
+    const signed_y: isize = if ((row & 1) == 0) -y else y;
+    const x_mag = @as(isize, @intCast(col / 2 + 1));
+    const signed_x: isize = if ((col & 1) == 0) -x_mag else x_mag;
+    const distance = signed_y * @as(isize, @intCast(width)) + signed_x;
+    return @intCast(@max(distance, 1));
+}
+
+fn packArgb(alpha: u8, red: u8, green: u8, blue: u8) u32 {
+    return (@as(u32, alpha) << 24) |
+        (@as(u32, red) << 16) |
+        (@as(u32, green) << 8) |
+        @as(u32, blue);
+}
+
+fn updateColorCache(color_cache: ?[]u32, color_cache_bits: usize, pixel: u32) void {
+    if (color_cache == null or color_cache_bits == 0) return;
+    const index = (@as(usize, 0x1e35a7bd) * @as(usize, pixel)) >> @intCast(32 - color_cache_bits);
+    color_cache.?[index] = pixel;
 }
 
 pub fn validateHeader(bytes: []const u8) !void {

@@ -30,6 +30,10 @@ pub const Vp8lCanonicalCodeEntry = webp.Vp8lCanonicalCodeEntry;
 pub const Vp8lCanonicalPrefixSummary = webp.Vp8lCanonicalPrefixSummary;
 pub const Vp8lCanonicalSymbolStream = webp.Vp8lCanonicalSymbolStream;
 pub const Vp8lPrefixCodeGroupDetail = webp.Vp8lPrefixCodeGroupDetail;
+pub const Vp8lEventKind = webp.Vp8lEventKind;
+pub const Vp8lEvent = webp.Vp8lEvent;
+pub const Vp8lEventStream = webp.Vp8lEventStream;
+pub const Vp8lArgbImage = webp.Vp8lArgbImage;
 pub const Vp8lPrefixCodeHeader = webp.Vp8lPrefixCodeHeader;
 pub const Vp8lPrefixCodeGroup = webp.Vp8lPrefixCodeGroup;
 pub const Vp8lEntropyImageDataHeader = webp.Vp8lEntropyImageDataHeader;
@@ -117,6 +121,56 @@ pub fn inspectVp8lPrefixCodeGroupAtBitPos(
     alphabet_sizes: [5]usize,
 ) !Vp8lPrefixCodeGroupDetail {
     return webp.inspectVp8lPrefixCodeGroupAtBitPos(payload, start_bit_pos, alphabet_sizes);
+}
+
+pub fn inspectVp8lEventStreamAtBitPos(
+    payload: []const u8,
+    prefix_group_start_bit_pos: usize,
+    alphabet_sizes: [5]usize,
+    width: usize,
+    height: usize,
+    color_cache_bits: usize,
+    max_events: usize,
+) !Vp8lEventStream {
+    return webp.inspectVp8lEventStreamAtBitPos(
+        payload,
+        prefix_group_start_bit_pos,
+        alphabet_sizes,
+        width,
+        height,
+        color_cache_bits,
+        max_events,
+    );
+}
+
+pub fn resolveMetaPrefixCode(
+    entropy_image: ?[]const u32,
+    prefix_bits: usize,
+    prefix_image_width: usize,
+    x: usize,
+    y: usize,
+) !usize {
+    return webp.resolveMetaPrefixCode(entropy_image, prefix_bits, prefix_image_width, x, y);
+}
+
+pub fn decodeVp8lSingleGroupArgbAtBitPos(
+    allocator: std.mem.Allocator,
+    payload: []const u8,
+    prefix_group_start_bit_pos: usize,
+    alphabet_sizes: [5]usize,
+    width: usize,
+    height: usize,
+    color_cache_bits: usize,
+) !Vp8lArgbImage {
+    return webp.decodeVp8lSingleGroupArgbAtBitPos(
+        allocator,
+        payload,
+        prefix_group_start_bit_pos,
+        alphabet_sizes,
+        width,
+        height,
+        color_cache_bits,
+    );
 }
 
 fn probePng(bytes: []const u8) ImageInfo {
