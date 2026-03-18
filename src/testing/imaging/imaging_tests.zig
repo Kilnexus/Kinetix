@@ -188,6 +188,67 @@ test "decodeRgb8 decodes png-backed ico" {
     try testing.expect(image.data[0] > image.data[2]);
 }
 
+test "decodeRgb8 decodes bmp-backed ico" {
+    const testing = @import("std").testing;
+
+    const payload_len: usize = 40 + 4 + 4;
+    const ico_len: usize = 6 + 16 + payload_len;
+    const ico = try testing.allocator.alloc(u8, ico_len);
+    defer testing.allocator.free(ico);
+    @memset(ico, 0);
+
+    ico[0] = 0x00;
+    ico[1] = 0x00;
+    ico[2] = 0x01;
+    ico[3] = 0x00;
+    ico[4] = 0x01;
+    ico[5] = 0x00;
+
+    ico[6] = 0x01;
+    ico[7] = 0x01;
+    ico[8] = 0x00;
+    ico[9] = 0x00;
+    ico[10] = 0x01;
+    ico[11] = 0x00;
+    ico[12] = 0x20;
+    ico[13] = 0x00;
+    writeU32le(ico[14..18], payload_len);
+    writeU32le(ico[18..22], 22);
+
+    const dib = ico[22..];
+    writeU32le(dib[0..4], 40);
+    writeU32le(dib[4..8], 1);
+    writeU32le(dib[8..12], 2);
+    dib[12] = 0x01;
+    dib[13] = 0x00;
+    dib[14] = 0x20;
+    dib[15] = 0x00;
+    writeU32le(dib[16..20], 0);
+    writeU32le(dib[20..24], 4);
+    writeU32le(dib[24..28], 0);
+    writeU32le(dib[28..32], 0);
+    writeU32le(dib[32..36], 0);
+    writeU32le(dib[36..40], 0);
+
+    dib[40] = 0x00;
+    dib[41] = 0x00;
+    dib[42] = 0xff;
+    dib[43] = 0xff;
+    dib[44] = 0x00;
+    dib[45] = 0x00;
+    dib[46] = 0x00;
+    dib[47] = 0x00;
+
+    var image = try imaging.decodeRgb8(testing.allocator, ico);
+    defer image.deinit();
+
+    try testing.expectEqual(@as(usize, 1), image.width);
+    try testing.expectEqual(@as(usize, 1), image.height);
+    try testing.expectEqual(@as(usize, 3), image.channels);
+    try testing.expect(image.data[0] > image.data[1]);
+    try testing.expect(image.data[0] > image.data[2]);
+}
+
 fn writeU32le(dst: []u8, value: u32) void {
     dst[0] = @intCast(value & 0xff);
     dst[1] = @intCast((value >> 8) & 0xff);
