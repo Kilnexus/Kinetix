@@ -383,6 +383,53 @@ test "inspectVp8lImageDataAtBitPos parses argb meta prefix branch" {
     }
 }
 
+test "inspectVp8lImageDataAtBitPos parses normal prefix code header" {
+    const testing = @import("std").testing;
+
+    var payload = [_]u8{0} ** 3;
+    var bit_pos: usize = 0;
+
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 0);
+    writeBits(&payload, &bit_pos, 0, 4);
+    writeBits(&payload, &bit_pos, 2, 3);
+    writeBits(&payload, &bit_pos, 0, 3);
+    writeBits(&payload, &bit_pos, 1, 3);
+    writeBits(&payload, &bit_pos, 7, 3);
+
+    const header = try imaging.inspectVp8lImageDataAtBitPos(&payload, 0, 3, 2, .color);
+    try testing.expectEqual(imaging.Vp8lImageRole.color, header.role);
+    try testing.expectEqual(@as(usize, 3), header.width);
+    try testing.expectEqual(@as(usize, 2), header.height);
+    try testing.expect(!header.use_color_cache);
+    try testing.expectEqual(@as(?usize, null), header.color_cache_bits);
+    try testing.expectEqual(@as(?bool, null), header.meta_prefix_present);
+    try testing.expectEqual(@as(?usize, 1), header.prefix_codes_start_bit_pos);
+    try testing.expectEqual(@as(usize, 18), header.header_end_bit_pos);
+    try testing.expectEqual(@as(?usize, null), header.prefix_image_start_bit_pos);
+    try testing.expectEqual(@as(?imaging.Vp8lEntropyImageDataHeader, null), header.prefix_image_header);
+    try testing.expect(header.prefix_group != null);
+
+    const group = header.prefix_group.?;
+    try testing.expectEqual(@as(usize, 1), group.parsed_count);
+    try testing.expect(!group.all_simple);
+    try testing.expectEqual(imaging.Vp8lPrefixCodeKind.normal, group.codes[0].kind);
+    try testing.expectEqual(@as(usize, 1), group.codes[0].start_bit_pos);
+    try testing.expectEqual(@as(?imaging.Vp8lSimplePrefixCode, null), group.codes[0].simple);
+    try testing.expect(group.codes[0].normal != null);
+
+    const normal = group.codes[0].normal.?;
+    try testing.expectEqual(@as(usize, 4), normal.num_code_length_codes);
+    try testing.expectEqual(@as(usize, 18), normal.end_bit_pos);
+    try testing.expectEqual(@as(usize, 2), normal.code_length_code_lengths[17]);
+    try testing.expectEqual(@as(usize, 0), normal.code_length_code_lengths[18]);
+    try testing.expectEqual(@as(usize, 1), normal.code_length_code_lengths[0]);
+    try testing.expectEqual(@as(usize, 7), normal.code_length_code_lengths[1]);
+    for ([_]usize{ 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 }) |symbol| {
+        try testing.expectEqual(@as(usize, 0), normal.code_length_code_lengths[symbol]);
+    }
+}
+
 test "decodeRgb8 decodes repository sample png natively" {
     const testing = @import("std").testing;
 

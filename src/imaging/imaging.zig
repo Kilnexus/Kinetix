@@ -18,6 +18,7 @@ pub const Vp8lImageRole = probe.Vp8lImageRole;
 pub const Vp8lImageDataHeader = probe.Vp8lImageDataHeader;
 pub const Vp8lPrefixCodeKind = probe.Vp8lPrefixCodeKind;
 pub const Vp8lSimplePrefixCode = probe.Vp8lSimplePrefixCode;
+pub const Vp8lNormalPrefixCode = probe.Vp8lNormalPrefixCode;
 pub const Vp8lPrefixCodeHeader = probe.Vp8lPrefixCodeHeader;
 pub const Vp8lPrefixCodeGroup = probe.Vp8lPrefixCodeGroup;
 pub const Vp8lEntropyImageDataHeader = probe.Vp8lEntropyImageDataHeader;

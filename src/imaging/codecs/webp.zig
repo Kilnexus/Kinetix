@@ -55,10 +55,17 @@ pub const Vp8lSimplePrefixCode = struct {
     end_bit_pos: usize,
 };
 
+pub const Vp8lNormalPrefixCode = struct {
+    num_code_length_codes: usize,
+    code_length_code_lengths: [19]usize,
+    end_bit_pos: usize,
+};
+
 pub const Vp8lPrefixCodeHeader = struct {
     kind: Vp8lPrefixCodeKind,
     start_bit_pos: usize,
     simple: ?Vp8lSimplePrefixCode = null,
+    normal: ?Vp8lNormalPrefixCode = null,
 };
 
 pub const Vp8lPrefixCodeGroup = struct {
@@ -408,9 +415,11 @@ fn inspectPrefixCodeGroup(reader: *Vp8lBitReader) !Vp8lPrefixCodeGroup {
         const is_simple = (try reader.readBits(1)) == 1;
         if (!is_simple) {
             all_simple = false;
+            const normal = try inspectNormalPrefixCode(reader);
             codes[parsed_count] = .{
                 .kind = .normal,
                 .start_bit_pos = start_bit_pos,
+                .normal = normal,
             };
             parsed_count += 1;
             break;
@@ -437,6 +446,22 @@ fn inspectPrefixCodeGroup(reader: *Vp8lBitReader) !Vp8lPrefixCodeGroup {
         .parsed_count = parsed_count,
         .all_simple = all_simple,
         .codes = codes,
+    };
+}
+
+fn inspectNormalPrefixCode(reader: *Vp8lBitReader) !Vp8lNormalPrefixCode {
+    const num_code_length_codes = (try reader.readBits(4)) + 4;
+    var code_length_code_lengths = [_]usize{0} ** 19;
+
+    for (0..num_code_length_codes) |i| {
+        const symbol = codeLengthCodeOrder[i];
+        code_length_code_lengths[symbol] = try reader.readBits(3);
+    }
+
+    return .{
+        .num_code_length_codes = num_code_length_codes,
+        .code_length_code_lengths = code_length_code_lengths,
+        .end_bit_pos = reader.bit_pos,
     };
 }
 
@@ -501,6 +526,11 @@ const Vp8lBitReader = struct {
 const WebpScan = struct {
     info: WebpInfo,
     primary: WebpChunk,
+};
+
+const codeLengthCodeOrder = [19]usize{
+    17, 18, 0, 1, 2, 3, 4, 5, 16, 6,
+    7, 8, 9, 10, 11, 12, 13, 14, 15,
 };
 
 fn scanChunks(bytes: []const u8) !WebpScan {

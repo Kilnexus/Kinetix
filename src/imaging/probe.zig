@@ -25,6 +25,7 @@ pub const Vp8lImageRole = webp.Vp8lImageRole;
 pub const Vp8lImageDataHeader = webp.Vp8lImageDataHeader;
 pub const Vp8lPrefixCodeKind = webp.Vp8lPrefixCodeKind;
 pub const Vp8lSimplePrefixCode = webp.Vp8lSimplePrefixCode;
+pub const Vp8lNormalPrefixCode = webp.Vp8lNormalPrefixCode;
 pub const Vp8lPrefixCodeHeader = webp.Vp8lPrefixCodeHeader;
 pub const Vp8lPrefixCodeGroup = webp.Vp8lPrefixCodeGroup;
 pub const Vp8lEntropyImageDataHeader = webp.Vp8lEntropyImageDataHeader;
