@@ -38,6 +38,11 @@ pub const Vp8lTransform = struct {
     kind: Vp8lTransformType,
     size_bits: ?usize = null,
     color_table_size: ?usize = null,
+    width_bits: ?usize = null,
+    transform_width: ?usize = null,
+    transform_height: ?usize = null,
+    next_image_width: usize,
+    next_image_height: usize,
 };
 
 pub const Vp8lStreamInfo = struct {
@@ -107,6 +112,8 @@ pub fn inspectVp8lPayload(payload: []const u8) !Vp8lStreamInfo {
 
     var transforms = [_]Vp8lTransform{undefined} ** 4;
     var transform_count: usize = 0;
+    var current_width = info.width;
+    const current_height = info.height;
 
     var tail_flags_known = true;
     while ((try reader.readBits(1)) == 1) {
@@ -115,27 +122,53 @@ pub fn inspectVp8lPayload(payload: []const u8) !Vp8lStreamInfo {
         transforms[transform_count] = switch (kind_bits) {
             0 => blk: {
                 tail_flags_known = false;
+                const size_bits = (try reader.readBits(3)) + 2;
+                const scale = @as(usize, 1) << @intCast(size_bits);
+                const transform_width = divRoundUp(current_width, scale);
+                const transform_height = divRoundUp(current_height, scale);
                 break :blk .{
-                .kind = .predictor,
-                .size_bits = (try reader.readBits(3)) + 2,
-            };
+                    .kind = .predictor,
+                    .size_bits = size_bits,
+                    .transform_width = transform_width,
+                    .transform_height = transform_height,
+                    .next_image_width = current_width,
+                    .next_image_height = current_height,
+                };
             },
             1 => blk: {
                 tail_flags_known = false;
+                const size_bits = (try reader.readBits(3)) + 2;
+                const scale = @as(usize, 1) << @intCast(size_bits);
+                const transform_width = divRoundUp(current_width, scale);
+                const transform_height = divRoundUp(current_height, scale);
                 break :blk .{
-                .kind = .color,
-                .size_bits = (try reader.readBits(3)) + 2,
-            };
+                    .kind = .color,
+                    .size_bits = size_bits,
+                    .transform_width = transform_width,
+                    .transform_height = transform_height,
+                    .next_image_width = current_width,
+                    .next_image_height = current_height,
+                };
             },
             2 => .{
                 .kind = .subtract_green,
+                .next_image_width = current_width,
+                .next_image_height = current_height,
             },
             3 => blk: {
                 tail_flags_known = false;
+                const color_table_size = (try reader.readBits(8)) + 1;
+                const width_bits = colorIndexWidthBits(color_table_size);
+                current_width = divRoundUp(current_width, @as(usize, 1) << @intCast(width_bits));
                 break :blk .{
-                .kind = .color_indexing,
-                .color_table_size = (try reader.readBits(8)) + 1,
-            };
+                    .kind = .color_indexing,
+                    .color_table_size = color_table_size,
+                    .width_bits = width_bits,
+                    .transform_width = color_table_size,
+                    .transform_height = 1,
+                    .next_image_width = current_width,
+                    .next_image_height = current_height,
+                };
             },
             else => unreachable,
         };
@@ -351,6 +384,17 @@ fn mapChunkTag(raw: []const u8) WebpChunkTag {
     if (std.mem.eql(u8, raw, "EXIF")) return .exif;
     if (std.mem.eql(u8, raw, "XMP ")) return .xmp;
     return .unknown;
+}
+
+fn divRoundUp(num: usize, den: usize) usize {
+    return (num + den - 1) / den;
+}
+
+fn colorIndexWidthBits(color_table_size: usize) usize {
+    if (color_table_size <= 2) return 3;
+    if (color_table_size <= 4) return 2;
+    if (color_table_size <= 16) return 1;
+    return 0;
 }
 
 fn readU24le(bytes: []const u8) usize {

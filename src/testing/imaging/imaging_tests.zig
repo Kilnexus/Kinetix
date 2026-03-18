@@ -160,6 +160,11 @@ test "inspectWebpVp8l parses transform chain for lossless samples" {
     try testing.expectEqual(@as(usize, 1), rgb_info.transform_count);
     try testing.expectEqual(imaging.Vp8lTransformType.color_indexing, rgb_info.transforms[0].kind);
     try testing.expectEqual(@as(?usize, 2), rgb_info.transforms[0].color_table_size);
+    try testing.expectEqual(@as(?usize, 3), rgb_info.transforms[0].width_bits);
+    try testing.expectEqual(@as(?usize, 2), rgb_info.transforms[0].transform_width);
+    try testing.expectEqual(@as(?usize, 1), rgb_info.transforms[0].transform_height);
+    try testing.expectEqual(@as(usize, 1), rgb_info.transforms[0].next_image_width);
+    try testing.expectEqual(@as(usize, 1), rgb_info.transforms[0].next_image_height);
     try testing.expect(!rgb_info.tail_flags_known);
     try testing.expectEqual(@as(?bool, null), rgb_info.use_color_cache);
     try testing.expectEqual(@as(?bool, null), rgb_info.use_meta_prefix);
@@ -171,6 +176,11 @@ test "inspectWebpVp8l parses transform chain for lossless samples" {
     try testing.expectEqual(@as(usize, 1), rgba_info.transform_count);
     try testing.expectEqual(imaging.Vp8lTransformType.color_indexing, rgba_info.transforms[0].kind);
     try testing.expectEqual(@as(?usize, 1), rgba_info.transforms[0].color_table_size);
+    try testing.expectEqual(@as(?usize, 3), rgba_info.transforms[0].width_bits);
+    try testing.expectEqual(@as(?usize, 1), rgba_info.transforms[0].transform_width);
+    try testing.expectEqual(@as(?usize, 1), rgba_info.transforms[0].transform_height);
+    try testing.expectEqual(@as(usize, 1), rgba_info.transforms[0].next_image_width);
+    try testing.expectEqual(@as(usize, 1), rgba_info.transforms[0].next_image_height);
     try testing.expect(!rgba_info.tail_flags_known);
     try testing.expectEqual(@as(?bool, null), rgba_info.use_color_cache);
     try testing.expectEqual(@as(?bool, null), rgba_info.use_meta_prefix);
