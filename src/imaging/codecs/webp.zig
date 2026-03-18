@@ -83,6 +83,14 @@ pub const Vp8lCanonicalPrefixSummary = struct {
     preview: [16]Vp8lCanonicalCodeEntry,
 };
 
+pub const Vp8lCanonicalSymbolStream = struct {
+    start_bit_pos: usize,
+    end_bit_pos: usize,
+    symbol_count: usize,
+    preview_len: usize,
+    preview: [32]usize,
+};
+
 pub const Vp8lPrefixCodeHeader = struct {
     kind: Vp8lPrefixCodeKind,
     start_bit_pos: usize,
@@ -217,6 +225,29 @@ pub fn inspectVp8lNormalPrefixCodeAtBitPos(
     if (alphabet_size > maxPrefixAlphabetSize) return error.InvalidWebpData;
     var reader = Vp8lBitReader.initAtBit(payload, start_bit_pos);
     return inspectNormalPrefixCodeDetailed(&reader, alphabet_size);
+}
+
+pub fn inspectVp8lCanonicalSymbolStreamAtBitPos(
+    payload: []const u8,
+    start_bit_pos: usize,
+    code_lengths: []const u8,
+    symbol_count: usize,
+) !Vp8lCanonicalSymbolStream {
+    var reader = Vp8lBitReader.initAtBit(payload, start_bit_pos);
+    const decoder = try CanonicalPrefixDecoder.initFromU8(code_lengths);
+    var preview = [_]usize{0} ** 32;
+    const preview_len = @min(preview.len, symbol_count);
+    for (0..symbol_count) |i| {
+        const symbol = try decoder.readSymbol(&reader);
+        if (i < preview_len) preview[i] = symbol;
+    }
+    return .{
+        .start_bit_pos = start_bit_pos,
+        .end_bit_pos = reader.bit_pos,
+        .symbol_count = symbol_count,
+        .preview_len = preview_len,
+        .preview = preview,
+    };
 }
 
 pub fn inspectVp8lPayload(payload: []const u8) !Vp8lStreamInfo {
@@ -720,10 +751,19 @@ const CanonicalPrefixDecoder = struct {
     max_len: usize = 0,
 
     fn init(code_lengths: []const usize) !CanonicalPrefixDecoder {
+        return initImpl(usize, code_lengths);
+    }
+
+    fn initFromU8(code_lengths: []const u8) !CanonicalPrefixDecoder {
+        return initImpl(u8, code_lengths);
+    }
+
+    fn initImpl(comptime T: type, code_lengths: []const T) !CanonicalPrefixDecoder {
         var counts = [_]usize{0} ** 16;
         for (code_lengths) |len| {
-            if (len >= counts.len) return error.InvalidWebpData;
-            if (len != 0) counts[len] += 1;
+            const len_usize = @as(usize, len);
+            if (len_usize >= counts.len) return error.InvalidWebpData;
+            if (len_usize != 0) counts[len_usize] += 1;
         }
 
         var next_code = [_]usize{0} ** 16;
@@ -735,16 +775,17 @@ const CanonicalPrefixDecoder = struct {
 
         var decoder = CanonicalPrefixDecoder{};
         for (code_lengths, 0..) |len, symbol| {
-            if (len == 0) continue;
-            const canonical_code = next_code[len];
-            next_code[len] += 1;
+            const len_usize = @as(usize, len);
+            if (len_usize == 0) continue;
+            const canonical_code = next_code[len_usize];
+            next_code[len_usize] += 1;
             decoder.entries[decoder.entry_count] = .{
                 .symbol = symbol,
-                .len = len,
-                .code = reverseBits(canonical_code, len),
+                .len = len_usize,
+                .code = reverseBits(canonical_code, len_usize),
             };
             decoder.entry_count += 1;
-            decoder.max_len = @max(decoder.max_len, len);
+            decoder.max_len = @max(decoder.max_len, len_usize);
         }
 
         if (decoder.entry_count == 0) return error.InvalidWebpData;

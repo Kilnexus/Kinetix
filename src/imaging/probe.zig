@@ -28,6 +28,7 @@ pub const Vp8lSimplePrefixCode = webp.Vp8lSimplePrefixCode;
 pub const Vp8lNormalPrefixCode = webp.Vp8lNormalPrefixCode;
 pub const Vp8lCanonicalCodeEntry = webp.Vp8lCanonicalCodeEntry;
 pub const Vp8lCanonicalPrefixSummary = webp.Vp8lCanonicalPrefixSummary;
+pub const Vp8lCanonicalSymbolStream = webp.Vp8lCanonicalSymbolStream;
 pub const Vp8lPrefixCodeHeader = webp.Vp8lPrefixCodeHeader;
 pub const Vp8lPrefixCodeGroup = webp.Vp8lPrefixCodeGroup;
 pub const Vp8lEntropyImageDataHeader = webp.Vp8lEntropyImageDataHeader;
@@ -98,6 +99,15 @@ pub fn inspectVp8lNormalPrefixCodeAtBitPos(
     alphabet_size: usize,
 ) !Vp8lNormalPrefixCode {
     return webp.inspectVp8lNormalPrefixCodeAtBitPos(payload, start_bit_pos, alphabet_size);
+}
+
+pub fn inspectVp8lCanonicalSymbolStreamAtBitPos(
+    payload: []const u8,
+    start_bit_pos: usize,
+    code_lengths: []const u8,
+    symbol_count: usize,
+) !Vp8lCanonicalSymbolStream {
+    return webp.inspectVp8lCanonicalSymbolStreamAtBitPos(payload, start_bit_pos, code_lengths, symbol_count);
 }
 
 fn probePng(bytes: []const u8) ImageInfo {

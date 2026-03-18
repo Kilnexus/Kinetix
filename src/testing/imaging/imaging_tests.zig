@@ -569,6 +569,56 @@ test "inspectVp8lNormalPrefixCodeAtBitPos decodes repeat code lengths and builds
     try testing.expectEqual(@as(usize, 1), summary.preview[4].lsb_code);
 }
 
+test "inspectVp8lCanonicalSymbolStreamAtBitPos decodes 1-bit canonical stream" {
+    const testing = @import("std").testing;
+
+    const code_lengths = [_]u8{ 1, 1, 0, 0, 0, 0, 0, 0 };
+    var payload = [_]u8{0};
+    var bit_pos: usize = 0;
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 0);
+
+    const stream = try imaging.inspectVp8lCanonicalSymbolStreamAtBitPos(&payload, 0, &code_lengths, 4);
+    try testing.expectEqual(@as(usize, 0), stream.start_bit_pos);
+    try testing.expectEqual(@as(usize, 4), stream.end_bit_pos);
+    try testing.expectEqual(@as(usize, 4), stream.symbol_count);
+    try testing.expectEqual(@as(usize, 4), stream.preview_len);
+    try testing.expectEqual(@as(usize, 0), stream.preview[0]);
+    try testing.expectEqual(@as(usize, 1), stream.preview[1]);
+    try testing.expectEqual(@as(usize, 1), stream.preview[2]);
+    try testing.expectEqual(@as(usize, 0), stream.preview[3]);
+}
+
+test "inspectVp8lCanonicalSymbolStreamAtBitPos decodes 3-bit canonical stream" {
+    const testing = @import("std").testing;
+
+    const code_lengths = [_]u8{
+        3, 3, 3, 3, 3,
+        0, 0, 0, 0, 0,
+    };
+    var payload = [_]u8{0} ** 2;
+    var bit_pos: usize = 0;
+
+    writeBits(&payload, &bit_pos, 0, 3);
+    writeBits(&payload, &bit_pos, 4, 3);
+    writeBits(&payload, &bit_pos, 2, 3);
+    writeBits(&payload, &bit_pos, 6, 3);
+    writeBits(&payload, &bit_pos, 1, 3);
+
+    const stream = try imaging.inspectVp8lCanonicalSymbolStreamAtBitPos(&payload, 0, &code_lengths, 5);
+    try testing.expectEqual(@as(usize, 0), stream.start_bit_pos);
+    try testing.expectEqual(@as(usize, 15), stream.end_bit_pos);
+    try testing.expectEqual(@as(usize, 5), stream.symbol_count);
+    try testing.expectEqual(@as(usize, 5), stream.preview_len);
+    try testing.expectEqual(@as(usize, 0), stream.preview[0]);
+    try testing.expectEqual(@as(usize, 1), stream.preview[1]);
+    try testing.expectEqual(@as(usize, 2), stream.preview[2]);
+    try testing.expectEqual(@as(usize, 3), stream.preview[3]);
+    try testing.expectEqual(@as(usize, 4), stream.preview[4]);
+}
+
 test "decodeRgb8 decodes repository sample png natively" {
     const testing = @import("std").testing;
 
