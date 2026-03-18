@@ -136,6 +136,46 @@ test "findPrimaryChunk identifies webp payload kind" {
     try testing.expectEqual(imaging.WebpChunkTag.vp8l, tag);
 }
 
+test "inspectWebpVp8l parses transform chain for lossless samples" {
+    const std = @import("std");
+    const testing = std.testing;
+
+    const rgb_lossless_base64 = "UklGRh4AAABXRUJQVlA4TBEAAAAvAQAAAA+w//Mf8x8VMqL/AQA=";
+    const rgba_lossless_base64 = "UklGRhwAAABXRUJQVlA4TA8AAAAvAAAAEAcQ/Y8CBiKi/wEA";
+
+    const rgb_len = try std.base64.standard.Decoder.calcSizeForSlice(rgb_lossless_base64);
+    const rgb = try testing.allocator.alloc(u8, rgb_len);
+    defer testing.allocator.free(rgb);
+    try std.base64.standard.Decoder.decode(rgb, rgb_lossless_base64);
+
+    const rgba_len = try std.base64.standard.Decoder.calcSizeForSlice(rgba_lossless_base64);
+    const rgba = try testing.allocator.alloc(u8, rgba_len);
+    defer testing.allocator.free(rgba);
+    try std.base64.standard.Decoder.decode(rgba, rgba_lossless_base64);
+
+    const rgb_info = try imaging.inspectWebpVp8l(rgb);
+    try testing.expectEqual(@as(usize, 2), rgb_info.width);
+    try testing.expectEqual(@as(usize, 1), rgb_info.height);
+    try testing.expect(!rgb_info.has_alpha);
+    try testing.expectEqual(@as(usize, 1), rgb_info.transform_count);
+    try testing.expectEqual(imaging.Vp8lTransformType.color_indexing, rgb_info.transforms[0].kind);
+    try testing.expectEqual(@as(?usize, 2), rgb_info.transforms[0].color_table_size);
+    try testing.expect(!rgb_info.tail_flags_known);
+    try testing.expectEqual(@as(?bool, null), rgb_info.use_color_cache);
+    try testing.expectEqual(@as(?bool, null), rgb_info.use_meta_prefix);
+
+    const rgba_info = try imaging.inspectWebpVp8l(rgba);
+    try testing.expectEqual(@as(usize, 1), rgba_info.width);
+    try testing.expectEqual(@as(usize, 1), rgba_info.height);
+    try testing.expect(rgba_info.has_alpha);
+    try testing.expectEqual(@as(usize, 1), rgba_info.transform_count);
+    try testing.expectEqual(imaging.Vp8lTransformType.color_indexing, rgba_info.transforms[0].kind);
+    try testing.expectEqual(@as(?usize, 1), rgba_info.transforms[0].color_table_size);
+    try testing.expect(!rgba_info.tail_flags_known);
+    try testing.expectEqual(@as(?bool, null), rgba_info.use_color_cache);
+    try testing.expectEqual(@as(?bool, null), rgba_info.use_meta_prefix);
+}
+
 test "decodeRgb8 decodes repository sample png natively" {
     const testing = @import("std").testing;
 

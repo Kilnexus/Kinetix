@@ -12,6 +12,8 @@ pub const ImageFormat = format.ImageFormat;
 pub const ImageInfo = probe.ImageInfo;
 pub const WebpInfo = probe.WebpInfo;
 pub const WebpChunkTag = probe.WebpChunkTag;
+pub const Vp8lStreamInfo = probe.Vp8lStreamInfo;
+pub const Vp8lTransformType = probe.Vp8lTransformType;
 
 pub const LetterboxInfo = letterbox.LetterboxInfo;
 pub const LetterboxedImage = letterbox.LetterboxedImage;
@@ -25,6 +27,7 @@ pub const probeFileInfo = probe.probeFileInfo;
 pub const probeWebpInfo = probe.probeWebpInfo;
 pub const probeWebpFileInfo = probe.probeWebpFileInfo;
 pub const probeWebpPrimaryChunkTag = probe.probeWebpPrimaryChunkTag;
+pub const inspectWebpVp8l = probe.inspectWebpVp8l;
 pub const resizeBilinear = resize.resizeBilinear;
 pub const letterboxImage = letterbox.letterbox;
 pub const remapLetterboxedBoxToSource = geometry.remapLetterboxedBoxToSource;

@@ -27,6 +27,31 @@ pub const WebpChunk = struct {
     payload: []const u8,
 };
 
+pub const Vp8lTransformType = enum {
+    predictor,
+    color,
+    subtract_green,
+    color_indexing,
+};
+
+pub const Vp8lTransform = struct {
+    kind: Vp8lTransformType,
+    size_bits: ?usize = null,
+    color_table_size: ?usize = null,
+};
+
+pub const Vp8lStreamInfo = struct {
+    width: usize,
+    height: usize,
+    has_alpha: bool,
+    transform_count: usize,
+    transforms: [4]Vp8lTransform,
+    tail_flags_known: bool,
+    use_color_cache: ?bool,
+    color_cache_bits: ?usize,
+    use_meta_prefix: ?bool,
+};
+
 pub const WebpInfo = struct {
     width: usize,
     height: usize,
@@ -43,6 +68,7 @@ pub const WebpError = types.ImageError || error{
     InvalidWebpChunk,
     InvalidWebpData,
     MissingWebpChunk,
+    TooManyWebpTransforms,
     UnsupportedWebpAnimation,
     UnsupportedWebpBitstream,
 };
@@ -62,6 +88,76 @@ pub fn probeInfo(bytes: []const u8) !WebpInfo {
 
 pub fn findPrimaryChunk(bytes: []const u8) !WebpChunk {
     return (try scanChunks(bytes)).primary;
+}
+
+pub fn inspectVp8l(bytes: []const u8) !Vp8lStreamInfo {
+    const chunk = try findPrimaryChunk(bytes);
+    if (chunk.tag != .vp8l) return error.UnsupportedWebpBitstream;
+    return inspectVp8lPayload(chunk.payload);
+}
+
+pub fn inspectVp8lPayload(payload: []const u8) !Vp8lStreamInfo {
+    const info = try parseVp8l(payload);
+    var reader = Vp8lBitReader.init(payload);
+    _ = try reader.readBits(8);
+    _ = try reader.readBits(14);
+    _ = try reader.readBits(14);
+    _ = try reader.readBits(1);
+    _ = try reader.readBits(3);
+
+    var transforms = [_]Vp8lTransform{undefined} ** 4;
+    var transform_count: usize = 0;
+
+    var tail_flags_known = true;
+    while ((try reader.readBits(1)) == 1) {
+        if (transform_count >= transforms.len) return error.TooManyWebpTransforms;
+        const kind_bits = try reader.readBits(2);
+        transforms[transform_count] = switch (kind_bits) {
+            0 => blk: {
+                tail_flags_known = false;
+                break :blk .{
+                .kind = .predictor,
+                .size_bits = (try reader.readBits(3)) + 2,
+            };
+            },
+            1 => blk: {
+                tail_flags_known = false;
+                break :blk .{
+                .kind = .color,
+                .size_bits = (try reader.readBits(3)) + 2,
+            };
+            },
+            2 => .{
+                .kind = .subtract_green,
+            },
+            3 => blk: {
+                tail_flags_known = false;
+                break :blk .{
+                .kind = .color_indexing,
+                .color_table_size = (try reader.readBits(8)) + 1,
+            };
+            },
+            else => unreachable,
+        };
+        transform_count += 1;
+        if (!tail_flags_known) break;
+    }
+
+    const use_color_cache: ?bool = if (tail_flags_known) (try reader.readBits(1)) == 1 else null;
+    const color_cache_bits = if (use_color_cache != null and use_color_cache.?) try reader.readBits(4) else null;
+    const use_meta_prefix: ?bool = if (tail_flags_known) (try reader.readBits(1)) == 1 else null;
+
+    return .{
+        .width = info.width,
+        .height = info.height,
+        .has_alpha = info.has_alpha,
+        .transform_count = transform_count,
+        .transforms = transforms,
+        .tail_flags_known = tail_flags_known,
+        .use_color_cache = use_color_cache,
+        .color_cache_bits = color_cache_bits,
+        .use_meta_prefix = use_meta_prefix,
+    };
 }
 
 pub const ChunkIterator = struct {
@@ -88,6 +184,30 @@ pub const ChunkIterator = struct {
         };
         self.pos = payload_end + (chunk_size & 1);
         return chunk;
+    }
+};
+
+const Vp8lBitReader = struct {
+    bytes: []const u8,
+    bit_pos: usize = 0,
+
+    fn init(bytes: []const u8) Vp8lBitReader {
+        return .{ .bytes = bytes };
+    }
+
+    fn readBits(self: *Vp8lBitReader, count: usize) !usize {
+        if (count > 24) return error.InvalidWebpData;
+
+        var value: usize = 0;
+        for (0..count) |i| {
+            const byte_index = self.bit_pos / 8;
+            if (byte_index >= self.bytes.len) return error.InvalidWebpData;
+            const bit_index: u3 = @intCast(self.bit_pos % 8);
+            const bit = (self.bytes[byte_index] >> bit_index) & 1;
+            value |= @as(usize, bit) << @intCast(i);
+            self.bit_pos += 1;
+        }
+        return value;
     }
 };
 

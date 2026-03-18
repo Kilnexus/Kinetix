@@ -19,6 +19,8 @@ pub const ImageInfo = struct {
 
 pub const WebpInfo = webp.WebpInfo;
 pub const WebpChunkTag = webp.WebpChunkTag;
+pub const Vp8lStreamInfo = webp.Vp8lStreamInfo;
+pub const Vp8lTransformType = webp.Vp8lTransformType;
 
 pub const ProbeError =
     png.PngError ||
@@ -63,6 +65,11 @@ pub fn probeWebpFileInfo(allocator: std.mem.Allocator, path: []const u8) !WebpIn
 pub fn probeWebpPrimaryChunkTag(bytes: []const u8) !WebpChunkTag {
     if (format.detectFormat(bytes) != .webp) return error.UnsupportedImageFormat;
     return (try webp.findPrimaryChunk(bytes)).tag;
+}
+
+pub fn inspectWebpVp8l(bytes: []const u8) !Vp8lStreamInfo {
+    if (format.detectFormat(bytes) != .webp) return error.UnsupportedImageFormat;
+    return webp.inspectVp8l(bytes);
 }
 
 fn probePng(bytes: []const u8) ImageInfo {
