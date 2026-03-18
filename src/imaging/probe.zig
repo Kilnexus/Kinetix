@@ -18,6 +18,7 @@ pub const ImageInfo = struct {
 };
 
 pub const WebpInfo = webp.WebpInfo;
+pub const WebpChunkTag = webp.WebpChunkTag;
 
 pub const ProbeError =
     png.PngError ||
@@ -57,6 +58,11 @@ pub fn probeWebpFileInfo(allocator: std.mem.Allocator, path: []const u8) !WebpIn
     const bytes = try std.fs.cwd().readFileAlloc(allocator, path, 256 * 1024 * 1024);
     defer allocator.free(bytes);
     return probeWebpInfo(bytes);
+}
+
+pub fn probeWebpPrimaryChunkTag(bytes: []const u8) !WebpChunkTag {
+    if (format.detectFormat(bytes) != .webp) return error.UnsupportedImageFormat;
+    return (try webp.findPrimaryChunk(bytes)).tag;
 }
 
 fn probePng(bytes: []const u8) ImageInfo {

@@ -9,6 +9,24 @@ pub const WebpKind = enum {
     vp8x,
 };
 
+pub const WebpChunkTag = enum {
+    vp8,
+    vp8l,
+    vp8x,
+    alph,
+    anim,
+    anmf,
+    iccp,
+    exif,
+    xmp,
+    unknown,
+};
+
+pub const WebpChunk = struct {
+    tag: WebpChunkTag,
+    payload: []const u8,
+};
+
 pub const WebpInfo = struct {
     width: usize,
     height: usize,
@@ -25,57 +43,114 @@ pub const WebpError = types.ImageError || error{
     InvalidWebpChunk,
     InvalidWebpData,
     MissingWebpChunk,
+    UnsupportedWebpAnimation,
     UnsupportedWebpBitstream,
 };
 
-pub fn decodeRgb8(_: std.mem.Allocator, _: []const u8) !ImageU8 {
-    return error.UnsupportedWebpBitstream;
+pub fn decodeRgb8(_: std.mem.Allocator, bytes: []const u8) !ImageU8 {
+    const scan = try scanChunks(bytes);
+    if (scan.info.is_animated) return error.UnsupportedWebpAnimation;
+    return switch (scan.primary.tag) {
+        .vp8, .vp8l, .vp8x => error.UnsupportedWebpBitstream,
+        else => error.MissingWebpChunk,
+    };
 }
 
 pub fn probeInfo(bytes: []const u8) !WebpInfo {
+    return (try scanChunks(bytes)).info;
+}
+
+pub fn findPrimaryChunk(bytes: []const u8) !WebpChunk {
+    return (try scanChunks(bytes)).primary;
+}
+
+pub const ChunkIterator = struct {
+    bytes: []const u8,
+    pos: usize = 12,
+
+    pub fn init(bytes: []const u8) !ChunkIterator {
+        try validateHeader(bytes);
+        return .{ .bytes = bytes };
+    }
+
+    pub fn next(self: *ChunkIterator) !?WebpChunk {
+        if (self.pos + 8 > self.bytes.len) return null;
+
+        const raw_tag = self.bytes[self.pos .. self.pos + 4];
+        const chunk_size = readU32le(self.bytes[self.pos + 4 .. self.pos + 8]);
+        const payload_offset = self.pos + 8;
+        const payload_end = payload_offset + chunk_size;
+        if (payload_end > self.bytes.len) return error.InvalidWebpChunk;
+
+        const chunk = WebpChunk{
+            .tag = mapChunkTag(raw_tag),
+            .payload = self.bytes[payload_offset..payload_end],
+        };
+        self.pos = payload_end + (chunk_size & 1);
+        return chunk;
+    }
+};
+
+const WebpScan = struct {
+    info: WebpInfo,
+    primary: WebpChunk,
+};
+
+fn scanChunks(bytes: []const u8) !WebpScan {
     try validateHeader(bytes);
-    var pos: usize = 12;
+    var it = try ChunkIterator.init(bytes);
     var vp8x_info: ?WebpInfo = null;
     var primary_info: ?WebpInfo = null;
+    var primary_chunk: ?WebpChunk = null;
 
-    while (pos + 8 <= bytes.len) {
-        const tag = bytes[pos .. pos + 4];
-        const chunk_size = readU32le(bytes[pos + 4 .. pos + 8]);
-        const payload_offset = pos + 8;
-        const payload_end = payload_offset + chunk_size;
-        if (payload_end > bytes.len) return error.InvalidWebpChunk;
-        const payload = bytes[payload_offset..payload_end];
-
-        if (std.mem.eql(u8, tag, "VP8X")) {
-            vp8x_info = try parseVp8x(payload);
-        } else if (std.mem.eql(u8, tag, "VP8 ")) {
-            primary_info = try parseVp8(payload);
-            break;
-        } else if (std.mem.eql(u8, tag, "VP8L")) {
-            primary_info = try parseVp8l(payload);
-            break;
+    while (try it.next()) |chunk| {
+        switch (chunk.tag) {
+            .vp8x => vp8x_info = try parseVp8x(chunk.payload),
+            .vp8 => {
+                primary_info = try parseVp8(chunk.payload);
+                primary_chunk = chunk;
+                break;
+            },
+            .vp8l => {
+                primary_info = try parseVp8l(chunk.payload);
+                primary_chunk = chunk;
+                break;
+            },
+            else => {},
         }
-
-        pos = payload_end + (chunk_size & 1);
     }
 
     if (primary_info) |info| {
         if (vp8x_info) |extended| {
             return .{
-                .width = extended.width,
-                .height = extended.height,
-                .has_alpha = extended.has_alpha or info.has_alpha,
-                .is_animated = extended.is_animated,
-                .has_icc = extended.has_icc,
-                .has_exif = extended.has_exif,
-                .has_xmp = extended.has_xmp,
-                .kind = extended.kind,
+                .info = .{
+                    .width = extended.width,
+                    .height = extended.height,
+                    .has_alpha = extended.has_alpha or info.has_alpha,
+                    .is_animated = extended.is_animated,
+                    .has_icc = extended.has_icc,
+                    .has_exif = extended.has_exif,
+                    .has_xmp = extended.has_xmp,
+                    .kind = info.kind,
+                },
+                .primary = primary_chunk.?,
             };
         }
-        return info;
+        return .{
+            .info = info,
+            .primary = primary_chunk.?,
+        };
     }
 
-    if (vp8x_info) |info| return info;
+    if (vp8x_info) |info| {
+        return .{
+            .info = info,
+            .primary = .{
+                .tag = .vp8x,
+                .payload = &.{},
+            },
+        };
+    }
     return error.MissingWebpChunk;
 }
 
@@ -143,6 +218,19 @@ fn parseVp8x(payload: []const u8) !WebpInfo {
         .has_xmp = (payload[0] & 0x04) != 0,
         .kind = .vp8x,
     };
+}
+
+fn mapChunkTag(raw: []const u8) WebpChunkTag {
+    if (std.mem.eql(u8, raw, "VP8 ")) return .vp8;
+    if (std.mem.eql(u8, raw, "VP8L")) return .vp8l;
+    if (std.mem.eql(u8, raw, "VP8X")) return .vp8x;
+    if (std.mem.eql(u8, raw, "ALPH")) return .alph;
+    if (std.mem.eql(u8, raw, "ANIM")) return .anim;
+    if (std.mem.eql(u8, raw, "ANMF")) return .anmf;
+    if (std.mem.eql(u8, raw, "ICCP")) return .iccp;
+    if (std.mem.eql(u8, raw, "EXIF")) return .exif;
+    if (std.mem.eql(u8, raw, "XMP ")) return .xmp;
+    return .unknown;
 }
 
 fn readU24le(bytes: []const u8) usize {

@@ -105,6 +105,37 @@ test "probeWebpInfo distinguishes lossless and lossy bitstreams" {
     try testing.expect(!lossy_info.is_animated);
 }
 
+test "probeWebpInfo reports alpha for lossless rgba sample" {
+    const std = @import("std");
+    const testing = std.testing;
+
+    const rgba_lossless_base64 = "UklGRhwAAABXRUJQVlA4TA8AAAAvAAAAEAcQ/Y8CBiKi/wEA";
+    const decoded_len = try std.base64.standard.Decoder.calcSizeForSlice(rgba_lossless_base64);
+    const webp = try testing.allocator.alloc(u8, decoded_len);
+    defer testing.allocator.free(webp);
+    try std.base64.standard.Decoder.decode(webp, rgba_lossless_base64);
+
+    const info = try imaging.probeWebpInfo(webp);
+    try testing.expectEqual(@as(usize, 1), info.width);
+    try testing.expectEqual(@as(usize, 1), info.height);
+    try testing.expectEqual(@as(imaging.WebpInfo, info).kind, .vp8l);
+    try testing.expect(info.has_alpha);
+}
+
+test "findPrimaryChunk identifies webp payload kind" {
+    const std = @import("std");
+    const testing = std.testing;
+
+    const lossless_base64 = "UklGRh4AAABXRUJQVlA4TBEAAAAvAQAAAA+w//Mf8x8VMqL/AQA=";
+    const decoded_len = try std.base64.standard.Decoder.calcSizeForSlice(lossless_base64);
+    const bytes = try testing.allocator.alloc(u8, decoded_len);
+    defer testing.allocator.free(bytes);
+    try std.base64.standard.Decoder.decode(bytes, lossless_base64);
+
+    const tag = try imaging.probeWebpPrimaryChunkTag(bytes);
+    try testing.expectEqual(imaging.WebpChunkTag.vp8l, tag);
+}
+
 test "decodeRgb8 decodes repository sample png natively" {
     const testing = @import("std").testing;
 
