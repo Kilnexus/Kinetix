@@ -21,6 +21,7 @@ pub const WebpInfo = webp.WebpInfo;
 pub const WebpChunkTag = webp.WebpChunkTag;
 pub const Vp8lStreamInfo = webp.Vp8lStreamInfo;
 pub const Vp8lTransformType = webp.Vp8lTransformType;
+pub const Vp8lImageRole = webp.Vp8lImageRole;
 
 pub const ProbeError =
     png.PngError ||

@@ -34,6 +34,28 @@ pub const Vp8lTransformType = enum {
     color_indexing,
 };
 
+pub const Vp8lImageRole = enum {
+    argb,
+    predictor,
+    color,
+    color_indexing,
+    entropy,
+};
+
+pub const Vp8lImageDataHeader = struct {
+    role: Vp8lImageRole,
+    width: usize,
+    height: usize,
+    start_bit_pos: usize,
+    use_color_cache: bool,
+    color_cache_bits: ?usize,
+    meta_prefix_present: ?bool,
+    prefix_bits: ?usize,
+    prefix_image_width: ?usize,
+    prefix_image_height: ?usize,
+    header_end_bit_pos: usize,
+};
+
 pub const Vp8lTransform = struct {
     kind: Vp8lTransformType,
     size_bits: ?usize = null,
@@ -42,6 +64,7 @@ pub const Vp8lTransform = struct {
     subimage_start_bit_pos: ?usize = null,
     subimage_width: ?usize = null,
     subimage_height: ?usize = null,
+    subimage_header: ?Vp8lImageDataHeader = null,
     transform_width: ?usize = null,
     transform_height: ?usize = null,
     next_image_width: usize,
@@ -130,12 +153,20 @@ pub fn inspectVp8lPayload(payload: []const u8) !Vp8lStreamInfo {
                 const scale = @as(usize, 1) << @intCast(size_bits);
                 const transform_width = divRoundUp(current_width, scale);
                 const transform_height = divRoundUp(current_height, scale);
+                const subimage_start_bit_pos = reader.bit_pos;
                 break :blk .{
                     .kind = .predictor,
                     .size_bits = size_bits,
-                    .subimage_start_bit_pos = reader.bit_pos,
+                    .subimage_start_bit_pos = subimage_start_bit_pos,
                     .subimage_width = transform_width,
                     .subimage_height = transform_height,
+                    .subimage_header = try inspectImageDataAtBitPos(
+                        payload,
+                        subimage_start_bit_pos,
+                        transform_width,
+                        transform_height,
+                        .predictor,
+                    ),
                     .transform_width = transform_width,
                     .transform_height = transform_height,
                     .next_image_width = current_width,
@@ -148,12 +179,20 @@ pub fn inspectVp8lPayload(payload: []const u8) !Vp8lStreamInfo {
                 const scale = @as(usize, 1) << @intCast(size_bits);
                 const transform_width = divRoundUp(current_width, scale);
                 const transform_height = divRoundUp(current_height, scale);
+                const subimage_start_bit_pos = reader.bit_pos;
                 break :blk .{
                     .kind = .color,
                     .size_bits = size_bits,
-                    .subimage_start_bit_pos = reader.bit_pos,
+                    .subimage_start_bit_pos = subimage_start_bit_pos,
                     .subimage_width = transform_width,
                     .subimage_height = transform_height,
+                    .subimage_header = try inspectImageDataAtBitPos(
+                        payload,
+                        subimage_start_bit_pos,
+                        transform_width,
+                        transform_height,
+                        .color,
+                    ),
                     .transform_width = transform_width,
                     .transform_height = transform_height,
                     .next_image_width = current_width,
@@ -170,13 +209,21 @@ pub fn inspectVp8lPayload(payload: []const u8) !Vp8lStreamInfo {
                 const color_table_size = (try reader.readBits(8)) + 1;
                 const width_bits = colorIndexWidthBits(color_table_size);
                 current_width = divRoundUp(current_width, @as(usize, 1) << @intCast(width_bits));
+                const subimage_start_bit_pos = reader.bit_pos;
                 break :blk .{
                     .kind = .color_indexing,
                     .color_table_size = color_table_size,
                     .width_bits = width_bits,
-                    .subimage_start_bit_pos = reader.bit_pos,
+                    .subimage_start_bit_pos = subimage_start_bit_pos,
                     .subimage_width = color_table_size,
                     .subimage_height = 1,
+                    .subimage_header = try inspectImageDataAtBitPos(
+                        payload,
+                        subimage_start_bit_pos,
+                        color_table_size,
+                        1,
+                        .color_indexing,
+                    ),
                     .transform_width = color_table_size,
                     .transform_height = 1,
                     .next_image_width = current_width,
@@ -204,6 +251,47 @@ pub fn inspectVp8lPayload(payload: []const u8) !Vp8lStreamInfo {
         .use_color_cache = use_color_cache,
         .color_cache_bits = color_cache_bits,
         .use_meta_prefix = use_meta_prefix,
+    };
+}
+
+fn inspectImageDataAtBitPos(
+    payload: []const u8,
+    start_bit_pos: usize,
+    width: usize,
+    height: usize,
+    role: Vp8lImageRole,
+) !Vp8lImageDataHeader {
+    var reader = Vp8lBitReader.initAtBit(payload, start_bit_pos);
+    const use_color_cache = (try reader.readBits(1)) == 1;
+    const color_cache_bits = if (use_color_cache) try reader.readBits(4) else null;
+
+    var meta_prefix_present: ?bool = null;
+    var prefix_bits: ?usize = null;
+    var prefix_image_width: ?usize = null;
+    var prefix_image_height: ?usize = null;
+
+    if (role == .argb) {
+        meta_prefix_present = (try reader.readBits(1)) == 1;
+        if (meta_prefix_present.?) {
+            prefix_bits = (try reader.readBits(3)) + 2;
+            const scale = @as(usize, 1) << @intCast(prefix_bits.?);
+            prefix_image_width = divRoundUp(width, scale);
+            prefix_image_height = divRoundUp(height, scale);
+        }
+    }
+
+    return .{
+        .role = role,
+        .width = width,
+        .height = height,
+        .start_bit_pos = start_bit_pos,
+        .use_color_cache = use_color_cache,
+        .color_cache_bits = color_cache_bits,
+        .meta_prefix_present = meta_prefix_present,
+        .prefix_bits = prefix_bits,
+        .prefix_image_width = prefix_image_width,
+        .prefix_image_height = prefix_image_height,
+        .header_end_bit_pos = reader.bit_pos,
     };
 }
 
@@ -240,6 +328,13 @@ const Vp8lBitReader = struct {
 
     fn init(bytes: []const u8) Vp8lBitReader {
         return .{ .bytes = bytes };
+    }
+
+    fn initAtBit(bytes: []const u8, bit_pos: usize) Vp8lBitReader {
+        return .{
+            .bytes = bytes,
+            .bit_pos = bit_pos,
+        };
     }
 
     fn readBits(self: *Vp8lBitReader, count: usize) !usize {

@@ -14,6 +14,7 @@ pub const WebpInfo = probe.WebpInfo;
 pub const WebpChunkTag = probe.WebpChunkTag;
 pub const Vp8lStreamInfo = probe.Vp8lStreamInfo;
 pub const Vp8lTransformType = probe.Vp8lTransformType;
+pub const Vp8lImageRole = probe.Vp8lImageRole;
 
 pub const LetterboxInfo = letterbox.LetterboxInfo;
 pub const LetterboxedImage = letterbox.LetterboxedImage;
