@@ -466,6 +466,7 @@ test "inspectVp8lNormalPrefixCodeAtBitPos decodes literal code length sequence" 
     try testing.expectEqual(@as(?usize, 2), normal.non_zero_code_lengths);
     try testing.expectEqual(@as(usize, 8), normal.preview_len);
     try testing.expectEqual(@as(usize, 26), normal.end_bit_pos);
+    try testing.expect(normal.canonical_summary != null);
     try testing.expectEqual(@as(usize, 0), normal.code_length_code_lengths[17]);
     try testing.expectEqual(@as(usize, 0), normal.code_length_code_lengths[18]);
     try testing.expectEqual(@as(usize, 1), normal.code_length_code_lengths[0]);
@@ -478,6 +479,94 @@ test "inspectVp8lNormalPrefixCodeAtBitPos decodes literal code length sequence" 
     try testing.expectEqual(@as(u8, 0), normal.preview[5]);
     try testing.expectEqual(@as(u8, 0), normal.preview[6]);
     try testing.expectEqual(@as(u8, 0), normal.preview[7]);
+
+    const summary = normal.canonical_summary.?;
+    try testing.expectEqual(@as(usize, 2), summary.active_symbol_count);
+    try testing.expectEqual(@as(usize, 1), summary.max_code_length);
+    try testing.expectEqual(@as(usize, 2), summary.preview_len);
+    try testing.expectEqual(@as(usize, 0), summary.preview[0].symbol);
+    try testing.expectEqual(@as(usize, 1), summary.preview[0].len);
+    try testing.expectEqual(@as(usize, 0), summary.preview[0].lsb_code);
+    try testing.expectEqual(@as(usize, 1), summary.preview[1].symbol);
+    try testing.expectEqual(@as(usize, 1), summary.preview[1].len);
+    try testing.expectEqual(@as(usize, 1), summary.preview[1].lsb_code);
+}
+
+test "inspectVp8lNormalPrefixCodeAtBitPos decodes repeat code lengths and builds canonical summary" {
+    const std = @import("std");
+    const testing = std.testing;
+
+    var payload = [_]u8{0} ** 8;
+    var bit_pos: usize = 0;
+
+    writeBits(&payload, &bit_pos, 5, 4);
+    writeBits(&payload, &bit_pos, 2, 3);
+    writeBits(&payload, &bit_pos, 2, 3);
+    writeBits(&payload, &bit_pos, 0, 3);
+    writeBits(&payload, &bit_pos, 0, 3);
+    writeBits(&payload, &bit_pos, 0, 3);
+    writeBits(&payload, &bit_pos, 2, 3);
+    writeBits(&payload, &bit_pos, 0, 3);
+    writeBits(&payload, &bit_pos, 0, 3);
+    writeBits(&payload, &bit_pos, 2, 3);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 0, 3);
+    writeBits(&payload, &bit_pos, 2, 2);
+
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 0);
+
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 1, 2);
+
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 0);
+    writeBits(&payload, &bit_pos, 0, 3);
+
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 1, 7);
+
+    const normal = try imaging.inspectVp8lNormalPrefixCodeAtBitPos(&payload, 0, 20);
+    try testing.expectEqual(@as(usize, 9), normal.num_code_length_codes);
+    try testing.expect(normal.use_explicit_max_symbol);
+    try testing.expectEqual(@as(?usize, 2), normal.length_nbits);
+    try testing.expectEqual(@as(usize, 4), normal.max_symbol);
+    try testing.expectEqual(@as(?usize, 4), normal.decoded_symbol_tokens);
+    try testing.expectEqual(@as(?usize, 20), normal.emitted_code_lengths);
+    try testing.expectEqual(@as(?usize, 5), normal.non_zero_code_lengths);
+    try testing.expectEqual(@as(usize, 20), normal.preview_len);
+    try testing.expectEqual(@as(usize, 57), normal.end_bit_pos);
+    try testing.expectEqual(@as(usize, 2), normal.code_length_code_lengths[17]);
+    try testing.expectEqual(@as(usize, 2), normal.code_length_code_lengths[18]);
+    try testing.expectEqual(@as(usize, 0), normal.code_length_code_lengths[0]);
+    try testing.expectEqual(@as(usize, 2), normal.code_length_code_lengths[3]);
+    try testing.expectEqual(@as(usize, 2), normal.code_length_code_lengths[16]);
+
+    for (0..5) |i| try testing.expectEqual(@as(u8, 3), normal.preview[i]);
+    for (5..20) |i| try testing.expectEqual(@as(u8, 0), normal.preview[i]);
+
+    try testing.expect(normal.canonical_summary != null);
+    const summary = normal.canonical_summary.?;
+    try testing.expectEqual(@as(usize, 5), summary.active_symbol_count);
+    try testing.expectEqual(@as(usize, 3), summary.max_code_length);
+    try testing.expectEqual(@as(usize, 5), summary.preview_len);
+    try testing.expectEqual(@as(usize, 0), summary.preview[0].symbol);
+    try testing.expectEqual(@as(usize, 3), summary.preview[0].len);
+    try testing.expectEqual(@as(usize, 0), summary.preview[0].lsb_code);
+    try testing.expectEqual(@as(usize, 1), summary.preview[1].symbol);
+    try testing.expectEqual(@as(usize, 3), summary.preview[1].len);
+    try testing.expectEqual(@as(usize, 4), summary.preview[1].lsb_code);
+    try testing.expectEqual(@as(usize, 2), summary.preview[2].symbol);
+    try testing.expectEqual(@as(usize, 3), summary.preview[2].len);
+    try testing.expectEqual(@as(usize, 2), summary.preview[2].lsb_code);
+    try testing.expectEqual(@as(usize, 3), summary.preview[3].symbol);
+    try testing.expectEqual(@as(usize, 3), summary.preview[3].len);
+    try testing.expectEqual(@as(usize, 6), summary.preview[3].lsb_code);
+    try testing.expectEqual(@as(usize, 4), summary.preview[4].symbol);
+    try testing.expectEqual(@as(usize, 3), summary.preview[4].len);
+    try testing.expectEqual(@as(usize, 1), summary.preview[4].lsb_code);
 }
 
 test "decodeRgb8 decodes repository sample png natively" {

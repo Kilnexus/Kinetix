@@ -66,7 +66,21 @@ pub const Vp8lNormalPrefixCode = struct {
     non_zero_code_lengths: ?usize = null,
     preview_len: usize = 0,
     preview: [32]u8 = [_]u8{0} ** 32,
+    canonical_summary: ?Vp8lCanonicalPrefixSummary = null,
     end_bit_pos: usize,
+};
+
+pub const Vp8lCanonicalCodeEntry = struct {
+    symbol: usize,
+    len: usize,
+    lsb_code: usize,
+};
+
+pub const Vp8lCanonicalPrefixSummary = struct {
+    active_symbol_count: usize,
+    max_code_length: usize,
+    preview_len: usize,
+    preview: [16]Vp8lCanonicalCodeEntry,
 };
 
 pub const Vp8lPrefixCodeHeader = struct {
@@ -506,6 +520,7 @@ fn inspectNormalPrefixCodeImpl(reader: *Vp8lBitReader, alphabet_size: ?usize) !V
         info.non_zero_code_lengths = summary.non_zero_code_lengths;
         info.preview_len = summary.preview_len;
         info.preview = summary.preview;
+        info.canonical_summary = try buildCanonicalPrefixSummary(code_lengths[0..resolved_alphabet_size]);
         info.end_bit_pos = reader.bit_pos;
     }
 
@@ -567,6 +582,52 @@ fn inspectDecodedCodeLengths(
         .decoded_symbol_tokens = tokens,
         .emitted_code_lengths = emitted,
         .non_zero_code_lengths = non_zero_count,
+        .preview_len = preview_len,
+        .preview = preview,
+    };
+}
+
+fn buildCanonicalPrefixSummary(code_lengths: []const u8) !Vp8lCanonicalPrefixSummary {
+    var counts = [_]usize{0} ** 32;
+    var max_len: usize = 0;
+    var active: usize = 0;
+    for (code_lengths) |len_u8| {
+        const len = @as(usize, len_u8);
+        if (len >= counts.len) return error.InvalidWebpData;
+        if (len == 0) continue;
+        counts[len] += 1;
+        max_len = @max(max_len, len);
+        active += 1;
+    }
+    if (active == 0) return error.InvalidWebpData;
+
+    var next_code = [_]usize{0} ** 32;
+    var code: usize = 0;
+    for (1..max_len + 1) |len| {
+        code = (code + counts[len - 1]) << 1;
+        next_code[len] = code;
+    }
+
+    var preview = [_]Vp8lCanonicalCodeEntry{.{ .symbol = 0, .len = 0, .lsb_code = 0 }} ** 16;
+    var preview_len: usize = 0;
+    for (code_lengths, 0..) |len_u8, symbol| {
+        const len = @as(usize, len_u8);
+        if (len == 0) continue;
+        const canonical_code = next_code[len];
+        next_code[len] += 1;
+        if (preview_len < preview.len) {
+            preview[preview_len] = .{
+                .symbol = symbol,
+                .len = len,
+                .lsb_code = reverseBits(canonical_code, len),
+            };
+            preview_len += 1;
+        }
+    }
+
+    return .{
+        .active_symbol_count = active,
+        .max_code_length = max_len,
         .preview_len = preview_len,
         .preview = preview,
     };
