@@ -22,6 +22,10 @@ pub const WebpChunkTag = webp.WebpChunkTag;
 pub const Vp8lStreamInfo = webp.Vp8lStreamInfo;
 pub const Vp8lTransformType = webp.Vp8lTransformType;
 pub const Vp8lImageRole = webp.Vp8lImageRole;
+pub const Vp8lPrefixCodeKind = webp.Vp8lPrefixCodeKind;
+pub const Vp8lSimplePrefixCode = webp.Vp8lSimplePrefixCode;
+pub const Vp8lPrefixCodeHeader = webp.Vp8lPrefixCodeHeader;
+pub const Vp8lPrefixCodeGroup = webp.Vp8lPrefixCodeGroup;
 
 pub const ProbeError =
     png.PngError ||

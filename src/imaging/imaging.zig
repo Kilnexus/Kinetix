@@ -15,6 +15,10 @@ pub const WebpChunkTag = probe.WebpChunkTag;
 pub const Vp8lStreamInfo = probe.Vp8lStreamInfo;
 pub const Vp8lTransformType = probe.Vp8lTransformType;
 pub const Vp8lImageRole = probe.Vp8lImageRole;
+pub const Vp8lPrefixCodeKind = probe.Vp8lPrefixCodeKind;
+pub const Vp8lSimplePrefixCode = probe.Vp8lSimplePrefixCode;
+pub const Vp8lPrefixCodeHeader = probe.Vp8lPrefixCodeHeader;
+pub const Vp8lPrefixCodeGroup = probe.Vp8lPrefixCodeGroup;
 
 pub const LetterboxInfo = letterbox.LetterboxInfo;
 pub const LetterboxedImage = letterbox.LetterboxedImage;

@@ -42,6 +42,31 @@ pub const Vp8lImageRole = enum {
     entropy,
 };
 
+pub const Vp8lPrefixCodeKind = enum {
+    simple,
+    normal,
+};
+
+pub const Vp8lSimplePrefixCode = struct {
+    num_symbols: usize,
+    is_first_8bits: bool,
+    symbol0: usize,
+    symbol1: ?usize,
+    end_bit_pos: usize,
+};
+
+pub const Vp8lPrefixCodeHeader = struct {
+    kind: Vp8lPrefixCodeKind,
+    start_bit_pos: usize,
+    simple: ?Vp8lSimplePrefixCode = null,
+};
+
+pub const Vp8lPrefixCodeGroup = struct {
+    parsed_count: usize,
+    all_simple: bool,
+    codes: [5]Vp8lPrefixCodeHeader,
+};
+
 pub const Vp8lImageDataHeader = struct {
     role: Vp8lImageRole,
     width: usize,
@@ -54,6 +79,8 @@ pub const Vp8lImageDataHeader = struct {
     prefix_image_width: ?usize,
     prefix_image_height: ?usize,
     header_end_bit_pos: usize,
+    prefix_codes_start_bit_pos: ?usize,
+    prefix_group: ?Vp8lPrefixCodeGroup,
 };
 
 pub const Vp8lTransform = struct {
@@ -269,6 +296,8 @@ fn inspectImageDataAtBitPos(
     var prefix_bits: ?usize = null;
     var prefix_image_width: ?usize = null;
     var prefix_image_height: ?usize = null;
+    var prefix_codes_start_bit_pos: ?usize = null;
+    var prefix_group: ?Vp8lPrefixCodeGroup = null;
 
     if (role == .argb) {
         meta_prefix_present = (try reader.readBits(1)) == 1;
@@ -278,6 +307,11 @@ fn inspectImageDataAtBitPos(
             prefix_image_width = divRoundUp(width, scale);
             prefix_image_height = divRoundUp(height, scale);
         }
+    }
+
+    if (meta_prefix_present == null or meta_prefix_present.? == false) {
+        prefix_codes_start_bit_pos = reader.bit_pos;
+        prefix_group = try inspectPrefixCodeGroup(&reader);
     }
 
     return .{
@@ -292,6 +326,50 @@ fn inspectImageDataAtBitPos(
         .prefix_image_width = prefix_image_width,
         .prefix_image_height = prefix_image_height,
         .header_end_bit_pos = reader.bit_pos,
+        .prefix_codes_start_bit_pos = prefix_codes_start_bit_pos,
+        .prefix_group = prefix_group,
+    };
+}
+
+fn inspectPrefixCodeGroup(reader: *Vp8lBitReader) !Vp8lPrefixCodeGroup {
+    var codes = [_]Vp8lPrefixCodeHeader{undefined} ** 5;
+    var parsed_count: usize = 0;
+    var all_simple = true;
+
+    while (parsed_count < codes.len) : (parsed_count += 1) {
+        const start_bit_pos = reader.bit_pos;
+        const is_simple = (try reader.readBits(1)) == 1;
+        if (!is_simple) {
+            all_simple = false;
+            codes[parsed_count] = .{
+                .kind = .normal,
+                .start_bit_pos = start_bit_pos,
+            };
+            parsed_count += 1;
+            break;
+        }
+
+        const num_symbols = (try reader.readBits(1)) + 1;
+        const is_first_8bits = (try reader.readBits(1)) == 1;
+        const symbol0 = try reader.readBits(if (is_first_8bits) 8 else 1);
+        const symbol1: ?usize = if (num_symbols == 2) try reader.readBits(8) else null;
+        codes[parsed_count] = .{
+            .kind = .simple,
+            .start_bit_pos = start_bit_pos,
+            .simple = .{
+                .num_symbols = num_symbols,
+                .is_first_8bits = is_first_8bits,
+                .symbol0 = symbol0,
+                .symbol1 = symbol1,
+                .end_bit_pos = reader.bit_pos,
+            },
+        };
+    }
+
+    return .{
+        .parsed_count = parsed_count,
+        .all_simple = all_simple,
+        .codes = codes,
     };
 }
 
