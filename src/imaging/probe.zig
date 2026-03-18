@@ -90,6 +90,14 @@ pub fn inspectVp8lImageDataAtBitPos(
     return webp.inspectVp8lImageDataAtBitPos(payload, start_bit_pos, width, height, role);
 }
 
+pub fn inspectVp8lNormalPrefixCodeAtBitPos(
+    payload: []const u8,
+    start_bit_pos: usize,
+    alphabet_size: usize,
+) !Vp8lNormalPrefixCode {
+    return webp.inspectVp8lNormalPrefixCodeAtBitPos(payload, start_bit_pos, alphabet_size);
+}
+
 fn probePng(bytes: []const u8) ImageInfo {
     const width = readU32be(bytes[16..20]);
     const height = readU32be(bytes[20..24]);

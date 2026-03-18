@@ -58,6 +58,14 @@ pub const Vp8lSimplePrefixCode = struct {
 pub const Vp8lNormalPrefixCode = struct {
     num_code_length_codes: usize,
     code_length_code_lengths: [19]usize,
+    use_explicit_max_symbol: bool,
+    length_nbits: ?usize,
+    max_symbol: usize,
+    decoded_symbol_tokens: ?usize = null,
+    emitted_code_lengths: ?usize = null,
+    non_zero_code_lengths: ?usize = null,
+    preview_len: usize = 0,
+    preview: [32]u8 = [_]u8{0} ** 32,
     end_bit_pos: usize,
 };
 
@@ -185,6 +193,16 @@ pub fn inspectVp8lImageDataAtBitPos(
     role: Vp8lImageRole,
 ) !Vp8lImageDataHeader {
     return inspectImageDataAtBitPos(payload, start_bit_pos, width, height, role);
+}
+
+pub fn inspectVp8lNormalPrefixCodeAtBitPos(
+    payload: []const u8,
+    start_bit_pos: usize,
+    alphabet_size: usize,
+) !Vp8lNormalPrefixCode {
+    if (alphabet_size > maxPrefixAlphabetSize) return error.InvalidWebpData;
+    var reader = Vp8lBitReader.initAtBit(payload, start_bit_pos);
+    return inspectNormalPrefixCodeDetailed(&reader, alphabet_size);
 }
 
 pub fn inspectVp8lPayload(payload: []const u8) !Vp8lStreamInfo {
@@ -450,6 +468,14 @@ fn inspectPrefixCodeGroup(reader: *Vp8lBitReader) !Vp8lPrefixCodeGroup {
 }
 
 fn inspectNormalPrefixCode(reader: *Vp8lBitReader) !Vp8lNormalPrefixCode {
+    return inspectNormalPrefixCodeImpl(reader, null);
+}
+
+fn inspectNormalPrefixCodeDetailed(reader: *Vp8lBitReader, alphabet_size: usize) !Vp8lNormalPrefixCode {
+    return inspectNormalPrefixCodeImpl(reader, alphabet_size);
+}
+
+fn inspectNormalPrefixCodeImpl(reader: *Vp8lBitReader, alphabet_size: ?usize) !Vp8lNormalPrefixCode {
     const num_code_length_codes = (try reader.readBits(4)) + 4;
     var code_length_code_lengths = [_]usize{0} ** 19;
 
@@ -458,10 +484,91 @@ fn inspectNormalPrefixCode(reader: *Vp8lBitReader) !Vp8lNormalPrefixCode {
         code_length_code_lengths[symbol] = try reader.readBits(3);
     }
 
-    return .{
+    const use_explicit_max_symbol = (try reader.readBits(1)) == 1;
+    const length_nbits = if (use_explicit_max_symbol) 2 + 2 * (try reader.readBits(3)) else null;
+    const max_symbol = if (use_explicit_max_symbol) 2 + (try reader.readBits(length_nbits.?)) else alphabet_size orelse 0;
+
+    var info = Vp8lNormalPrefixCode{
         .num_code_length_codes = num_code_length_codes,
         .code_length_code_lengths = code_length_code_lengths,
+        .use_explicit_max_symbol = use_explicit_max_symbol,
+        .length_nbits = length_nbits,
+        .max_symbol = max_symbol,
         .end_bit_pos = reader.bit_pos,
+    };
+
+    if (alphabet_size) |resolved_alphabet_size| {
+        if (max_symbol > resolved_alphabet_size) return error.InvalidWebpData;
+        var code_lengths = [_]u8{0} ** maxPrefixAlphabetSize;
+        const summary = try inspectDecodedCodeLengths(reader, code_length_code_lengths, resolved_alphabet_size, max_symbol, &code_lengths);
+        info.decoded_symbol_tokens = summary.decoded_symbol_tokens;
+        info.emitted_code_lengths = summary.emitted_code_lengths;
+        info.non_zero_code_lengths = summary.non_zero_code_lengths;
+        info.preview_len = summary.preview_len;
+        info.preview = summary.preview;
+        info.end_bit_pos = reader.bit_pos;
+    }
+
+    return info;
+}
+
+fn inspectDecodedCodeLengths(
+    reader: *Vp8lBitReader,
+    code_length_code_lengths: [19]usize,
+    alphabet_size: usize,
+    max_symbol: usize,
+    code_lengths: *[maxPrefixAlphabetSize]u8,
+) !struct {
+    decoded_symbol_tokens: usize,
+    emitted_code_lengths: usize,
+    non_zero_code_lengths: usize,
+    preview_len: usize,
+    preview: [32]u8,
+} {
+    const decoder = try CanonicalPrefixDecoder.init(code_length_code_lengths[0..]);
+    var emitted: usize = 0;
+    var tokens: usize = 0;
+    var prev_code_len: u8 = defaultCodeLength;
+
+    while (emitted < alphabet_size and tokens < max_symbol) : (tokens += 1) {
+        const symbol = try decoder.readSymbol(reader);
+        if (symbol < codeLengthLiteralCount) {
+            const code_len: u8 = @intCast(symbol);
+            code_lengths[emitted] = code_len;
+            emitted += 1;
+            if (code_len != 0) prev_code_len = code_len;
+            continue;
+        }
+
+        const slot = symbol - codeLengthLiteralCount;
+        const extra_bits = codeLengthExtraBits[slot];
+        const repeat_offset = codeLengthRepeatOffsets[slot];
+        const repeat = (try reader.readBits(extra_bits)) + repeat_offset;
+        if (emitted + repeat > alphabet_size) return error.InvalidWebpData;
+
+        const use_prev = symbol == codeLengthRepeatCode;
+        const fill_value: u8 = if (use_prev) prev_code_len else 0;
+        for (0..repeat) |_| {
+            code_lengths[emitted] = fill_value;
+            emitted += 1;
+        }
+    }
+
+    var non_zero_count: usize = 0;
+    var preview = [_]u8{0} ** 32;
+    const preview_len = @min(preview.len, alphabet_size);
+    for (0..alphabet_size) |i| {
+        const value = code_lengths[i];
+        if (value != 0) non_zero_count += 1;
+        if (i < preview_len) preview[i] = value;
+    }
+
+    return .{
+        .decoded_symbol_tokens = tokens,
+        .emitted_code_lengths = emitted,
+        .non_zero_code_lengths = non_zero_count,
+        .preview_len = preview_len,
+        .preview = preview,
     };
 }
 
@@ -528,9 +635,71 @@ const WebpScan = struct {
     primary: WebpChunk,
 };
 
+const maxPrefixAlphabetSize = 256 + 24 + (1 << 11);
+const codeLengthLiteralCount = 16;
+const codeLengthRepeatCode = 16;
+const defaultCodeLength: u8 = 8;
+const codeLengthExtraBits = [3]usize{ 2, 3, 7 };
+const codeLengthRepeatOffsets = [3]usize{ 3, 3, 11 };
+
 const codeLengthCodeOrder = [19]usize{
     17, 18, 0, 1, 2, 3, 4, 5, 16, 6,
     7, 8, 9, 10, 11, 12, 13, 14, 15,
+};
+
+const CanonicalPrefixDecoder = struct {
+    const Entry = struct {
+        symbol: usize,
+        len: usize,
+        code: usize,
+    };
+
+    entries: [19]Entry = [_]Entry{.{ .symbol = 0, .len = 0, .code = 0 }} ** 19,
+    entry_count: usize = 0,
+    max_len: usize = 0,
+
+    fn init(code_lengths: []const usize) !CanonicalPrefixDecoder {
+        var counts = [_]usize{0} ** 16;
+        for (code_lengths) |len| {
+            if (len >= counts.len) return error.InvalidWebpData;
+            if (len != 0) counts[len] += 1;
+        }
+
+        var next_code = [_]usize{0} ** 16;
+        var code: usize = 0;
+        for (1..counts.len) |len| {
+            code = (code + counts[len - 1]) << 1;
+            next_code[len] = code;
+        }
+
+        var decoder = CanonicalPrefixDecoder{};
+        for (code_lengths, 0..) |len, symbol| {
+            if (len == 0) continue;
+            const canonical_code = next_code[len];
+            next_code[len] += 1;
+            decoder.entries[decoder.entry_count] = .{
+                .symbol = symbol,
+                .len = len,
+                .code = reverseBits(canonical_code, len),
+            };
+            decoder.entry_count += 1;
+            decoder.max_len = @max(decoder.max_len, len);
+        }
+
+        if (decoder.entry_count == 0) return error.InvalidWebpData;
+        return decoder;
+    }
+
+    fn readSymbol(self: *const CanonicalPrefixDecoder, reader: *Vp8lBitReader) !usize {
+        var acc: usize = 0;
+        for (1..self.max_len + 1) |len| {
+            acc |= (try reader.readBits(1)) << @intCast(len - 1);
+            for (self.entries[0..self.entry_count]) |entry| {
+                if (entry.len == len and entry.code == acc) return entry.symbol;
+            }
+        }
+        return error.InvalidWebpData;
+    }
 };
 
 fn scanChunks(bytes: []const u8) !WebpScan {
@@ -679,6 +848,15 @@ fn colorIndexWidthBits(color_table_size: usize) usize {
     if (color_table_size <= 4) return 2;
     if (color_table_size <= 16) return 1;
     return 0;
+}
+
+fn reverseBits(value: usize, bit_count: usize) usize {
+    var result: usize = 0;
+    for (0..bit_count) |i| {
+        result <<= 1;
+        result |= (value >> @intCast(i)) & 1;
+    }
+    return result;
 }
 
 fn readU24le(bytes: []const u8) usize {

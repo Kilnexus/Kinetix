@@ -37,6 +37,7 @@ pub const probeWebpFileInfo = probe.probeWebpFileInfo;
 pub const probeWebpPrimaryChunkTag = probe.probeWebpPrimaryChunkTag;
 pub const inspectWebpVp8l = probe.inspectWebpVp8l;
 pub const inspectVp8lImageDataAtBitPos = probe.inspectVp8lImageDataAtBitPos;
+pub const inspectVp8lNormalPrefixCodeAtBitPos = probe.inspectVp8lNormalPrefixCodeAtBitPos;
 pub const resizeBilinear = resize.resizeBilinear;
 pub const letterboxImage = letterbox.letterbox;
 pub const remapLetterboxedBoxToSource = geometry.remapLetterboxedBoxToSource;
