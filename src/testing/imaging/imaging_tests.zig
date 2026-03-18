@@ -40,6 +40,7 @@ test "detectFormat recognizes png and bmp signatures" {
     try testing.expectEqual(imaging.ImageFormat.bmp, imaging.detectFormat("BMrest"));
     try testing.expectEqual(imaging.ImageFormat.jpeg, imaging.detectFormat("\xff\xd8\xff\xe0"));
     try testing.expectEqual(imaging.ImageFormat.gif, imaging.detectFormat("GIF89arest"));
+    try testing.expectEqual(imaging.ImageFormat.ico, imaging.detectFormat("\x00\x00\x01\x00rest"));
 }
 
 test "decodeRgb8 decodes repository sample png natively" {
@@ -141,4 +142,55 @@ test "decodeRgb8 decodes palette gif" {
     try testing.expect(image.data[0] > image.data[2]);
     try testing.expect(image.data[4] > image.data[3]);
     try testing.expect(image.data[4] > image.data[5]);
+}
+
+test "decodeRgb8 decodes png-backed ico" {
+    const std = @import("std");
+    const testing = std.testing;
+
+    const png_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAANSURBVBhXY/jPwPAfAAUAAf+mXJtdAAAAAElFTkSuQmCC";
+    const png_len = try std.base64.standard.Decoder.calcSizeForSlice(png_base64);
+    const png_bytes = try testing.allocator.alloc(u8, png_len);
+    defer testing.allocator.free(png_bytes);
+    try std.base64.standard.Decoder.decode(png_bytes, png_base64);
+
+    const ico_len = 6 + 16 + png_len;
+    const ico = try testing.allocator.alloc(u8, ico_len);
+    defer testing.allocator.free(ico);
+
+    ico[0] = 0x00;
+    ico[1] = 0x00;
+    ico[2] = 0x01;
+    ico[3] = 0x00;
+    ico[4] = 0x01;
+    ico[5] = 0x00;
+
+    ico[6] = 0x01;
+    ico[7] = 0x01;
+    ico[8] = 0x00;
+    ico[9] = 0x00;
+    ico[10] = 0x01;
+    ico[11] = 0x00;
+    ico[12] = 0x20;
+    ico[13] = 0x00;
+
+    writeU32le(ico[14..18], @intCast(png_len));
+    writeU32le(ico[18..22], 22);
+    @memcpy(ico[22..], png_bytes);
+
+    var image = try imaging.decodeRgb8(testing.allocator, ico);
+    defer image.deinit();
+
+    try testing.expectEqual(@as(usize, 1), image.width);
+    try testing.expectEqual(@as(usize, 1), image.height);
+    try testing.expectEqual(@as(usize, 3), image.channels);
+    try testing.expect(image.data[0] > image.data[1]);
+    try testing.expect(image.data[0] > image.data[2]);
+}
+
+fn writeU32le(dst: []u8, value: u32) void {
+    dst[0] = @intCast(value & 0xff);
+    dst[1] = @intCast((value >> 8) & 0xff);
+    dst[2] = @intCast((value >> 16) & 0xff);
+    dst[3] = @intCast((value >> 24) & 0xff);
 }
