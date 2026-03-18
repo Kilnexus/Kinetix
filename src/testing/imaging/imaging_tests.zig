@@ -173,6 +173,8 @@ test "inspectWebpVp8l parses transform chain for lossless samples" {
     try testing.expect(!rgb_info.transforms[0].subimage_header.?.use_color_cache);
     try testing.expectEqual(@as(?usize, null), rgb_info.transforms[0].subimage_header.?.color_cache_bits);
     try testing.expectEqual(@as(?bool, null), rgb_info.transforms[0].subimage_header.?.meta_prefix_present);
+    try testing.expectEqual(@as(?usize, null), rgb_info.transforms[0].subimage_header.?.prefix_image_start_bit_pos);
+    try testing.expectEqual(@as(?imaging.Vp8lEntropyImageDataHeader, null), rgb_info.transforms[0].subimage_header.?.prefix_image_header);
     try testing.expectEqual(@as(?usize, 52), rgb_info.transforms[0].subimage_header.?.prefix_codes_start_bit_pos);
     try testing.expectEqual(@as(usize, 96), rgb_info.transforms[0].subimage_header.?.header_end_bit_pos);
     try testing.expect(rgb_info.transforms[0].subimage_header.?.prefix_group != null);
@@ -215,6 +217,8 @@ test "inspectWebpVp8l parses transform chain for lossless samples" {
     try testing.expectEqual(@as(usize, 1), rgb_info.transforms[0].next_image_width);
     try testing.expectEqual(@as(usize, 1), rgb_info.transforms[0].next_image_height);
     try testing.expect(!rgb_info.tail_flags_known);
+    try testing.expectEqual(@as(?usize, null), rgb_info.image_data_start_bit_pos);
+    try testing.expectEqual(@as(?imaging.Vp8lImageDataHeader, null), rgb_info.main_image_header);
     try testing.expectEqual(@as(?bool, null), rgb_info.use_color_cache);
     try testing.expectEqual(@as(?bool, null), rgb_info.use_meta_prefix);
 
@@ -238,6 +242,8 @@ test "inspectWebpVp8l parses transform chain for lossless samples" {
     try testing.expect(!rgba_info.transforms[0].subimage_header.?.use_color_cache);
     try testing.expectEqual(@as(?usize, null), rgba_info.transforms[0].subimage_header.?.color_cache_bits);
     try testing.expectEqual(@as(?bool, null), rgba_info.transforms[0].subimage_header.?.meta_prefix_present);
+    try testing.expectEqual(@as(?usize, null), rgba_info.transforms[0].subimage_header.?.prefix_image_start_bit_pos);
+    try testing.expectEqual(@as(?imaging.Vp8lEntropyImageDataHeader, null), rgba_info.transforms[0].subimage_header.?.prefix_image_header);
     try testing.expectEqual(@as(?usize, 52), rgba_info.transforms[0].subimage_header.?.prefix_codes_start_bit_pos);
     try testing.expectEqual(@as(usize, 86), rgba_info.transforms[0].subimage_header.?.header_end_bit_pos);
     try testing.expect(rgba_info.transforms[0].subimage_header.?.prefix_group != null);
@@ -284,8 +290,97 @@ test "inspectWebpVp8l parses transform chain for lossless samples" {
     try testing.expectEqual(@as(usize, 1), rgba_info.transforms[0].next_image_width);
     try testing.expectEqual(@as(usize, 1), rgba_info.transforms[0].next_image_height);
     try testing.expect(!rgba_info.tail_flags_known);
+    try testing.expectEqual(@as(?usize, null), rgba_info.image_data_start_bit_pos);
+    try testing.expectEqual(@as(?imaging.Vp8lImageDataHeader, null), rgba_info.main_image_header);
     try testing.expectEqual(@as(?bool, null), rgba_info.use_color_cache);
     try testing.expectEqual(@as(?bool, null), rgba_info.use_meta_prefix);
+}
+
+test "inspectWebpVp8l parses main image header for simple lossless samples" {
+    const std = @import("std");
+    const testing = std.testing;
+
+    const solid_red_base64 = "UklGRhwAAABXRUJQVlA4TA8AAAAvAAAAAAcQ/Y/+ByKi/wEA";
+    const checker_base64 = "UklGRiYAAABXRUJQVlA4TBoAAAAvA8AAAA8w//M///MfeFDTtgGLr6Qjov/BOQ==";
+    const gradient_base64 = "UklGRrAAAABXRUJQVlA4TKMAAAAvD8ADEE1kRP9jEYUf8P5HAUHbtjGE8Ke7q6cwEIwhSRJ0GIUyKIuyKItyKIOSTwFJ0vPwuSK3bZtjdtln8LEts6NYObSTOI+5yLhbHrab8Wy5bE/G3QpaiXcl2pto5aWVxJaxfRnb8rEt49sydiTOyp92Ev+VQ/snzirYbsbdco25WIneUWR+8PBRO0l8d6c9urvTHu7utMd3d9qjrX7+7QMXAA==";
+
+    const samples = [_]struct {
+        name: []const u8,
+        base64: []const u8,
+    }{
+        .{ .name = "solid_red_1x1", .base64 = solid_red_base64 },
+        .{ .name = "checker_4x4", .base64 = checker_base64 },
+        .{ .name = "gradient_16x16", .base64 = gradient_base64 },
+    };
+
+    for (samples) |sample| {
+        const decoded_len = try std.base64.standard.Decoder.calcSizeForSlice(sample.base64);
+        const webp = try testing.allocator.alloc(u8, decoded_len);
+        defer testing.allocator.free(webp);
+        try std.base64.standard.Decoder.decode(webp, sample.base64);
+
+        const info = try imaging.inspectWebpVp8l(webp);
+        _ = sample.name;
+        try testing.expect(!info.tail_flags_known);
+        try testing.expectEqual(@as(?usize, null), info.image_data_start_bit_pos);
+        try testing.expectEqual(@as(?imaging.Vp8lImageDataHeader, null), info.main_image_header);
+    }
+}
+
+test "inspectVp8lImageDataAtBitPos parses argb meta prefix branch" {
+    const testing = @import("std").testing;
+
+    var payload = [_]u8{0} ** 4;
+    var bit_pos: usize = 0;
+
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 0, 3);
+
+    writeBit(&payload, &bit_pos, 0);
+    for (0..5) |_| {
+        writeBit(&payload, &bit_pos, 1);
+        writeBit(&payload, &bit_pos, 0);
+        writeBit(&payload, &bit_pos, 0);
+        writeBit(&payload, &bit_pos, 0);
+    }
+
+    const header = try imaging.inspectVp8lImageDataAtBitPos(&payload, 0, 5, 4, .argb);
+    try testing.expectEqual(imaging.Vp8lImageRole.argb, header.role);
+    try testing.expectEqual(@as(usize, 5), header.width);
+    try testing.expectEqual(@as(usize, 4), header.height);
+    try testing.expect(!header.use_color_cache);
+    try testing.expectEqual(@as(?usize, null), header.color_cache_bits);
+    try testing.expectEqual(@as(?bool, true), header.meta_prefix_present);
+    try testing.expectEqual(@as(?usize, 2), header.prefix_bits);
+    try testing.expectEqual(@as(?usize, 2), header.prefix_image_width);
+    try testing.expectEqual(@as(?usize, 1), header.prefix_image_height);
+    try testing.expectEqual(@as(?usize, 5), header.prefix_image_start_bit_pos);
+    try testing.expectEqual(@as(usize, 5), header.header_end_bit_pos);
+    try testing.expectEqual(@as(?usize, null), header.prefix_codes_start_bit_pos);
+    try testing.expectEqual(@as(?imaging.Vp8lPrefixCodeGroup, null), header.prefix_group);
+    try testing.expect(header.prefix_image_header != null);
+
+    const prefix_header = header.prefix_image_header.?;
+    try testing.expectEqual(@as(usize, 2), prefix_header.width);
+    try testing.expectEqual(@as(usize, 1), prefix_header.height);
+    try testing.expectEqual(@as(usize, 5), prefix_header.start_bit_pos);
+    try testing.expect(!prefix_header.use_color_cache);
+    try testing.expectEqual(@as(?usize, null), prefix_header.color_cache_bits);
+    try testing.expectEqual(@as(usize, 6), prefix_header.prefix_codes_start_bit_pos);
+    try testing.expectEqual(@as(usize, 26), prefix_header.header_end_bit_pos);
+    try testing.expectEqual(@as(usize, 5), prefix_header.prefix_group.parsed_count);
+    try testing.expect(prefix_header.prefix_group.all_simple);
+
+    for (0..5) |i| {
+        try testing.expectEqual(imaging.Vp8lPrefixCodeKind.simple, prefix_header.prefix_group.codes[i].kind);
+        try testing.expectEqual(@as(usize, 6 + i * 4), prefix_header.prefix_group.codes[i].start_bit_pos);
+        try testing.expectEqual(@as(usize, 1), prefix_header.prefix_group.codes[i].simple.?.num_symbols);
+        try testing.expect(!prefix_header.prefix_group.codes[i].simple.?.is_first_8bits);
+        try testing.expectEqual(@as(usize, 0), prefix_header.prefix_group.codes[i].simple.?.symbol0);
+        try testing.expectEqual(@as(?usize, null), prefix_header.prefix_group.codes[i].simple.?.symbol1);
+        try testing.expectEqual(@as(usize, 10 + i * 4), prefix_header.prefix_group.codes[i].simple.?.end_bit_pos);
+    }
 }
 
 test "decodeRgb8 decodes repository sample png natively" {
@@ -499,4 +594,17 @@ fn writeU32le(dst: []u8, value: u32) void {
     dst[1] = @intCast((value >> 8) & 0xff);
     dst[2] = @intCast((value >> 16) & 0xff);
     dst[3] = @intCast((value >> 24) & 0xff);
+}
+
+fn writeBit(dst: []u8, bit_pos: *usize, value: u1) void {
+    const byte_index = bit_pos.* / 8;
+    const bit_index: u3 = @intCast(bit_pos.* % 8);
+    if (value == 1) dst[byte_index] |= @as(u8, 1) << bit_index;
+    bit_pos.* += 1;
+}
+
+fn writeBits(dst: []u8, bit_pos: *usize, value: usize, count: usize) void {
+    for (0..count) |i| {
+        writeBit(dst, bit_pos, @intCast((value >> @intCast(i)) & 1));
+    }
 }

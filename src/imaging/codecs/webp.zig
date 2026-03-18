@@ -67,6 +67,17 @@ pub const Vp8lPrefixCodeGroup = struct {
     codes: [5]Vp8lPrefixCodeHeader,
 };
 
+pub const Vp8lEntropyImageDataHeader = struct {
+    width: usize,
+    height: usize,
+    start_bit_pos: usize,
+    use_color_cache: bool,
+    color_cache_bits: ?usize,
+    header_end_bit_pos: usize,
+    prefix_codes_start_bit_pos: usize,
+    prefix_group: Vp8lPrefixCodeGroup,
+};
+
 pub const Vp8lImageDataHeader = struct {
     role: Vp8lImageRole,
     width: usize,
@@ -78,6 +89,8 @@ pub const Vp8lImageDataHeader = struct {
     prefix_bits: ?usize,
     prefix_image_width: ?usize,
     prefix_image_height: ?usize,
+    prefix_image_start_bit_pos: ?usize,
+    prefix_image_header: ?Vp8lEntropyImageDataHeader,
     header_end_bit_pos: usize,
     prefix_codes_start_bit_pos: ?usize,
     prefix_group: ?Vp8lPrefixCodeGroup,
@@ -103,6 +116,8 @@ pub const Vp8lStreamInfo = struct {
     height: usize,
     has_alpha: bool,
     header_end_bit_pos: usize,
+    image_data_start_bit_pos: ?usize,
+    main_image_header: ?Vp8lImageDataHeader,
     transform_count: usize,
     transforms: [4]Vp8lTransform,
     tail_flags_known: bool,
@@ -153,6 +168,16 @@ pub fn inspectVp8l(bytes: []const u8) !Vp8lStreamInfo {
     const chunk = try findPrimaryChunk(bytes);
     if (chunk.tag != .vp8l) return error.UnsupportedWebpBitstream;
     return inspectVp8lPayload(chunk.payload);
+}
+
+pub fn inspectVp8lImageDataAtBitPos(
+    payload: []const u8,
+    start_bit_pos: usize,
+    width: usize,
+    height: usize,
+    role: Vp8lImageRole,
+) !Vp8lImageDataHeader {
+    return inspectImageDataAtBitPos(payload, start_bit_pos, width, height, role);
 }
 
 pub fn inspectVp8lPayload(payload: []const u8) !Vp8lStreamInfo {
@@ -266,12 +291,19 @@ pub fn inspectVp8lPayload(payload: []const u8) !Vp8lStreamInfo {
     const use_color_cache: ?bool = if (tail_flags_known) (try reader.readBits(1)) == 1 else null;
     const color_cache_bits = if (use_color_cache != null and use_color_cache.?) try reader.readBits(4) else null;
     const use_meta_prefix: ?bool = if (tail_flags_known) (try reader.readBits(1)) == 1 else null;
+    const image_data_start_bit_pos = if (tail_flags_known) reader.bit_pos else null;
+    const main_image_header = if (tail_flags_known)
+        try inspectImageDataAtBitPos(payload, image_data_start_bit_pos.?, current_width, current_height, .argb)
+    else
+        null;
 
     return .{
         .width = info.width,
         .height = info.height,
         .has_alpha = info.has_alpha,
         .header_end_bit_pos = reader.bit_pos,
+        .image_data_start_bit_pos = image_data_start_bit_pos,
+        .main_image_header = main_image_header,
         .transform_count = transform_count,
         .transforms = transforms,
         .tail_flags_known = tail_flags_known,
@@ -296,6 +328,8 @@ fn inspectImageDataAtBitPos(
     var prefix_bits: ?usize = null;
     var prefix_image_width: ?usize = null;
     var prefix_image_height: ?usize = null;
+    var prefix_image_start_bit_pos: ?usize = null;
+    var prefix_image_header: ?Vp8lEntropyImageDataHeader = null;
     var prefix_codes_start_bit_pos: ?usize = null;
     var prefix_group: ?Vp8lPrefixCodeGroup = null;
 
@@ -306,6 +340,13 @@ fn inspectImageDataAtBitPos(
             const scale = @as(usize, 1) << @intCast(prefix_bits.?);
             prefix_image_width = divRoundUp(width, scale);
             prefix_image_height = divRoundUp(height, scale);
+            prefix_image_start_bit_pos = reader.bit_pos;
+            prefix_image_header = try inspectEntropyImageDataAtBitPos(
+                payload,
+                prefix_image_start_bit_pos.?,
+                prefix_image_width.?,
+                prefix_image_height.?,
+            );
         }
     }
 
@@ -325,6 +366,32 @@ fn inspectImageDataAtBitPos(
         .prefix_bits = prefix_bits,
         .prefix_image_width = prefix_image_width,
         .prefix_image_height = prefix_image_height,
+        .prefix_image_start_bit_pos = prefix_image_start_bit_pos,
+        .prefix_image_header = prefix_image_header,
+        .header_end_bit_pos = reader.bit_pos,
+        .prefix_codes_start_bit_pos = prefix_codes_start_bit_pos,
+        .prefix_group = prefix_group,
+    };
+}
+
+fn inspectEntropyImageDataAtBitPos(
+    payload: []const u8,
+    start_bit_pos: usize,
+    width: usize,
+    height: usize,
+) !Vp8lEntropyImageDataHeader {
+    var reader = Vp8lBitReader.initAtBit(payload, start_bit_pos);
+    const use_color_cache = (try reader.readBits(1)) == 1;
+    const color_cache_bits = if (use_color_cache) try reader.readBits(4) else null;
+    const prefix_codes_start_bit_pos = reader.bit_pos;
+    const prefix_group = try inspectPrefixCodeGroup(&reader);
+
+    return .{
+        .width = width,
+        .height = height,
+        .start_bit_pos = start_bit_pos,
+        .use_color_cache = use_color_cache,
+        .color_cache_bits = color_cache_bits,
         .header_end_bit_pos = reader.bit_pos,
         .prefix_codes_start_bit_pos = prefix_codes_start_bit_pos,
         .prefix_group = prefix_group,

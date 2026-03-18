@@ -22,10 +22,12 @@ pub const WebpChunkTag = webp.WebpChunkTag;
 pub const Vp8lStreamInfo = webp.Vp8lStreamInfo;
 pub const Vp8lTransformType = webp.Vp8lTransformType;
 pub const Vp8lImageRole = webp.Vp8lImageRole;
+pub const Vp8lImageDataHeader = webp.Vp8lImageDataHeader;
 pub const Vp8lPrefixCodeKind = webp.Vp8lPrefixCodeKind;
 pub const Vp8lSimplePrefixCode = webp.Vp8lSimplePrefixCode;
 pub const Vp8lPrefixCodeHeader = webp.Vp8lPrefixCodeHeader;
 pub const Vp8lPrefixCodeGroup = webp.Vp8lPrefixCodeGroup;
+pub const Vp8lEntropyImageDataHeader = webp.Vp8lEntropyImageDataHeader;
 
 pub const ProbeError =
     png.PngError ||
@@ -75,6 +77,16 @@ pub fn probeWebpPrimaryChunkTag(bytes: []const u8) !WebpChunkTag {
 pub fn inspectWebpVp8l(bytes: []const u8) !Vp8lStreamInfo {
     if (format.detectFormat(bytes) != .webp) return error.UnsupportedImageFormat;
     return webp.inspectVp8l(bytes);
+}
+
+pub fn inspectVp8lImageDataAtBitPos(
+    payload: []const u8,
+    start_bit_pos: usize,
+    width: usize,
+    height: usize,
+    role: Vp8lImageRole,
+) !Vp8lImageDataHeader {
+    return webp.inspectVp8lImageDataAtBitPos(payload, start_bit_pos, width, height, role);
 }
 
 fn probePng(bytes: []const u8) ImageInfo {
