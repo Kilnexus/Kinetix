@@ -235,13 +235,21 @@ pub const WebpError = types.ImageError || error{
     UnsupportedWebpBitstream,
 };
 
-pub fn decodeRgb8(_: std.mem.Allocator, bytes: []const u8) !ImageU8 {
+pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
     const scan = try scanChunks(bytes);
     if (scan.info.is_animated) return error.UnsupportedWebpAnimation;
     return switch (scan.primary.tag) {
-        .vp8, .vp8l, .vp8x => error.UnsupportedWebpBitstream,
+        .vp8 => error.UnsupportedWebpBitstream,
+        .vp8l => decodeVp8lRgb8(allocator, scan.primary.payload),
+        .vp8x => error.UnsupportedWebpBitstream,
         else => error.MissingWebpChunk,
     };
+}
+
+fn decodeVp8lRgb8(allocator: std.mem.Allocator, payload: []const u8) !ImageU8 {
+    var argb = try decodeVp8lPayloadArgb(allocator, payload);
+    defer argb.deinit();
+    return argbToRgb8(allocator, argb.pixels, argb.width, argb.height);
 }
 
 pub fn probeInfo(bytes: []const u8) !WebpInfo {
@@ -598,6 +606,29 @@ pub fn inspectVp8lPayload(payload: []const u8) !Vp8lStreamInfo {
         .color_cache_bits = color_cache_bits,
         .use_meta_prefix = use_meta_prefix,
     };
+}
+
+pub fn decodeVp8lPayloadArgb(allocator: std.mem.Allocator, payload: []const u8) !Vp8lArgbImage {
+    const info = try inspectVp8lPayload(payload);
+    if (info.transform_count != 0) return error.UnsupportedWebpBitstream;
+    if (!info.tail_flags_known) return error.UnsupportedWebpBitstream;
+    if (info.main_image_header == null) return error.InvalidWebpData;
+
+    const main = info.main_image_header.?;
+    if (main.meta_prefix_present != null and main.meta_prefix_present.?) return error.UnsupportedWebpBitstream;
+    if (main.prefix_codes_start_bit_pos == null) return error.InvalidWebpData;
+
+    const cache_bits = main.color_cache_bits orelse 0;
+    const green_alphabet_size = 256 + numLengthCodes + if (cache_bits == 0) @as(usize, 0) else (@as(usize, 1) << @intCast(cache_bits));
+    return decodeVp8lSingleGroupArgbAtBitPos(
+        allocator,
+        payload,
+        main.prefix_codes_start_bit_pos.?,
+        .{ green_alphabet_size, 256, 256, 256, numDistanceCodes },
+        info.width,
+        info.height,
+        cache_bits,
+    );
 }
 
 fn inspectImageDataAtBitPos(
@@ -987,6 +1018,7 @@ const codeLengthExtraBits = [3]usize{ 2, 3, 7 };
 const codeLengthRepeatOffsets = [3]usize{ 3, 3, 11 };
 const numPrefixCodes = 5;
 const numLengthCodes = 24;
+const numDistanceCodes = 40;
 
 const codeLengthCodeOrder = [19]usize{
     17, 18, 0, 1, 2, 3, 4, 5, 16, 6,
@@ -1200,6 +1232,17 @@ fn updateColorCache(color_cache: ?[]u32, color_cache_bits: usize, pixel: u32) vo
     if (color_cache == null or color_cache_bits == 0) return;
     const index = (@as(usize, 0x1e35a7bd) * @as(usize, pixel)) >> @intCast(32 - color_cache_bits);
     color_cache.?[index] = pixel;
+}
+
+fn argbToRgb8(allocator: std.mem.Allocator, pixels: []const u32, width: usize, height: usize) !ImageU8 {
+    var image = try ImageU8.init(allocator, width, height, 3);
+    errdefer image.deinit();
+    for (pixels, 0..) |pixel, i| {
+        image.data[i * 3] = @intCast((pixel >> 16) & 0xff);
+        image.data[i * 3 + 1] = @intCast((pixel >> 8) & 0xff);
+        image.data[i * 3 + 2] = @intCast(pixel & 0xff);
+    }
+    return image;
 }
 
 pub fn validateHeader(bytes: []const u8) !void {

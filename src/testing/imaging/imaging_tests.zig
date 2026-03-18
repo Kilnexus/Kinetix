@@ -821,6 +821,72 @@ test "decodeVp8lSingleGroupArgbAtBitPos decodes literal-only pixels" {
     try testing.expectEqual(@as(u32, 0xff0a0214), image.pixels[1]);
 }
 
+test "decodeRgb8 decodes synthetic single-group lossless webp" {
+    const testing = @import("std").testing;
+
+    var payload = [_]u8{0} ** 32;
+    payload[0] = 0x2f;
+    writeVp8lHeader(payload[1..5], 2, 1, false);
+
+    var bit_pos: usize = 40;
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 0);
+
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 0);
+
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 1, 8);
+    writeBits(&payload, &bit_pos, 2, 8);
+
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 10, 8);
+
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 20, 8);
+
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 255, 8);
+
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 0, 8);
+
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 1);
+
+    const payload_size = (bit_pos + 7) / 8;
+    const riff_size = 4 + 8 + payload_size;
+    const webp_size = 12 + 8 + payload_size;
+    const webp = try testing.allocator.alloc(u8, webp_size);
+    defer testing.allocator.free(webp);
+    @memcpy(webp[0..4], "RIFF");
+    writeU32le(webp[4..8], @intCast(riff_size));
+    @memcpy(webp[8..12], "WEBP");
+    @memcpy(webp[12..16], "VP8L");
+    writeU32le(webp[16..20], @intCast(payload_size));
+    @memcpy(webp[20 .. 20 + payload_size], payload[0..payload_size]);
+
+    var image = try imaging.decodeRgb8(testing.allocator, webp);
+    defer image.deinit();
+
+    try testing.expectEqual(@as(usize, 2), image.width);
+    try testing.expectEqual(@as(usize, 1), image.height);
+    try testing.expectEqual(@as(usize, 3), image.channels);
+    try testing.expectEqualSlices(u8, &[_]u8{ 10, 1, 20 }, image.data[0..3]);
+    try testing.expectEqualSlices(u8, &[_]u8{ 10, 2, 20 }, image.data[3..6]);
+}
+
 test "decodeRgb8 decodes repository sample png natively" {
     const testing = @import("std").testing;
 
@@ -1032,6 +1098,14 @@ fn writeU32le(dst: []u8, value: u32) void {
     dst[1] = @intCast((value >> 8) & 0xff);
     dst[2] = @intCast((value >> 16) & 0xff);
     dst[3] = @intCast((value >> 24) & 0xff);
+}
+
+fn writeVp8lHeader(dst: []u8, width: usize, height: usize, has_alpha: bool) void {
+    const bits: u32 =
+        @as(u32, @intCast(width - 1)) |
+        (@as(u32, @intCast(height - 1)) << 14) |
+        (@as(u32, @intFromBool(has_alpha)) << 28);
+    writeU32le(dst, bits);
 }
 
 fn writeBit(dst: []u8, bit_pos: *usize, value: u1) void {
