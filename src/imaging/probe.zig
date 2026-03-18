@@ -17,6 +17,8 @@ pub const ImageInfo = struct {
     has_alpha: bool,
 };
 
+pub const WebpInfo = webp.WebpInfo;
+
 pub const ProbeError =
     png.PngError ||
     bmp.BmpError ||
@@ -44,6 +46,17 @@ pub fn probeFileInfo(allocator: std.mem.Allocator, path: []const u8) !ImageInfo 
     const bytes = try std.fs.cwd().readFileAlloc(allocator, path, 256 * 1024 * 1024);
     defer allocator.free(bytes);
     return probeInfo(bytes);
+}
+
+pub fn probeWebpInfo(bytes: []const u8) !WebpInfo {
+    if (format.detectFormat(bytes) != .webp) return error.UnsupportedImageFormat;
+    return webp.probeInfo(bytes);
+}
+
+pub fn probeWebpFileInfo(allocator: std.mem.Allocator, path: []const u8) !WebpInfo {
+    const bytes = try std.fs.cwd().readFileAlloc(allocator, path, 256 * 1024 * 1024);
+    defer allocator.free(bytes);
+    return probeWebpInfo(bytes);
 }
 
 fn probePng(bytes: []const u8) ImageInfo {

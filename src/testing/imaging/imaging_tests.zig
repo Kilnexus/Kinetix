@@ -73,6 +73,38 @@ test "probeInfo reads lossless webp metadata" {
     try testing.expect(!info.has_alpha);
 }
 
+test "probeWebpInfo distinguishes lossless and lossy bitstreams" {
+    const std = @import("std");
+    const testing = std.testing;
+
+    const lossless_base64 = "UklGRh4AAABXRUJQVlA4TBEAAAAvAQAAAA+w//Mf8x8VMqL/AQA=";
+    const lossy_base64 = "UklGRkgAAABXRUJQVlA4IDwAAAAwAgCdASoCAAEAAAAAJaACdLoB+AADIQb7gAD5f/8uv//vTP/5zIj//2Z7/Znv9me/+zPf/maJjmP16AA=";
+
+    const lossless_len = try std.base64.standard.Decoder.calcSizeForSlice(lossless_base64);
+    const lossless = try testing.allocator.alloc(u8, lossless_len);
+    defer testing.allocator.free(lossless);
+    try std.base64.standard.Decoder.decode(lossless, lossless_base64);
+
+    const lossy_len = try std.base64.standard.Decoder.calcSizeForSlice(lossy_base64);
+    const lossy = try testing.allocator.alloc(u8, lossy_len);
+    defer testing.allocator.free(lossy);
+    try std.base64.standard.Decoder.decode(lossy, lossy_base64);
+
+    const lossless_info = try imaging.probeWebpInfo(lossless);
+    try testing.expectEqual(@as(usize, 2), lossless_info.width);
+    try testing.expectEqual(@as(usize, 1), lossless_info.height);
+    try testing.expectEqual(@as(imaging.WebpInfo, lossless_info).kind, .vp8l);
+    try testing.expect(!lossless_info.has_alpha);
+    try testing.expect(!lossless_info.is_animated);
+
+    const lossy_info = try imaging.probeWebpInfo(lossy);
+    try testing.expectEqual(@as(usize, 2), lossy_info.width);
+    try testing.expectEqual(@as(usize, 1), lossy_info.height);
+    try testing.expectEqual(@as(imaging.WebpInfo, lossy_info).kind, .vp8);
+    try testing.expect(!lossy_info.has_alpha);
+    try testing.expect(!lossy_info.is_animated);
+}
+
 test "decodeRgb8 decodes repository sample png natively" {
     const testing = @import("std").testing;
 
