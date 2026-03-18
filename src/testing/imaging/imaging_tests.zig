@@ -383,19 +383,19 @@ test "inspectVp8lImageDataAtBitPos parses argb meta prefix branch" {
     }
 }
 
-test "inspectVp8lImageDataAtBitPos parses normal prefix code header" {
+test "inspectVp8lImageDataAtBitPos parses prefix code header envelope" {
     const testing = @import("std").testing;
 
-    var payload = [_]u8{0} ** 3;
+    var payload = [_]u8{0} ** 4;
     var bit_pos: usize = 0;
 
     writeBit(&payload, &bit_pos, 0);
-    writeBit(&payload, &bit_pos, 0);
-    writeBits(&payload, &bit_pos, 0, 4);
-    writeBits(&payload, &bit_pos, 2, 3);
-    writeBits(&payload, &bit_pos, 0, 3);
-    writeBits(&payload, &bit_pos, 1, 3);
-    writeBits(&payload, &bit_pos, 7, 3);
+    for (0..5) |i| {
+        writeBit(&payload, &bit_pos, 1);
+        writeBit(&payload, &bit_pos, 0);
+        writeBit(&payload, &bit_pos, 0);
+        writeBit(&payload, &bit_pos, @intCast(i & 1));
+    }
 
     const header = try imaging.inspectVp8lImageDataAtBitPos(&payload, 0, 3, 2, .color);
     try testing.expectEqual(imaging.Vp8lImageRole.color, header.role);
@@ -405,35 +405,17 @@ test "inspectVp8lImageDataAtBitPos parses normal prefix code header" {
     try testing.expectEqual(@as(?usize, null), header.color_cache_bits);
     try testing.expectEqual(@as(?bool, null), header.meta_prefix_present);
     try testing.expectEqual(@as(?usize, 1), header.prefix_codes_start_bit_pos);
-    try testing.expectEqual(@as(usize, 19), header.header_end_bit_pos);
+    try testing.expectEqual(@as(usize, bit_pos), header.header_end_bit_pos);
     try testing.expectEqual(@as(?usize, null), header.prefix_image_start_bit_pos);
     try testing.expectEqual(@as(?imaging.Vp8lEntropyImageDataHeader, null), header.prefix_image_header);
     try testing.expect(header.prefix_group != null);
 
     const group = header.prefix_group.?;
-    try testing.expectEqual(@as(usize, 1), group.parsed_count);
-    try testing.expect(!group.all_simple);
-    try testing.expectEqual(imaging.Vp8lPrefixCodeKind.normal, group.codes[0].kind);
-    try testing.expectEqual(@as(usize, 1), group.codes[0].start_bit_pos);
-    try testing.expectEqual(@as(?imaging.Vp8lSimplePrefixCode, null), group.codes[0].simple);
-    try testing.expect(group.codes[0].normal != null);
-
-    const normal = group.codes[0].normal.?;
-    try testing.expectEqual(@as(usize, 4), normal.num_code_length_codes);
-    try testing.expect(!normal.use_explicit_max_symbol);
-    try testing.expectEqual(@as(?usize, null), normal.length_nbits);
-    try testing.expectEqual(@as(usize, 0), normal.max_symbol);
-    try testing.expectEqual(@as(?usize, null), normal.decoded_symbol_tokens);
-    try testing.expectEqual(@as(?usize, null), normal.emitted_code_lengths);
-    try testing.expectEqual(@as(?usize, null), normal.non_zero_code_lengths);
-    try testing.expectEqual(@as(usize, 0), normal.preview_len);
-    try testing.expectEqual(@as(usize, 19), normal.end_bit_pos);
-    try testing.expectEqual(@as(usize, 2), normal.code_length_code_lengths[17]);
-    try testing.expectEqual(@as(usize, 0), normal.code_length_code_lengths[18]);
-    try testing.expectEqual(@as(usize, 1), normal.code_length_code_lengths[0]);
-    try testing.expectEqual(@as(usize, 7), normal.code_length_code_lengths[1]);
-    for ([_]usize{ 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 }) |symbol| {
-        try testing.expectEqual(@as(usize, 0), normal.code_length_code_lengths[symbol]);
+    try testing.expectEqual(@as(usize, 5), group.parsed_count);
+    try testing.expect(group.all_simple);
+    for (0..5) |i| {
+        try testing.expectEqual(imaging.Vp8lPrefixCodeKind.simple, group.codes[i].kind);
+        try testing.expect(group.codes[i].simple != null);
     }
 }
 
@@ -591,6 +573,22 @@ test "inspectVp8lCanonicalSymbolStreamAtBitPos decodes 1-bit canonical stream" {
     try testing.expectEqual(@as(usize, 0), stream.preview[3]);
 }
 
+test "inspectVp8lCanonicalSymbolStreamAtBitPos handles single-symbol tree without consuming bits" {
+    const testing = @import("std").testing;
+
+    const code_lengths = [_]u8{ 0, 0, 1, 0 };
+    const payload = [_]u8{0xaa, 0x55};
+
+    const stream = try imaging.inspectVp8lCanonicalSymbolStreamAtBitPos(&payload, 0, &code_lengths, 3);
+    try testing.expectEqual(@as(usize, 0), stream.start_bit_pos);
+    try testing.expectEqual(@as(usize, 0), stream.end_bit_pos);
+    try testing.expectEqual(@as(usize, 3), stream.symbol_count);
+    try testing.expectEqual(@as(usize, 3), stream.preview_len);
+    try testing.expectEqual(@as(usize, 2), stream.preview[0]);
+    try testing.expectEqual(@as(usize, 2), stream.preview[1]);
+    try testing.expectEqual(@as(usize, 2), stream.preview[2]);
+}
+
 test "inspectVp8lCanonicalSymbolStreamAtBitPos decodes 3-bit canonical stream" {
     const testing = @import("std").testing;
 
@@ -617,6 +615,78 @@ test "inspectVp8lCanonicalSymbolStreamAtBitPos decodes 3-bit canonical stream" {
     try testing.expectEqual(@as(usize, 2), stream.preview[2]);
     try testing.expectEqual(@as(usize, 3), stream.preview[3]);
     try testing.expectEqual(@as(usize, 4), stream.preview[4]);
+}
+
+test "inspectVp8lPrefixCodeGroupAtBitPos parses mixed group with summaries" {
+    const testing = @import("std").testing;
+
+    var payload = [_]u8{0} ** 16;
+    var bit_pos: usize = 0;
+
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 2, 8);
+
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 0, 8);
+    writeBits(&payload, &bit_pos, 5, 8);
+
+    writeBits(&payload, &bit_pos, 0, 1);
+    writeBits(&payload, &bit_pos, 0, 4);
+    writeBits(&payload, &bit_pos, 0, 3);
+    writeBits(&payload, &bit_pos, 0, 3);
+    writeBits(&payload, &bit_pos, 1, 3);
+    writeBits(&payload, &bit_pos, 1, 3);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 0, 3);
+    writeBits(&payload, &bit_pos, 2, 2);
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 0);
+
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 1, 8);
+
+    writeBit(&payload, &bit_pos, 1);
+    writeBit(&payload, &bit_pos, 0);
+    writeBit(&payload, &bit_pos, 1);
+    writeBits(&payload, &bit_pos, 7, 8);
+
+    const detail = try imaging.inspectVp8lPrefixCodeGroupAtBitPos(&payload, 0, .{ 8, 8, 8, 8, 8 });
+    try testing.expectEqual(@as(usize, 0), detail.start_bit_pos);
+    try testing.expectEqual(bit_pos, detail.end_bit_pos);
+    try testing.expectEqual(@as(usize, 5), detail.group.parsed_count);
+    try testing.expect(!detail.group.all_simple);
+
+    const code0 = detail.group.codes[0].simple.?;
+    try testing.expect(code0.canonical_summary != null);
+    try testing.expectEqual(@as(usize, 1), code0.canonical_summary.?.active_symbol_count);
+    try testing.expectEqual(@as(usize, 2), code0.canonical_summary.?.preview[0].symbol);
+
+    const code1 = detail.group.codes[1].simple.?;
+    try testing.expect(code1.canonical_summary != null);
+    try testing.expectEqual(@as(usize, 2), code1.canonical_summary.?.active_symbol_count);
+    try testing.expectEqual(@as(usize, 0), code1.canonical_summary.?.preview[0].symbol);
+    try testing.expectEqual(@as(usize, 5), code1.canonical_summary.?.preview[1].symbol);
+
+    const code2 = detail.group.codes[2].normal.?;
+    try testing.expect(code2.canonical_summary != null);
+    try testing.expectEqual(@as(usize, 2), code2.canonical_summary.?.active_symbol_count);
+    try testing.expectEqual(@as(usize, 1), code2.canonical_summary.?.max_code_length);
+
+    const code3 = detail.group.codes[3].simple.?;
+    try testing.expect(code3.canonical_summary != null);
+    try testing.expectEqual(@as(usize, 1), code3.canonical_summary.?.preview[0].symbol);
+
+    const code4 = detail.group.codes[4].simple.?;
+    try testing.expect(code4.canonical_summary != null);
+    try testing.expectEqual(@as(usize, 7), code4.canonical_summary.?.preview[0].symbol);
 }
 
 test "decodeRgb8 decodes repository sample png natively" {

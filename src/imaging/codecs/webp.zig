@@ -52,6 +52,7 @@ pub const Vp8lSimplePrefixCode = struct {
     is_first_8bits: bool,
     symbol0: usize,
     symbol1: ?usize,
+    canonical_summary: ?Vp8lCanonicalPrefixSummary = null,
     end_bit_pos: usize,
 };
 
@@ -89,6 +90,13 @@ pub const Vp8lCanonicalSymbolStream = struct {
     symbol_count: usize,
     preview_len: usize,
     preview: [32]usize,
+};
+
+pub const Vp8lPrefixCodeGroupDetail = struct {
+    start_bit_pos: usize,
+    end_bit_pos: usize,
+    alphabet_sizes: [5]usize,
+    group: Vp8lPrefixCodeGroup,
 };
 
 pub const Vp8lPrefixCodeHeader = struct {
@@ -247,6 +255,21 @@ pub fn inspectVp8lCanonicalSymbolStreamAtBitPos(
         .symbol_count = symbol_count,
         .preview_len = preview_len,
         .preview = preview,
+    };
+}
+
+pub fn inspectVp8lPrefixCodeGroupAtBitPos(
+    payload: []const u8,
+    start_bit_pos: usize,
+    alphabet_sizes: [5]usize,
+) !Vp8lPrefixCodeGroupDetail {
+    var reader = Vp8lBitReader.initAtBit(payload, start_bit_pos);
+    const group = try inspectPrefixCodeGroupDetailed(&reader, alphabet_sizes);
+    return .{
+        .start_bit_pos = start_bit_pos,
+        .end_bit_pos = reader.bit_pos,
+        .alphabet_sizes = alphabet_sizes,
+        .group = group,
     };
 }
 
@@ -469,29 +492,44 @@ fn inspectEntropyImageDataAtBitPos(
 }
 
 fn inspectPrefixCodeGroup(reader: *Vp8lBitReader) !Vp8lPrefixCodeGroup {
+    return inspectPrefixCodeGroupImpl(reader, null);
+}
+
+fn inspectPrefixCodeGroupDetailed(reader: *Vp8lBitReader, alphabet_sizes: [5]usize) !Vp8lPrefixCodeGroup {
+    return inspectPrefixCodeGroupImpl(reader, alphabet_sizes);
+}
+
+fn inspectPrefixCodeGroupImpl(reader: *Vp8lBitReader, alphabet_sizes: ?[5]usize) !Vp8lPrefixCodeGroup {
     var codes = [_]Vp8lPrefixCodeHeader{undefined} ** 5;
     var parsed_count: usize = 0;
     var all_simple = true;
 
-    while (parsed_count < codes.len) : (parsed_count += 1) {
+    while (parsed_count < codes.len) {
         const start_bit_pos = reader.bit_pos;
         const is_simple = (try reader.readBits(1)) == 1;
         if (!is_simple) {
             all_simple = false;
-            const normal = try inspectNormalPrefixCode(reader);
+            const normal = if (alphabet_sizes) |sizes|
+                try inspectNormalPrefixCodeDetailed(reader, sizes[parsed_count])
+            else
+                try inspectNormalPrefixCode(reader);
             codes[parsed_count] = .{
                 .kind = .normal,
                 .start_bit_pos = start_bit_pos,
                 .normal = normal,
             };
             parsed_count += 1;
-            break;
+            continue;
         }
 
         const num_symbols = (try reader.readBits(1)) + 1;
         const is_first_8bits = (try reader.readBits(1)) == 1;
         const symbol0 = try reader.readBits(if (is_first_8bits) 8 else 1);
         const symbol1: ?usize = if (num_symbols == 2) try reader.readBits(8) else null;
+        const canonical_summary = if (alphabet_sizes) |sizes|
+            try buildSimplePrefixSummary(num_symbols, symbol0, symbol1, sizes[parsed_count])
+        else
+            null;
         codes[parsed_count] = .{
             .kind = .simple,
             .start_bit_pos = start_bit_pos,
@@ -500,9 +538,11 @@ fn inspectPrefixCodeGroup(reader: *Vp8lBitReader) !Vp8lPrefixCodeGroup {
                 .is_first_8bits = is_first_8bits,
                 .symbol0 = symbol0,
                 .symbol1 = symbol1,
+                .canonical_summary = canonical_summary,
                 .end_bit_pos = reader.bit_pos,
             },
         };
+        parsed_count += 1;
     }
 
     return .{
@@ -510,6 +550,24 @@ fn inspectPrefixCodeGroup(reader: *Vp8lBitReader) !Vp8lPrefixCodeGroup {
         .all_simple = all_simple,
         .codes = codes,
     };
+}
+
+fn buildSimplePrefixSummary(
+    num_symbols: usize,
+    symbol0: usize,
+    symbol1: ?usize,
+    alphabet_size: usize,
+) !Vp8lCanonicalPrefixSummary {
+    if (alphabet_size > maxPrefixAlphabetSize) return error.InvalidWebpData;
+    if (symbol0 >= alphabet_size) return error.InvalidWebpData;
+    var code_lengths = [_]u8{0} ** maxPrefixAlphabetSize;
+    code_lengths[symbol0] = 1;
+    if (num_symbols == 2) {
+        const second = symbol1 orelse return error.InvalidWebpData;
+        if (second >= alphabet_size) return error.InvalidWebpData;
+        code_lengths[second] = 1;
+    }
+    return buildCanonicalPrefixSummary(code_lengths[0..alphabet_size]);
 }
 
 fn inspectNormalPrefixCode(reader: *Vp8lBitReader) !Vp8lNormalPrefixCode {
@@ -793,6 +851,7 @@ const CanonicalPrefixDecoder = struct {
     }
 
     fn readSymbol(self: *const CanonicalPrefixDecoder, reader: *Vp8lBitReader) !usize {
+        if (self.entry_count == 1) return self.entries[0].symbol;
         var acc: usize = 0;
         for (1..self.max_len + 1) |len| {
             acc |= (try reader.readBits(1)) << @intCast(len - 1);
