@@ -3,6 +3,7 @@ const graph = @import("graph");
 const runtime = @import("runtime");
 const weights = @import("weights");
 const vision = @import("vision/preprocess.zig");
+const vision_image = @import("vision/image.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -157,8 +158,16 @@ fn runImageMode(
     trace_json_out_path: ?[]const u8,
 ) !void {
     const stdout = std.fs.File.stdout().deprecatedWriter();
-    var prepared = try vision.loadImageAsTensor(allocator, image_path, image_size);
+    var timer = try std.time.Timer.start();
+    var src = try vision_image.loadRgb8(allocator, image_path);
+    defer src.deinit();
+    const decode_ns = timer.read();
+    timer.reset();
+
+    var prepared = try vision.prepareImageAsTensor(allocator, &src, image_size);
     defer prepared.deinit();
+    const preprocess_ns = timer.read();
+    timer.reset();
 
     var detections = try runtime.runGraph(allocator, model_graph, weights_blob, &prepared.tensor, .{
         .score_threshold = 0.25,
@@ -166,13 +175,28 @@ fn runImageMode(
         .max_det = 300,
     });
     defer detections.deinit();
+    const infer_ns = timer.read();
+    timer.reset();
+
     vision.remapDetectionsToSource(detections.detections, prepared.info);
+    const postprocess_ns = timer.read();
+    const total_ns = decode_ns + preprocess_ns + infer_ns + postprocess_ns;
 
     try stdout.print("image_infer_path: {s}\n", .{image_path});
     try stdout.print("image_infer_size: {d}\n", .{image_size});
     try stdout.print("image_source_size: {d}x{d}\n", .{ prepared.info.src_width, prepared.info.src_height });
     try stdout.print("image_resized_size: {d}x{d}\n", .{ prepared.info.resized_width, prepared.info.resized_height });
     try stdout.print("image_padding: left={d} top={d}\n", .{ prepared.info.pad_left, prepared.info.pad_top });
+    try stdout.print(
+        "timing_ms: decode={d:.3} preprocess={d:.3} infer={d:.3} postprocess={d:.3} total={d:.3}\n",
+        .{
+            nsToMs(decode_ns),
+            nsToMs(preprocess_ns),
+            nsToMs(infer_ns),
+            nsToMs(postprocess_ns),
+            nsToMs(total_ns),
+        },
+    );
     try stdout.print("detect_candidates: {d}\n", .{detections.candidate_count});
     try stdout.print("detect_kept: {d}\n", .{detections.detections.len});
     if (detections.detections.len > 0) {
@@ -194,6 +218,10 @@ fn runImageMode(
         try writeTraceJson(path, &trace);
         try stdout.print("trace_json_out: {s}\n", .{path});
     }
+}
+
+fn nsToMs(ns: u64) f64 {
+    return @as(f64, @floatFromInt(ns)) / 1_000_000.0;
 }
 
 fn writeDetectionsJson(path: []const u8, detections: *const runtime.DetectOutput) !void {
