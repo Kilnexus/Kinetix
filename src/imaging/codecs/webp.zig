@@ -703,10 +703,9 @@ fn decodeColorIndexedMainImageArgb(
     encoded_height: usize,
 ) !Vp8lArgbImage {
     const roles = [_]Vp8lImageRole{ .argb, .color_indexing };
-    const offsets = [_]usize{ 0, 1, 2, 3 };
     const bit_limit = payload.len * 8;
 
-    for (offsets) |offset| {
+    for (0..17) |offset| {
         const start_bit_pos = palette_end_bit_pos + offset;
         if (start_bit_pos >= bit_limit) continue;
         for (roles) |role| {
