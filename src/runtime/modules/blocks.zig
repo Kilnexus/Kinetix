@@ -190,6 +190,34 @@ pub fn runC3k2(
     if (stem.shape[1] != chunk_channels * 2) return ops.OpError.ShapeMismatch;
 
     const module_list = model_graph.findModule(list_path) orelse return error.ModuleNotFound;
+    if (module_list.children.len == 1) {
+        var right = try utils.sliceChannels(allocator, &stem, chunk_channels, chunk_channels);
+        defer right.deinit();
+
+        const child = &module_list.children[0];
+        var child_out = if (std.mem.eql(u8, child.kind, "Bottleneck"))
+            try runBottleneck(allocator, model_graph, weights_blob, child.path, &right)
+        else if (std.mem.eql(u8, child.kind, "C3k"))
+            try runC3k(allocator, model_graph, weights_blob, child.path, &right)
+        else
+            try runModule(allocator, model_graph, weights_blob, child.path, &right);
+        defer child_out.deinit();
+
+        var concat = try Tensor.init(
+            allocator,
+            stem.shape[0],
+            chunk_channels + right.shape[1] + child_out.shape[1],
+            stem.shape[2],
+            stem.shape[3],
+        );
+        defer concat.deinit();
+
+        try ops.copyChannelRange(&stem, 0, chunk_channels, &concat, 0);
+        try ops.copyChannelRange(&right, 0, right.shape[1], &concat, chunk_channels);
+        try ops.copyChannelRange(&child_out, 0, child_out.shape[1], &concat, chunk_channels + right.shape[1]);
+        return try runConvModule(allocator, model_graph, weights_blob, cv2_path, &concat);
+    }
+
     var parts = try allocator.alloc(Tensor, 2 + module_list.children.len);
     defer allocator.free(parts);
 
