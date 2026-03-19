@@ -139,10 +139,23 @@ pub fn runC3k(
     defer left.deinit();
 
     const seq_node = model_graph.findModule(seq_path) orelse return error.ModuleNotFound;
-    for (seq_node.children) |child| {
-        const next = try runModule(allocator, model_graph, weights_blob, child.path, &left);
+    if (seq_node.children.len == 2 and
+        std.mem.eql(u8, seq_node.children[0].kind, "Bottleneck") and
+        std.mem.eql(u8, seq_node.children[1].kind, "Bottleneck"))
+    {
+        const next0 = try runBottleneck(allocator, model_graph, weights_blob, seq_node.children[0].path, &left);
         left.deinit();
-        left = next;
+        left = next0;
+
+        const next1 = try runBottleneck(allocator, model_graph, weights_blob, seq_node.children[1].path, &left);
+        left.deinit();
+        left = next1;
+    } else {
+        for (seq_node.children) |child| {
+            const next = try runModule(allocator, model_graph, weights_blob, child.path, &left);
+            left.deinit();
+            left = next;
+        }
     }
 
     var right = try runConvModule(allocator, model_graph, weights_blob, cv2_path, input);
