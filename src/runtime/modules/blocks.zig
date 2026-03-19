@@ -204,8 +204,12 @@ pub fn runC3k2(
 
     const module_list = model_graph.findModule(list_path) orelse return error.ModuleNotFound;
     if (module_list.children.len == 1) {
-        var right = try utils.sliceChannels(allocator, &stem, chunk_channels, chunk_channels);
-        defer right.deinit();
+        const right_is_view = stem.shape[0] == 1;
+        var right = if (right_is_view)
+            try utils.sliceChannelsViewBatch1(&stem, chunk_channels, chunk_channels)
+        else
+            try utils.sliceChannels(allocator, &stem, chunk_channels, chunk_channels);
+        defer if (!right_is_view) right.deinit();
 
         const child = &module_list.children[0];
         var child_out = if (std.mem.eql(u8, child.kind, "Bottleneck"))

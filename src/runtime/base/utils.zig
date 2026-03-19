@@ -39,6 +39,24 @@ pub fn sliceChannels(
     return output;
 }
 
+pub fn sliceChannelsViewBatch1(
+    input: *const Tensor,
+    channel_start: usize,
+    channel_count: usize,
+) ops.OpError!Tensor {
+    if (input.shape[0] != 1) return ops.OpError.ShapeMismatch;
+    if (channel_start + channel_count > input.shape[1]) return ops.OpError.ShapeMismatch;
+
+    const plane = input.shape[2] * input.shape[3];
+    const start = channel_start * plane;
+    const len = channel_count * plane;
+    return .{
+        .allocator = undefined,
+        .data = input.data[start..][0..len],
+        .shape = .{ 1, channel_count, input.shape[2], input.shape[3] },
+    };
+}
+
 pub fn tensorView(meta: *const graph.TensorMeta, data: []const f32) Tensor {
     return .{
         .allocator = undefined,

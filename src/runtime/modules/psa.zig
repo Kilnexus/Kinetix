@@ -182,14 +182,19 @@ pub fn runC2PSA(
     defer stem.deinit();
     if (stem.shape[1] != hidden_channels * 2) return ops.OpError.ShapeMismatch;
 
-    var right = try utils.sliceChannels(allocator, &stem, hidden_channels, hidden_channels);
-    defer right.deinit();
+    var right_is_owned = stem.shape[0] != 1;
+    var right = if (right_is_owned)
+        try utils.sliceChannels(allocator, &stem, hidden_channels, hidden_channels)
+    else
+        try utils.sliceChannelsViewBatch1(&stem, hidden_channels, hidden_channels);
+    defer if (right_is_owned) right.deinit();
 
     const seq = model_graph.findModule(seq_path) orelse return error.ModuleNotFound;
     for (seq.children) |child| {
         const next = try blocks.runModule(allocator, model_graph, weights_blob, child.path, &right);
-        right.deinit();
+        if (right_is_owned) right.deinit();
         right = next;
+        right_is_owned = true;
     }
 
     var concat = try Tensor.init(allocator, stem.shape[0], hidden_channels * 2, stem.shape[2], stem.shape[3]);
