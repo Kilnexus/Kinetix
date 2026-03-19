@@ -65,6 +65,7 @@ pub fn runGraph(
 
     var outputs = try scratch.alloc(?Tensor, model_graph.execution_nodes.len);
     for (outputs) |*item| item.* = null;
+    const use_counts = try buildUseCounts(scratch, model_graph);
     defer {
         for (outputs) |*item| {
             if (item.*) |*tensor| tensor.deinit();
@@ -89,6 +90,7 @@ pub fn runGraph(
                 feature_ptrs,
                 detect_options,
             );
+            releaseInputs(node.from, node_index, use_counts, outputs);
             continue;
         }
 
@@ -108,10 +110,11 @@ pub fn runGraph(
                 }
             }
 
-            var merged = try Tensor.init(scratch, tensor_ptrs[0].shape[0], channels, height, width);
+            var merged = try Tensor.init(allocator, tensor_ptrs[0].shape[0], channels, height, width);
             errdefer merged.deinit();
             try ops.concatChannels(tensor_ptrs, &merged);
             outputs[node_index] = merged;
+            releaseInputs(node.from, node_index, use_counts, outputs);
             continue;
         }
 
@@ -120,10 +123,11 @@ pub fn runGraph(
         const module_path = try modulePathForNode(&module_path_buffer, node.path);
 
         const output = if (std.mem.eql(u8, node.kind, "Upsample"))
-            try runUpsampleModule(scratch, model_graph, module_path, source)
+            try runUpsampleModule(allocator, model_graph, module_path, source)
         else
-            try blocks.runModule(scratch, model_graph, weights_blob, module_path, source);
+            try blocks.runModule(allocator, model_graph, weights_blob, module_path, source);
         outputs[node_index] = output;
+        releaseInputs(node.from, node_index, use_counts, outputs);
     }
 
     return detect_output orelse error.ModuleNotFound;
@@ -142,6 +146,7 @@ pub fn profileGraph(
 
     var outputs = try scratch.alloc(?Tensor, model_graph.execution_nodes.len);
     for (outputs) |*item| item.* = null;
+    const use_counts = try buildUseCounts(scratch, model_graph);
     defer {
         for (outputs) |*item| {
             if (item.*) |*tensor| tensor.deinit();
@@ -176,6 +181,7 @@ pub fn profileGraph(
                 .elapsed_ns = timer.read(),
                 .detect_profile = profiled_detect.profile,
             };
+            releaseInputs(node.from, node_index, use_counts, outputs);
         } else if (std.mem.eql(u8, node.kind, "Concat")) {
             var tensor_ptrs = try scratch.alloc(*const Tensor, node.from.len);
 
@@ -192,7 +198,7 @@ pub fn profileGraph(
                 }
             }
 
-            var merged = try Tensor.init(scratch, tensor_ptrs[0].shape[0], channels, height, width);
+            var merged = try Tensor.init(allocator, tensor_ptrs[0].shape[0], channels, height, width);
             errdefer merged.deinit();
             try ops.concatChannels(tensor_ptrs, &merged);
             outputs[node_index] = merged;
@@ -201,21 +207,23 @@ pub fn profileGraph(
                 .kind = node.kind,
                 .elapsed_ns = timer.read(),
             };
+            releaseInputs(node.from, node_index, use_counts, outputs);
         } else {
             const source = resolveInput(node.from[0], node_index, input, outputs) orelse return error.ModuleNotFound;
             var module_path_buffer: [256]u8 = undefined;
             const module_path = try modulePathForNode(&module_path_buffer, node.path);
 
             const output = if (std.mem.eql(u8, node.kind, "Upsample"))
-                try runUpsampleModule(scratch, model_graph, module_path, source)
+                try runUpsampleModule(allocator, model_graph, module_path, source)
             else
-                try blocks.runModule(scratch, model_graph, weights_blob, module_path, source);
+                try blocks.runModule(allocator, model_graph, weights_blob, module_path, source);
             outputs[node_index] = output;
             profile_nodes[node_index] = .{
                 .path = node.path,
                 .kind = node.kind,
                 .elapsed_ns = timer.read(),
             };
+            releaseInputs(node.from, node_index, use_counts, outputs);
         }
     }
 
@@ -241,6 +249,47 @@ pub fn resolveInput(
     if (index >= outputs.len) return null;
     if (outputs[index]) |*tensor| return tensor;
     return null;
+}
+
+fn buildUseCounts(allocator: std.mem.Allocator, model_graph: *const graph.Graph) ![]usize {
+    const counts = try allocator.alloc(usize, model_graph.execution_nodes.len);
+    @memset(counts, 0);
+
+    for (model_graph.execution_nodes, 0..) |node, node_index| {
+        for (node.from) |source| {
+            if (source == -1) {
+                if (node_index > 0) counts[node_index - 1] += 1;
+            } else {
+                counts[@intCast(source)] += 1;
+            }
+        }
+    }
+    return counts;
+}
+
+fn releaseInputs(
+    from_list: []const i64,
+    node_index: usize,
+    use_counts: []usize,
+    outputs: []?Tensor,
+) void {
+    for (from_list) |source| {
+        const maybe_index: ?usize = if (source == -1)
+            if (node_index > 0) node_index - 1 else null
+        else
+            @intCast(source);
+
+        const index = maybe_index orelse continue;
+        if (index >= outputs.len) continue;
+        if (use_counts[index] == 0) continue;
+        use_counts[index] -= 1;
+        if (use_counts[index] == 0) {
+            if (outputs[index]) |*tensor| {
+                tensor.deinit();
+                outputs[index] = null;
+            }
+        }
+    }
 }
 
 pub fn modulePathForNode(buffer: []u8, path: []const u8) RuntimeError![]const u8 {

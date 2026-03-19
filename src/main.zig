@@ -16,6 +16,8 @@ const ImageTimings = struct {
     }
 };
 
+const MemoryStats = runtime.AllocationStats;
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -187,15 +189,16 @@ fn runImageMode(
     trace_json_out_path: ?[]const u8,
 ) !void {
     const stdout = std.fs.File.stdout().deprecatedWriter();
-    var prepared_result = try runTimedImageInference(allocator, model_graph, weights_blob, image_path, image_size, .{
+    var tracker = runtime.TrackingAllocator.init(allocator);
+    defer tracker.deinit();
+
+    var prepared_result = try runTimedImageInference(tracker.allocator(), model_graph, weights_blob, image_path, image_size, .{
         .score_threshold = 0.25,
         .iou_threshold = 0.7,
         .max_det = 300,
     });
     var prepared = prepared_result.prepared;
-    defer prepared.deinit();
     var detections = prepared_result.detections;
-    defer detections.deinit();
 
     try stdout.print("image_infer_path: {s}\n", .{image_path});
     try stdout.print("image_infer_size: {d}\n", .{image_size});
@@ -233,6 +236,10 @@ fn runImageMode(
         try writeTraceJson(path, &trace);
         try stdout.print("trace_json_out: {s}\n", .{path});
     }
+
+    detections.deinit();
+    prepared.deinit();
+    try printMemoryStats(stdout, tracker.snapshot());
 }
 
 const TimedImageInference = struct {
@@ -296,11 +303,13 @@ fn runBenchmarkMode(
     try stdout.print("benchmark_warmup: {d}\n", .{warmup});
     try stdout.print("benchmark_iterations: {d}\n", .{iterations});
     try stdout.writeAll("benchmark_table_ms:\n");
-    try stdout.writeAll("size decode preprocess infer postprocess total\n");
+    try stdout.writeAll("size decode preprocess infer postprocess total alloc_mb peak_mb allocs\n");
 
     for (sizes) |image_size| {
         for (0..warmup) |_| {
-            var warm = try runTimedImageInference(allocator, model_graph, weights_blob, image_path, image_size, .{
+            var warm_tracker = runtime.TrackingAllocator.init(allocator);
+            defer warm_tracker.deinit();
+            var warm = try runTimedImageInference(warm_tracker.allocator(), model_graph, weights_blob, image_path, image_size, .{
                 .score_threshold = 0.25,
                 .iou_threshold = 0.7,
                 .max_det = 300,
@@ -313,19 +322,29 @@ fn runBenchmarkMode(
         var preprocess_sum: u64 = 0;
         var infer_sum: u64 = 0;
         var postprocess_sum: u64 = 0;
+        var total_alloc_sum: usize = 0;
+        var peak_live_max: usize = 0;
+        var alloc_count_sum: usize = 0;
         for (0..iterations) |_| {
-            var sample = try runTimedImageInference(allocator, model_graph, weights_blob, image_path, image_size, .{
+            var sample_tracker = runtime.TrackingAllocator.init(allocator);
+            defer sample_tracker.deinit();
+            var sample = try runTimedImageInference(sample_tracker.allocator(), model_graph, weights_blob, image_path, image_size, .{
                 .score_threshold = 0.25,
                 .iou_threshold = 0.7,
                 .max_det = 300,
             });
-            defer sample.detections.deinit();
-            defer sample.prepared.deinit();
 
             decode_sum += sample.timings.decode_ns;
             preprocess_sum += sample.timings.preprocess_ns;
             infer_sum += sample.timings.infer_ns;
             postprocess_sum += sample.timings.postprocess_ns;
+            sample.detections.deinit();
+            sample.prepared.deinit();
+
+            const mem = sample_tracker.snapshot();
+            total_alloc_sum += mem.total_allocated_bytes;
+            peak_live_max = @max(peak_live_max, mem.peak_live_bytes);
+            alloc_count_sum += mem.alloc_count;
         }
 
         const denom = @as(f64, @floatFromInt(iterations));
@@ -336,7 +355,7 @@ fn runBenchmarkMode(
         const total_avg = decode_avg + preprocess_avg + infer_avg + postprocess_avg;
 
         try stdout.print(
-            "{d} {d:.3} {d:.3} {d:.3} {d:.3} {d:.3}\n",
+            "{d} {d:.3} {d:.3} {d:.3} {d:.3} {d:.3} {d:.3} {d:.3} {d}\n",
             .{
                 image_size,
                 decode_avg / 1_000_000.0,
@@ -344,6 +363,9 @@ fn runBenchmarkMode(
                 infer_avg / 1_000_000.0,
                 postprocess_avg / 1_000_000.0,
                 total_avg / 1_000_000.0,
+                @as(f64, @floatFromInt(total_alloc_sum)) / denom / (1024.0 * 1024.0),
+                @as(f64, @floatFromInt(peak_live_max)) / (1024.0 * 1024.0),
+                @as(usize, @intFromFloat(@round(@as(f64, @floatFromInt(alloc_count_sum)) / denom))),
             },
         );
     }
@@ -411,6 +433,28 @@ fn runProfileMode(
 
 fn nsToMs(ns: u64) f64 {
     return @as(f64, @floatFromInt(ns)) / 1_000_000.0;
+}
+
+fn printMemoryStats(writer: anytype, stats: MemoryStats) !void {
+    try writer.print(
+        "memory: allocs={d} frees={d} resize={d} remap={d} failed={d} total_alloc_mb={d:.3} total_free_mb={d:.3} peak_live_mb={d:.3} live_end_mb={d:.3} outstanding={d}\n",
+        .{
+            stats.alloc_count,
+            stats.free_count,
+            stats.resize_count,
+            stats.remap_count,
+            stats.failed_alloc_count,
+            bytesToMiB(stats.total_allocated_bytes),
+            bytesToMiB(stats.total_freed_bytes),
+            bytesToMiB(stats.peak_live_bytes),
+            bytesToMiB(stats.live_bytes),
+            stats.outstanding_allocations,
+        },
+    );
+}
+
+fn bytesToMiB(bytes: usize) f64 {
+    return @as(f64, @floatFromInt(bytes)) / (1024.0 * 1024.0);
 }
 
 fn writeDetectionsJson(path: []const u8, detections: *const runtime.DetectOutput) !void {
