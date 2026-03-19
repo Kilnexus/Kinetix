@@ -41,6 +41,13 @@ pub fn build(b: *std.Build) void {
     runtime_mod.addImport("tensor", tensor_mod);
     runtime_mod.addImport("ops", ops_mod);
     runtime_mod.addImport("weights", weights_mod);
+    const vision_mod = b.createModule(.{
+        .root_source_file = b.path("src/vision/preprocess.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    vision_mod.addImport("imaging", imaging_mod);
+    vision_mod.addImport("runtime", runtime_mod);
 
     const exe = b.addExecutable(.{
         .name = "zig_yolo_inspect",
@@ -53,6 +60,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("graph", graph_mod);
     exe.root_module.addImport("imaging", imaging_mod);
     exe.root_module.addImport("runtime", runtime_mod);
+    exe.root_module.addImport("vision", vision_mod);
     exe.root_module.addImport("weights", weights_mod);
 
     b.installArtifact(exe);
@@ -76,6 +84,7 @@ pub fn build(b: *std.Build) void {
     unit_tests.root_module.addImport("weights", weights_mod);
     unit_tests.root_module.addImport("imaging", imaging_mod);
     unit_tests.root_module.addImport("runtime", runtime_mod);
+    unit_tests.root_module.addImport("vision", vision_mod);
 
     const run_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run Zig unit tests");
