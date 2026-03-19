@@ -182,8 +182,6 @@ pub fn runC2PSA(
     defer stem.deinit();
     if (stem.shape[1] != hidden_channels * 2) return ops.OpError.ShapeMismatch;
 
-    var left = try utils.sliceChannels(allocator, &stem, 0, hidden_channels);
-    defer left.deinit();
     var right = try utils.sliceChannels(allocator, &stem, hidden_channels, hidden_channels);
     defer right.deinit();
 
@@ -196,8 +194,8 @@ pub fn runC2PSA(
 
     var concat = try Tensor.init(allocator, stem.shape[0], hidden_channels * 2, stem.shape[2], stem.shape[3]);
     defer concat.deinit();
-    const inputs = [_]*const Tensor{ &left, &right };
-    try ops.concatChannels(&inputs, &concat);
+    try ops.copyChannelRange(&stem, 0, hidden_channels, &concat, 0);
+    try ops.copyChannelRange(&right, 0, hidden_channels, &concat, hidden_channels);
 
     return try blocks.runConvModule(allocator, model_graph, weights_blob, cv2_path, &concat);
 }

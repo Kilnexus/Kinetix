@@ -67,6 +67,7 @@ pub fn runDetect(
         const dfl_spec = try spec.resolveConvSpec(model_graph, dfl_conv_path);
         break :blk weights_blob.slice(dfl_spec.weight);
     } else null;
+    const score_logit_threshold = sigmoidThresholdToLogit(options.score_threshold);
 
     var candidates: std.ArrayListUnmanaged(Detection) = .empty;
     errdefer candidates.deinit(scratch_allocator);
@@ -90,16 +91,17 @@ pub fn runDetect(
             for (0..reg.shape[2]) |y| {
                 for (0..reg.shape[3]) |x| {
                     const spatial_index = y * reg.shape[3] + x;
-                    var best_score: f32 = 0.0;
+                    var best_logit: f32 = -std.math.inf(f32);
                     var best_class: usize = 0;
                     for (0..nc) |class_idx| {
-                        const score = sigmoid(cls.data[cls_batch_base + class_idx * cls_plane + spatial_index]);
-                        if (score > best_score) {
-                            best_score = score;
+                        const logit = cls.data[cls_batch_base + class_idx * cls_plane + spatial_index];
+                        if (logit > best_logit) {
+                            best_logit = logit;
                             best_class = class_idx;
                         }
                     }
-                    if (best_score < options.score_threshold) continue;
+                    if (best_logit < score_logit_threshold) continue;
+                    const best_score = sigmoid(best_logit);
 
                     const anchor_x = (@as(f32, @floatFromInt(x)) + 0.5) * stride;
                     const anchor_y = (@as(f32, @floatFromInt(y)) + 0.5) * stride;
@@ -221,6 +223,12 @@ fn resolveDetectBranchName(
 
 fn sigmoid(value: f32) f32 {
     return 1.0 / (1.0 + @exp(-value));
+}
+
+fn sigmoidThresholdToLogit(threshold: f32) f32 {
+    if (threshold <= 0.0) return -std.math.inf(f32);
+    if (threshold >= 1.0) return std.math.inf(f32);
+    return @log(threshold / (1.0 - threshold));
 }
 
 fn nms(

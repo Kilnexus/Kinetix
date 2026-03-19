@@ -198,12 +198,10 @@ pub fn runC3k2(
         for (parts[0..initialized_parts]) |*part| part.deinit();
     }
 
-    parts[0] = try utils.sliceChannels(allocator, &stem, 0, chunk_channels);
-    initialized_parts += 1;
-    parts[1] = try utils.sliceChannels(allocator, &stem, chunk_channels, chunk_channels);
+    parts[0] = try utils.sliceChannels(allocator, &stem, chunk_channels, chunk_channels);
     initialized_parts += 1;
 
-    var current_index: usize = 1;
+    var current_index: usize = 0;
     for (module_list.children) |child| {
         parts[initialized_parts] = try runModule(allocator, model_graph, weights_blob, child.path, &parts[current_index]);
         current_index = initialized_parts;
@@ -213,14 +211,8 @@ pub fn runC3k2(
         for (parts[0..initialized_parts]) |*part| part.deinit();
     }
 
-    var input_ptrs = try allocator.alloc(*const Tensor, initialized_parts);
-    defer allocator.free(input_ptrs);
-
-    var concat_channels: usize = 0;
-    for (parts[0..initialized_parts], 0..) |*part, index| {
-        input_ptrs[index] = part;
-        concat_channels += part.shape[1];
-    }
+    var concat_channels: usize = chunk_channels;
+    for (parts[0..initialized_parts]) |*part| concat_channels += part.shape[1];
 
     var concat = try Tensor.init(
         allocator,
@@ -230,7 +222,13 @@ pub fn runC3k2(
         stem.shape[3],
     );
     defer concat.deinit();
-    try ops.concatChannels(input_ptrs, &concat);
+
+    try ops.copyChannelRange(&stem, 0, chunk_channels, &concat, 0);
+    var channel_offset = chunk_channels;
+    for (parts[0..initialized_parts]) |*part| {
+        try ops.copyChannelRange(part, 0, part.shape[1], &concat, channel_offset);
+        channel_offset += part.shape[1];
+    }
 
     return try runConvModule(allocator, model_graph, weights_blob, cv2_path, &concat);
 }
