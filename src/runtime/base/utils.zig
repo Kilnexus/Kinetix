@@ -23,13 +23,17 @@ pub fn sliceChannels(
         input.shape[3],
     );
 
+    const plane = input.shape[2] * input.shape[3];
+    const input_batch_stride = input.shape[1] * plane;
+    const output_batch_stride = channel_count * plane;
+
     for (0..input.shape[0]) |n| {
+        const input_batch_base = n * input_batch_stride;
+        const output_batch_base = n * output_batch_stride;
         for (0..channel_count) |c| {
-            for (0..input.shape[2]) |y| {
-                for (0..input.shape[3]) |x| {
-                    output.set(n, c, y, x, input.get(n, channel_start + c, y, x));
-                }
-            }
+            const src = input.data[input_batch_base + (channel_start + c) * plane ..][0..plane];
+            const dst = output.data[output_batch_base + c * plane ..][0..plane];
+            @memcpy(dst, src);
         }
     }
     return output;

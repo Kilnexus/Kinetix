@@ -18,7 +18,9 @@ pub const Conv2DOptions = struct {
     groups: usize = 1,
 };
 
-const max_conv_threads = 8;
+const max_supported_conv_threads = 4;
+const conv_thread_cap = 4;
+const conv_parallel_min_workload = 2_000_000;
 
 pub fn siluInPlace(tensor: *Tensor) void {
     for (tensor.data) |*value| {
@@ -210,7 +212,7 @@ fn conv2dGeneralParallel(
     options: Conv2DOptions,
     thread_count: usize,
 ) OpError!void {
-    var threads: [max_conv_threads - 1]std.Thread = undefined;
+    var threads: [max_supported_conv_threads - 1]std.Thread = undefined;
     var spawned: usize = 0;
     const out_channels = weights.shape[0];
 
@@ -338,7 +340,7 @@ fn conv2dPointwiseParallel(
     groups: usize,
     thread_count: usize,
 ) OpError!void {
-    var threads: [max_conv_threads - 1]std.Thread = undefined;
+    var threads: [max_supported_conv_threads - 1]std.Thread = undefined;
     var spawned: usize = 0;
     const out_channels = weights.shape[0];
 
@@ -440,9 +442,8 @@ fn conv2dPointwiseWorker(task: Conv2DPointwiseTask) void {
 }
 
 fn chooseConvThreadCount(workload: usize, out_channels: usize) usize {
-    if (out_channels < 2 or workload < 200_000) return 1;
-    const cpu_count = std.Thread.getCpuCount() catch 1;
-    return @min(@min(cpu_count, out_channels), max_conv_threads);
+    if (out_channels < 2 or workload < conv_parallel_min_workload) return 1;
+    return @min(out_channels, conv_thread_cap);
 }
 
 pub fn matmul(

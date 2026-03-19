@@ -37,6 +37,7 @@ pub const DetectOutput = struct {
 
 pub fn runDetect(
     allocator: std.mem.Allocator,
+    scratch_allocator: std.mem.Allocator,
     model_graph: *const graph.Graph,
     weights_blob: *const weights_mod.WeightsBlob,
     module_path: []const u8,
@@ -68,12 +69,12 @@ pub fn runDetect(
     } else null;
 
     var candidates: std.ArrayListUnmanaged(Detection) = .empty;
-    errdefer candidates.deinit(allocator);
+    errdefer candidates.deinit(scratch_allocator);
 
     for (feature_inputs, 0..) |feature, level| {
-        var reg = try runDetectBranch(allocator, model_graph, weights_blob, module_path, reg_branch_name, level, feature);
+        var reg = try runDetectBranch(scratch_allocator, model_graph, weights_blob, module_path, reg_branch_name, level, feature);
         defer reg.deinit();
-        var cls = try runDetectBranch(allocator, model_graph, weights_blob, module_path, cls_branch_name, level, feature);
+        var cls = try runDetectBranch(scratch_allocator, model_graph, weights_blob, module_path, cls_branch_name, level, feature);
         defer cls.deinit();
 
         if (reg.shape[0] != cls.shape[0] or reg.shape[2] != cls.shape[2] or reg.shape[3] != cls.shape[3]) {
@@ -81,13 +82,18 @@ pub fn runDetect(
         }
 
         const stride = model_graph.strides[level];
+        const reg_plane = reg.shape[2] * reg.shape[3];
+        const cls_plane = cls.shape[2] * cls.shape[3];
         for (0..reg.shape[0]) |n| {
+            const reg_batch_base = n * reg.shape[1] * reg_plane;
+            const cls_batch_base = n * cls.shape[1] * cls_plane;
             for (0..reg.shape[2]) |y| {
                 for (0..reg.shape[3]) |x| {
+                    const spatial_index = y * reg.shape[3] + x;
                     var best_score: f32 = 0.0;
                     var best_class: usize = 0;
                     for (0..nc) |class_idx| {
-                        const score = sigmoid(cls.get(n, class_idx, y, x));
+                        const score = sigmoid(cls.data[cls_batch_base + class_idx * cls_plane + spatial_index]);
                         if (score > best_score) {
                             best_score = score;
                             best_class = class_idx;
@@ -98,12 +104,12 @@ pub fn runDetect(
                     const anchor_x = (@as(f32, @floatFromInt(x)) + 0.5) * stride;
                     const anchor_y = (@as(f32, @floatFromInt(y)) + 0.5) * stride;
 
-                    const left = dflExpectation(&reg, dfl_weights, reg_max, n, 0, y, x);
-                    const top = dflExpectation(&reg, dfl_weights, reg_max, n, 1, y, x);
-                    const right = dflExpectation(&reg, dfl_weights, reg_max, n, 2, y, x);
-                    const bottom = dflExpectation(&reg, dfl_weights, reg_max, n, 3, y, x);
+                    const left = dflExpectation(&reg, dfl_weights, reg_max, reg_batch_base, reg_plane, spatial_index, 0);
+                    const top = dflExpectation(&reg, dfl_weights, reg_max, reg_batch_base, reg_plane, spatial_index, 1);
+                    const right = dflExpectation(&reg, dfl_weights, reg_max, reg_batch_base, reg_plane, spatial_index, 2);
+                    const bottom = dflExpectation(&reg, dfl_weights, reg_max, reg_batch_base, reg_plane, spatial_index, 3);
 
-                    try candidates.append(allocator, .{
+                    try candidates.append(scratch_allocator, .{
                         .x1 = anchor_x - left * stride,
                         .y1 = anchor_y - top * stride,
                         .x2 = anchor_x + right * stride,
@@ -117,8 +123,8 @@ pub fn runDetect(
     }
 
     const candidate_count = candidates.items.len;
-    const selected = try nms(allocator, candidates.items, options);
-    candidates.deinit(allocator);
+    const selected = try nms(scratch_allocator, allocator, candidates.items, options);
+    candidates.deinit(scratch_allocator);
 
     return .{
         .allocator = allocator,
@@ -169,27 +175,27 @@ fn dflExpectation(
     reg: *const Tensor,
     dfl_weights: ?[]const f32,
     reg_max: usize,
-    batch: usize,
+    reg_batch_base: usize,
+    reg_plane: usize,
+    spatial_index: usize,
     side: usize,
-    y: usize,
-    x: usize,
 ) f32 {
     if (reg_max == 1) {
-        return reg.get(batch, side, y, x);
+        return reg.data[reg_batch_base + side * reg_plane + spatial_index];
     }
 
     const weights = dfl_weights orelse unreachable;
     const channel_base = side * reg_max;
-    var max_logit = reg.get(batch, channel_base, y, x);
+    var max_logit = reg.data[reg_batch_base + channel_base * reg_plane + spatial_index];
     for (1..reg_max) |bin| {
-        const value = reg.get(batch, channel_base + bin, y, x);
+        const value = reg.data[reg_batch_base + (channel_base + bin) * reg_plane + spatial_index];
         if (value > max_logit) max_logit = value;
     }
 
     var denom: f32 = 0.0;
     var numer: f32 = 0.0;
     for (0..reg_max) |bin| {
-        const prob = @exp(reg.get(batch, channel_base + bin, y, x) - max_logit);
+        const prob = @exp(reg.data[reg_batch_base + (channel_base + bin) * reg_plane + spatial_index] - max_logit);
         denom += prob;
         numer += prob * weights[bin];
     }
@@ -218,16 +224,17 @@ fn sigmoid(value: f32) f32 {
 }
 
 fn nms(
-    allocator: std.mem.Allocator,
+    scratch_allocator: std.mem.Allocator,
+    output_allocator: std.mem.Allocator,
     detections: []const Detection,
     options: DetectOptions,
 ) ![]Detection {
-    var states = try allocator.alloc(u8, detections.len);
-    defer allocator.free(states);
+    var states = try scratch_allocator.alloc(u8, detections.len);
+    defer scratch_allocator.free(states);
     @memset(states, 0);
 
     var selected: std.ArrayListUnmanaged(Detection) = .empty;
-    errdefer selected.deinit(allocator);
+    errdefer selected.deinit(output_allocator);
 
     while (selected.items.len < options.max_det) {
         var best_index: ?usize = null;
@@ -243,7 +250,7 @@ fn nms(
 
         const winner = best_index orelse break;
         states[winner] = 2;
-        try selected.append(allocator, detections[winner]);
+        try selected.append(output_allocator, detections[winner]);
 
         for (detections, 0..) |det, index| {
             if (states[index] != 0) continue;
@@ -254,7 +261,7 @@ fn nms(
         }
     }
 
-    return try selected.toOwnedSlice(allocator);
+    return try selected.toOwnedSlice(output_allocator);
 }
 
 fn iou(lhs: Detection, rhs: Detection) f32 {
