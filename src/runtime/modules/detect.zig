@@ -93,8 +93,8 @@ pub fn runDetectProfile(
 
     if (feature_inputs.len != nl or model_graph.strides.len != nl) return error.InvalidAttributeType;
 
-    const reg_branch_name = resolveDetectBranchName(model_graph, module_path, "cv2", "one2one_cv2") orelse return error.ModuleNotFound;
-    const cls_branch_name = resolveDetectBranchName(model_graph, module_path, "cv3", "one2one_cv3") orelse return error.ModuleNotFound;
+    const reg_branch = resolveDetectBranch(model_graph, module_path, "cv2", "one2one_cv2") orelse return error.ModuleNotFound;
+    const cls_branch = resolveDetectBranch(model_graph, module_path, "cv3", "one2one_cv3") orelse return error.ModuleNotFound;
     const dfl_weights = if (reg_max > 1) blk: {
         var dfl_conv_buffer: [256]u8 = undefined;
         const dfl_conv_path = try utils.childModulePath(&dfl_conv_buffer, module_path, "dfl.conv");
@@ -109,9 +109,9 @@ pub fn runDetectProfile(
 
     for (feature_inputs, 0..) |feature, level| {
         var branch_timer = try std.time.Timer.start();
-        var reg = try runDetectBranch(scratch_allocator, model_graph, weights_blob, module_path, reg_branch_name, level, feature);
+        var reg = try runDetectBranch(scratch_allocator, model_graph, weights_blob, reg_branch, level, feature);
         defer reg.deinit();
-        var cls = try runDetectBranch(scratch_allocator, model_graph, weights_blob, module_path, cls_branch_name, level, feature);
+        var cls = try runDetectBranch(scratch_allocator, model_graph, weights_blob, cls_branch, level, feature);
         defer cls.deinit();
         profile.branch_ns += branch_timer.read();
 
@@ -185,16 +185,21 @@ fn runDetectBranch(
     allocator: std.mem.Allocator,
     model_graph: *const graph.Graph,
     weights_blob: *const weights_mod.WeightsBlob,
-    detect_path: []const u8,
-    branch_name: []const u8,
+    branch: *const graph.ModuleNode,
     branch_index: usize,
     input: *const Tensor,
 ) !Tensor {
-    var branch_path_buffer: [256]u8 = undefined;
-    const branch_path = try utils.childModulePath(&branch_path_buffer, detect_path, branch_name);
-    const branch = model_graph.findModule(branch_path) orelse return error.ModuleNotFound;
     if (branch_index >= branch.children.len) return error.InvalidAttributeType;
-    return runNodeChain(allocator, model_graph, weights_blob, &branch.children[branch_index], input);
+    const node = &branch.children[branch_index];
+
+    if (matchesDetectCv2Branch(node)) {
+        return runDetectCv2Branch(allocator, model_graph, weights_blob, node, input);
+    }
+    if (matchesDetectCv3Branch(node)) {
+        return runDetectCv3Branch(allocator, model_graph, weights_blob, node, input);
+    }
+
+    return runNodeChain(allocator, model_graph, weights_blob, node, input);
 }
 
 fn runNodeChain(
@@ -250,21 +255,84 @@ fn dflExpectation(
     return numer / denom;
 }
 
-fn resolveDetectBranchName(
+fn resolveDetectBranch(
     model_graph: *const graph.Graph,
     module_path: []const u8,
     primary: []const u8,
     fallback: []const u8,
-) ?[]const u8 {
+) ?*const graph.ModuleNode {
     var branch_path_buffer: [256]u8 = undefined;
     const primary_path = utils.childModulePath(&branch_path_buffer, module_path, primary) catch return null;
-    if (model_graph.findModule(primary_path) != null) return primary;
+    if (model_graph.findModule(primary_path)) |branch| return branch;
 
     var fallback_path_buffer: [256]u8 = undefined;
     const fallback_path = utils.childModulePath(&fallback_path_buffer, module_path, fallback) catch return null;
-    if (model_graph.findModule(fallback_path) != null) return fallback;
+    if (model_graph.findModule(fallback_path)) |branch| return branch;
 
     return null;
+}
+
+fn matchesDetectCv2Branch(node: *const graph.ModuleNode) bool {
+    return std.mem.eql(u8, node.kind, "Sequential") and
+        node.children.len == 3 and
+        std.mem.eql(u8, node.children[0].kind, "Conv") and
+        std.mem.eql(u8, node.children[1].kind, "Conv") and
+        std.mem.eql(u8, node.children[2].kind, "Conv2d");
+}
+
+fn matchesDetectCv3Stage(node: *const graph.ModuleNode) bool {
+    return std.mem.eql(u8, node.kind, "Sequential") and
+        node.children.len == 2 and
+        std.mem.eql(u8, node.children[0].kind, "DWConv") and
+        std.mem.eql(u8, node.children[1].kind, "Conv");
+}
+
+fn matchesDetectCv3Branch(node: *const graph.ModuleNode) bool {
+    return std.mem.eql(u8, node.kind, "Sequential") and
+        node.children.len == 3 and
+        matchesDetectCv3Stage(&node.children[0]) and
+        matchesDetectCv3Stage(&node.children[1]) and
+        std.mem.eql(u8, node.children[2].kind, "Conv2d");
+}
+
+fn runDetectCv2Branch(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    node: *const graph.ModuleNode,
+    input: *const Tensor,
+) !Tensor {
+    var hidden0 = try blocks.runConvModule(allocator, model_graph, weights_blob, node.children[0].path, input);
+    defer hidden0.deinit();
+    var hidden1 = try blocks.runConvModule(allocator, model_graph, weights_blob, node.children[1].path, &hidden0);
+    defer hidden1.deinit();
+    return try blocks.runConvModule(allocator, model_graph, weights_blob, node.children[2].path, &hidden1);
+}
+
+fn runDetectCv3Stage(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    node: *const graph.ModuleNode,
+    input: *const Tensor,
+) !Tensor {
+    var hidden = try blocks.runConvModule(allocator, model_graph, weights_blob, node.children[0].path, input);
+    defer hidden.deinit();
+    return try blocks.runConvModule(allocator, model_graph, weights_blob, node.children[1].path, &hidden);
+}
+
+fn runDetectCv3Branch(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    node: *const graph.ModuleNode,
+    input: *const Tensor,
+) !Tensor {
+    var hidden0 = try runDetectCv3Stage(allocator, model_graph, weights_blob, &node.children[0], input);
+    defer hidden0.deinit();
+    var hidden1 = try runDetectCv3Stage(allocator, model_graph, weights_blob, &node.children[1], &hidden0);
+    defer hidden1.deinit();
+    return try blocks.runConvModule(allocator, model_graph, weights_blob, node.children[2].path, &hidden1);
 }
 
 fn sigmoid(value: f32) f32 {
