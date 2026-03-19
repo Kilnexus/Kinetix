@@ -145,8 +145,12 @@ pub const Graph = struct {
     tensors: []TensorMeta,
     execution_nodes: []ExecutionNode,
     module_tree: ModuleNode,
+    module_index: std.StringHashMapUnmanaged(*const ModuleNode),
+    tensor_index: std.StringHashMapUnmanaged(*const TensorMeta),
 
     pub fn deinit(self: *Graph) void {
+        self.module_index.deinit(self.allocator);
+        self.tensor_index.deinit(self.allocator);
         self.allocator.free(self.model_name);
         self.allocator.free(self.strides);
         for (self.tensors) |tensor| self.allocator.free(tensor.name);
@@ -162,14 +166,11 @@ pub const Graph = struct {
     }
 
     pub fn findModule(self: *const Graph, target_path: []const u8) ?*const ModuleNode {
-        return self.module_tree.findByPath(target_path);
+        return self.module_index.get(target_path);
     }
 
     pub fn findTensor(self: *const Graph, tensor_name: []const u8) ?*const TensorMeta {
-        for (self.tensors) |*tensor| {
-            if (std.mem.eql(u8, tensor.name, tensor_name)) return tensor;
-        }
-        return null;
+        return self.tensor_index.get(tensor_name);
     }
 };
 
@@ -269,7 +270,7 @@ fn parseGraph(allocator: std.mem.Allocator, contents: []const u8) !Graph {
     var module_tree = try parseModuleNode(allocator, module_tree_json);
     errdefer module_tree.deinit(allocator);
 
-    return .{
+    var result = Graph{
         .allocator = allocator,
         .format_version = root.get("format_version").?.integer,
         .model_name = try allocator.dupe(u8, root.get("model_name").?.string),
@@ -278,7 +279,13 @@ fn parseGraph(allocator: std.mem.Allocator, contents: []const u8) !Graph {
         .tensors = tensors,
         .execution_nodes = execution_nodes,
         .module_tree = module_tree,
+        .module_index = .{},
+        .tensor_index = .{},
     };
+    errdefer result.deinit();
+
+    try indexGraph(&result);
+    return result;
 }
 
 fn parseModuleNode(allocator: std.mem.Allocator, node_value: std.json.Value) !ModuleNode {
@@ -363,6 +370,28 @@ fn parseAttrValue(allocator: std.mem.Allocator, value: std.json.Value) !AttrValu
         },
         else => error.UnsupportedJsonValue,
     };
+}
+
+fn indexGraph(model_graph: *Graph) !void {
+    try model_graph.tensor_index.ensureTotalCapacity(model_graph.allocator, @intCast(model_graph.tensors.len));
+    for (model_graph.tensors) |*tensor| {
+        model_graph.tensor_index.putAssumeCapacity(tensor.name, tensor);
+    }
+
+    const module_count = countModules(&model_graph.module_tree);
+    try model_graph.module_index.ensureTotalCapacity(model_graph.allocator, @intCast(module_count));
+    indexModuleNode(&model_graph.module_index, &model_graph.module_tree);
+}
+
+fn countModules(node: *const ModuleNode) usize {
+    var total: usize = 1;
+    for (node.children) |*child| total += countModules(child);
+    return total;
+}
+
+fn indexModuleNode(index: *std.StringHashMapUnmanaged(*const ModuleNode), node: *const ModuleNode) void {
+    index.putAssumeCapacity(node.path, node);
+    for (node.children) |*child| indexModuleNode(index, child);
 }
 
 test "parseGraph exposes module tree and attrs" {
