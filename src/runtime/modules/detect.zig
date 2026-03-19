@@ -35,6 +35,19 @@ pub const DetectOutput = struct {
     }
 };
 
+pub const DetectProfile = struct {
+    branch_ns: u64 = 0,
+    decode_ns: u64 = 0,
+    nms_ns: u64 = 0,
+    candidate_count: usize = 0,
+    kept_count: usize = 0,
+};
+
+pub const ProfiledDetectOutput = struct {
+    output: DetectOutput,
+    profile: DetectProfile,
+};
+
 pub fn runDetect(
     allocator: std.mem.Allocator,
     scratch_allocator: std.mem.Allocator,
@@ -44,6 +57,27 @@ pub fn runDetect(
     feature_inputs: []const *const Tensor,
     options: DetectOptions,
 ) !DetectOutput {
+    const profiled = try runDetectProfile(
+        allocator,
+        scratch_allocator,
+        model_graph,
+        weights_blob,
+        module_path,
+        feature_inputs,
+        options,
+    );
+    return profiled.output;
+}
+
+pub fn runDetectProfile(
+    allocator: std.mem.Allocator,
+    scratch_allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module_path: []const u8,
+    feature_inputs: []const *const Tensor,
+    options: DetectOptions,
+) !ProfiledDetectOutput {
     const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
     if (!std.mem.eql(u8, module.kind, "Detect")) return error.InvalidModuleKind;
 
@@ -68,20 +102,24 @@ pub fn runDetect(
         break :blk weights_blob.slice(dfl_spec.weight);
     } else null;
     const score_logit_threshold = sigmoidThresholdToLogit(options.score_threshold);
+    var profile = DetectProfile{};
 
     var candidates: std.ArrayListUnmanaged(Detection) = .empty;
     errdefer candidates.deinit(scratch_allocator);
 
     for (feature_inputs, 0..) |feature, level| {
+        var branch_timer = try std.time.Timer.start();
         var reg = try runDetectBranch(scratch_allocator, model_graph, weights_blob, module_path, reg_branch_name, level, feature);
         defer reg.deinit();
         var cls = try runDetectBranch(scratch_allocator, model_graph, weights_blob, module_path, cls_branch_name, level, feature);
         defer cls.deinit();
+        profile.branch_ns += branch_timer.read();
 
         if (reg.shape[0] != cls.shape[0] or reg.shape[2] != cls.shape[2] or reg.shape[3] != cls.shape[3]) {
             return error.InvalidAttributeType;
         }
 
+        var decode_timer = try std.time.Timer.start();
         const stride = model_graph.strides[level];
         const reg_plane = reg.shape[2] * reg.shape[3];
         const cls_plane = cls.shape[2] * cls.shape[3];
@@ -122,16 +160,24 @@ pub fn runDetect(
                 }
             }
         }
+        profile.decode_ns += decode_timer.read();
     }
 
     const candidate_count = candidates.items.len;
+    profile.candidate_count = candidate_count;
+    var nms_timer = try std.time.Timer.start();
     const selected = try nms(scratch_allocator, allocator, candidates.items, options);
+    profile.nms_ns = nms_timer.read();
     candidates.deinit(scratch_allocator);
+    profile.kept_count = selected.len;
 
     return .{
-        .allocator = allocator,
-        .detections = selected,
-        .candidate_count = candidate_count,
+        .output = .{
+            .allocator = allocator,
+            .detections = selected,
+            .candidate_count = candidate_count,
+        },
+        .profile = profile,
     };
 }
 

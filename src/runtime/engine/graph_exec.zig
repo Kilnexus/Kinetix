@@ -14,6 +14,7 @@ pub const NodeProfile = struct {
     path: []const u8,
     kind: []const u8,
     elapsed_ns: u64,
+    detect_profile: ?detect.DetectProfile = null,
 };
 
 pub const GraphProfile = struct {
@@ -159,7 +160,7 @@ pub fn profileGraph(
                 feature_ptrs[source_index] = resolveInput(source, node_index, input, outputs) orelse return error.ModuleNotFound;
             }
             var module_path_buffer: [256]u8 = undefined;
-            var detect_output = try detect.runDetect(
+            var profiled_detect = try detect.runDetectProfile(
                 allocator,
                 scratch,
                 model_graph,
@@ -168,7 +169,13 @@ pub fn profileGraph(
                 feature_ptrs,
                 detect_options,
             );
-            detect_output.deinit();
+            profiled_detect.output.deinit();
+            profile_nodes[node_index] = .{
+                .path = node.path,
+                .kind = node.kind,
+                .elapsed_ns = timer.read(),
+                .detect_profile = profiled_detect.profile,
+            };
         } else if (std.mem.eql(u8, node.kind, "Concat")) {
             var tensor_ptrs = try scratch.alloc(*const Tensor, node.from.len);
 
@@ -189,6 +196,11 @@ pub fn profileGraph(
             errdefer merged.deinit();
             try ops.concatChannels(tensor_ptrs, &merged);
             outputs[node_index] = merged;
+            profile_nodes[node_index] = .{
+                .path = node.path,
+                .kind = node.kind,
+                .elapsed_ns = timer.read(),
+            };
         } else {
             const source = resolveInput(node.from[0], node_index, input, outputs) orelse return error.ModuleNotFound;
             var module_path_buffer: [256]u8 = undefined;
@@ -199,13 +211,12 @@ pub fn profileGraph(
             else
                 try blocks.runModule(scratch, model_graph, weights_blob, module_path, source);
             outputs[node_index] = output;
+            profile_nodes[node_index] = .{
+                .path = node.path,
+                .kind = node.kind,
+                .elapsed_ns = timer.read(),
+            };
         }
-
-        profile_nodes[node_index] = .{
-            .path = node.path,
-            .kind = node.kind,
-            .elapsed_ns = timer.read(),
-        };
     }
 
     return .{

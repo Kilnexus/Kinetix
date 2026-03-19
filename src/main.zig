@@ -394,6 +394,18 @@ fn runProfileMode(
             "{d} {d:.3} {s} {s}\n",
             .{ index + 1, nsToMs(node.elapsed_ns), node.kind, node.path },
         );
+        if (node.detect_profile) |detect_profile| {
+            try stdout.print(
+                "detect_profile_ms: branch={d:.3} decode={d:.3} nms={d:.3} candidates={d} kept={d}\n",
+                .{
+                    nsToMs(detect_profile.branch_ns),
+                    nsToMs(detect_profile.decode_ns),
+                    nsToMs(detect_profile.nms_ns),
+                    detect_profile.candidate_count,
+                    detect_profile.kept_count,
+                },
+            );
+        }
     }
 }
 
