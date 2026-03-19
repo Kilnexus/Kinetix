@@ -675,11 +675,10 @@ fn decodeVp8lColorIndexedPayloadArgb(
 
     const encoded_width = transform.next_image_width;
     const encoded_height = transform.next_image_height;
-    const main_header_info = try findColorIndexedMainImageHeader(payload, palette_image.end_bit_pos, encoded_width, encoded_height);
-    var indexed_image = try decodeVp8lImageDataSingleGroupArgb(
+    var indexed_image = try decodeColorIndexedMainImageArgb(
         allocator,
         payload,
-        main_header_info.header,
+        palette_image.end_bit_pos,
         encoded_width,
         encoded_height,
     );
@@ -696,37 +695,48 @@ fn decodeVp8lColorIndexedPayloadArgb(
     );
 }
 
-const ColorIndexedMainHeader = struct {
-    start_bit_pos: usize,
-    header: Vp8lImageDataHeader,
-};
-
-fn findColorIndexedMainImageHeader(
+fn decodeColorIndexedMainImageArgb(
+    allocator: std.mem.Allocator,
     payload: []const u8,
     palette_end_bit_pos: usize,
     encoded_width: usize,
     encoded_height: usize,
-) !ColorIndexedMainHeader {
-    const direct_header = inspectImageDataAtBitPos(payload, palette_end_bit_pos, encoded_width, encoded_height, .argb);
-    if (direct_header) |header| {
-        if (header.prefix_codes_start_bit_pos != null) {
-            return .{
-                .start_bit_pos = palette_end_bit_pos,
-                .header = header,
-            };
-        }
-    } else |_| {}
+) !Vp8lArgbImage {
+    const roles = [_]Vp8lImageRole{ .argb, .color_indexing };
+    const offsets = [_]usize{ 0, 1, 2, 3 };
+    const bit_limit = payload.len * 8;
 
-    var reader = Vp8lBitReader.initAtBit(payload, palette_end_bit_pos);
-    const next_transform_present = try reader.readBits(1);
-    if (next_transform_present != 0) return error.UnsupportedWebpBitstream;
-    const header = inspectImageDataAtBitPos(payload, reader.bit_pos, encoded_width, encoded_height, .argb) catch {
-        return error.UnsupportedWebpBitstream;
-    };
-    return .{
-        .start_bit_pos = reader.bit_pos,
-        .header = header,
-    };
+    for (offsets) |offset| {
+        const start_bit_pos = palette_end_bit_pos + offset;
+        if (start_bit_pos >= bit_limit) continue;
+        for (roles) |role| {
+            const header = inspectImageDataAtBitPos(payload, start_bit_pos, encoded_width, encoded_height, role) catch continue;
+            if (header.prefix_codes_start_bit_pos == null) continue;
+            const cache_bits = header.color_cache_bits orelse 0;
+            const green_alphabet_size = 256 + numLengthCodes + if (cache_bits == 0) @as(usize, 0) else (@as(usize, 1) << @intCast(cache_bits));
+            const stream = inspectVp8lEventStreamAtBitPos(
+                payload,
+                header.prefix_codes_start_bit_pos.?,
+                .{ green_alphabet_size, 256, 256, 256, numDistanceCodes },
+                encoded_width,
+                encoded_height,
+                cache_bits,
+                8,
+            ) catch continue;
+            _ = stream;
+
+            const decoded = decodeVp8lImageDataSingleGroupArgb(
+                allocator,
+                payload,
+                header,
+                encoded_width,
+                encoded_height,
+            ) catch continue;
+            return decoded;
+        }
+    }
+
+    return error.UnsupportedWebpBitstream;
 }
 
 fn restoreColorIndexPaletteInPlace(pixels: []u32) void {
