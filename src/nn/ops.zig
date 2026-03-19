@@ -18,6 +18,8 @@ pub const Conv2DOptions = struct {
     groups: usize = 1,
 };
 
+const max_conv_threads = 8;
+
 pub fn siluInPlace(tensor: *Tensor) void {
     for (tensor.data) |*value| {
         const x = value.*;
@@ -50,13 +52,25 @@ pub fn upsampleNearest(
         return OpError.InvalidOutputShape;
     }
 
+    const in_plane = input.shape[2] * input.shape[3];
+    const out_plane = output.shape[2] * output.shape[3];
+
     for (0..input.shape[0]) |n| {
+        const input_batch_base = n * input.shape[1] * in_plane;
+        const output_batch_base = n * output.shape[1] * out_plane;
         for (0..input.shape[1]) |c| {
-            for (0..output.shape[2]) |oy| {
-                const iy = oy / scale_h;
-                for (0..output.shape[3]) |ox| {
-                    const ix = ox / scale_w;
-                    output.set(n, c, oy, ox, input.get(n, c, iy, ix));
+            const input_channel = input.data[input_batch_base + c * in_plane ..][0..in_plane];
+            const output_channel = output.data[output_batch_base + c * out_plane ..][0..out_plane];
+            for (0..input.shape[2]) |iy| {
+                const input_row = input_channel[iy * input.shape[3] ..][0..input.shape[3]];
+                for (0..scale_h) |dy| {
+                    const output_row = output_channel[(iy * scale_h + dy) * output.shape[3] ..][0..output.shape[3]];
+                    for (input_row, 0..) |value, ix| {
+                        const out_x = ix * scale_w;
+                        for (0..scale_w) |dx| {
+                            output_row[out_x + dx] = value;
+                        }
+                    }
                 }
             }
         }
@@ -84,13 +98,14 @@ pub fn concatChannels(inputs: []const *const Tensor, output: *Tensor) OpError!vo
 
     var channel_offset: usize = 0;
     for (inputs) |input| {
+        const plane = height * width;
         for (0..batch) |n| {
+            const input_batch_base = n * input.shape[1] * plane;
+            const output_batch_base = n * output.shape[1] * plane;
             for (0..input.shape[1]) |c| {
-                for (0..height) |y| {
-                    for (0..width) |x| {
-                        output.set(n, channel_offset + c, y, x, input.get(n, c, y, x));
-                    }
-                }
+                const src = input.data[input_batch_base + c * plane ..][0..plane];
+                const dst = output.data[output_batch_base + (channel_offset + c) * plane ..][0..plane];
+                @memcpy(dst, src);
             }
         }
         channel_offset += input.shape[1];
@@ -174,15 +189,97 @@ pub fn conv2d(
         if (bias_values.len != out_channels) return OpError.ShapeMismatch;
     }
 
+    if (kernel_h == 1 and kernel_w == 1 and options.stride_h == 1 and options.stride_w == 1 and options.pad_h == 0 and options.pad_w == 0) {
+        return conv2dPointwise(input, weights, bias, output, options.groups);
+    }
+
+    const workload = batch * out_channels * expected_h * expected_w * kernel_h * kernel_w * (in_channels / options.groups);
+    const thread_count = chooseConvThreadCount(workload, out_channels);
+    if (thread_count > 1) {
+        return conv2dGeneralParallel(input, weights, bias, output, options, thread_count);
+    }
+
+    return conv2dGeneralRange(input, weights, bias, output, options, 0, out_channels);
+}
+
+fn conv2dGeneralParallel(
+    input: *const Tensor,
+    weights: *const Tensor,
+    bias: ?[]const f32,
+    output: *Tensor,
+    options: Conv2DOptions,
+    thread_count: usize,
+) OpError!void {
+    var threads: [max_conv_threads - 1]std.Thread = undefined;
+    var spawned: usize = 0;
+    const out_channels = weights.shape[0];
+
+    for (0..thread_count) |thread_index| {
+        const oc_start = (out_channels * thread_index) / thread_count;
+        const oc_end = (out_channels * (thread_index + 1)) / thread_count;
+        if (oc_start == oc_end) continue;
+
+        if (thread_index + 1 == thread_count) {
+            try conv2dGeneralRange(input, weights, bias, output, options, oc_start, oc_end);
+        } else {
+            threads[spawned] = std.Thread.spawn(.{}, conv2dGeneralWorker, .{
+                Conv2DTask{
+                    .input = input,
+                    .weights = weights,
+                    .bias = bias,
+                    .output = output,
+                    .options = options,
+                    .oc_start = oc_start,
+                    .oc_end = oc_end,
+                },
+            }) catch {
+                try conv2dGeneralRange(input, weights, bias, output, options, oc_start, oc_end);
+                continue;
+            };
+            spawned += 1;
+        }
+    }
+
+    for (threads[0..spawned]) |thread| thread.join();
+}
+
+fn conv2dGeneralRange(
+    input: *const Tensor,
+    weights: *const Tensor,
+    bias: ?[]const f32,
+    output: *Tensor,
+    options: Conv2DOptions,
+    oc_start: usize,
+    oc_end: usize,
+) OpError!void {
+    const batch = input.shape[0];
+    const in_channels = input.shape[1];
+    const in_height = input.shape[2];
+    const in_width = input.shape[3];
+    const out_channels = weights.shape[0];
+    const kernel_in_channels = weights.shape[1];
+    const kernel_h = weights.shape[2];
+    const kernel_w = weights.shape[3];
+    const expected_h = ((in_height + 2 * options.pad_h - kernel_h) / options.stride_h) + 1;
+    const expected_w = ((in_width + 2 * options.pad_w - kernel_w) / options.stride_w) + 1;
+
     const in_per_group = in_channels / options.groups;
     const out_per_group = out_channels / options.groups;
+    const input_channel_plane = in_height * in_width;
+    const output_channel_plane = expected_h * expected_w;
+    const weights_in_plane = kernel_h * kernel_w;
 
     for (0..batch) |n| {
-        for (0..out_channels) |oc| {
+        const input_batch_base = n * in_channels * input_channel_plane;
+        const output_batch_base = n * out_channels * output_channel_plane;
+        for (oc_start..oc_end) |oc| {
             const group_idx = oc / out_per_group;
             const in_channel_start = group_idx * in_per_group;
+            const output_channel_base = output_batch_base + oc * output_channel_plane;
+            const weights_channel_base = oc * kernel_in_channels * weights_in_plane;
 
             for (0..expected_h) |oy| {
+                const output_row_base = output_channel_base + oy * expected_w;
                 for (0..expected_w) |ox| {
                     var acc: f32 = if (bias) |bias_values| bias_values[oc] else 0.0;
                     const base_y = @as(isize, @intCast(oy * options.stride_h)) - @as(isize, @intCast(options.pad_h));
@@ -190,25 +287,162 @@ pub fn conv2d(
 
                     for (0..in_per_group) |ic_local| {
                         const ic = in_channel_start + ic_local;
+                        const input_channel_base = input_batch_base + ic * input_channel_plane;
+                        const weights_in_base = weights_channel_base + ic_local * weights_in_plane;
                         for (0..kernel_h) |ky| {
                             const in_y = base_y + @as(isize, @intCast(ky));
                             if (in_y < 0 or in_y >= @as(isize, @intCast(in_height))) continue;
+                            const input_row_base = input_channel_base + @as(usize, @intCast(in_y)) * in_width;
+                            const weights_row_base = weights_in_base + ky * kernel_w;
 
                             for (0..kernel_w) |kx| {
                                 const in_x = base_x + @as(isize, @intCast(kx));
                                 if (in_x < 0 or in_x >= @as(isize, @intCast(in_width))) continue;
-
-                                const input_value = input.get(n, ic, @intCast(in_y), @intCast(in_x));
-                                const weight_value = weights.get(oc, ic_local, ky, kx);
+                                const input_value = input.data[input_row_base + @as(usize, @intCast(in_x))];
+                                const weight_value = weights.data[weights_row_base + kx];
                                 acc += input_value * weight_value;
                             }
                         }
                     }
-                    output.set(n, oc, oy, ox, acc);
+                    output.data[output_row_base + ox] = acc;
                 }
             }
         }
     }
+}
+
+fn conv2dPointwise(
+    input: *const Tensor,
+    weights: *const Tensor,
+    bias: ?[]const f32,
+    output: *Tensor,
+    groups: usize,
+) OpError!void {
+    const batch = input.shape[0];
+    const out_channels = weights.shape[0];
+    const plane = input.shape[2] * input.shape[3];
+    const workload = batch * out_channels * plane * (input.shape[1] / groups);
+    const thread_count = chooseConvThreadCount(workload, out_channels);
+    if (thread_count > 1) {
+        return conv2dPointwiseParallel(input, weights, bias, output, groups, thread_count);
+    }
+
+    return conv2dPointwiseRange(input, weights, bias, output, groups, 0, out_channels);
+}
+
+fn conv2dPointwiseParallel(
+    input: *const Tensor,
+    weights: *const Tensor,
+    bias: ?[]const f32,
+    output: *Tensor,
+    groups: usize,
+    thread_count: usize,
+) OpError!void {
+    var threads: [max_conv_threads - 1]std.Thread = undefined;
+    var spawned: usize = 0;
+    const out_channels = weights.shape[0];
+
+    for (0..thread_count) |thread_index| {
+        const oc_start = (out_channels * thread_index) / thread_count;
+        const oc_end = (out_channels * (thread_index + 1)) / thread_count;
+        if (oc_start == oc_end) continue;
+
+        if (thread_index + 1 == thread_count) {
+            try conv2dPointwiseRange(input, weights, bias, output, groups, oc_start, oc_end);
+        } else {
+            threads[spawned] = std.Thread.spawn(.{}, conv2dPointwiseWorker, .{
+                Conv2DPointwiseTask{
+                    .input = input,
+                    .weights = weights,
+                    .bias = bias,
+                    .output = output,
+                    .groups = groups,
+                    .oc_start = oc_start,
+                    .oc_end = oc_end,
+                },
+            }) catch {
+                try conv2dPointwiseRange(input, weights, bias, output, groups, oc_start, oc_end);
+                continue;
+            };
+            spawned += 1;
+        }
+    }
+
+    for (threads[0..spawned]) |thread| thread.join();
+}
+
+fn conv2dPointwiseRange(
+    input: *const Tensor,
+    weights: *const Tensor,
+    bias: ?[]const f32,
+    output: *Tensor,
+    groups: usize,
+    oc_start: usize,
+    oc_end: usize,
+) OpError!void {
+    const batch = input.shape[0];
+    const in_channels = input.shape[1];
+    const height = input.shape[2];
+    const width = input.shape[3];
+    const out_channels = weights.shape[0];
+    const in_per_group = in_channels / groups;
+    const out_per_group = out_channels / groups;
+    const plane = height * width;
+
+    for (0..batch) |n| {
+        const input_batch_base = n * in_channels * plane;
+        const output_batch_base = n * out_channels * plane;
+        for (oc_start..oc_end) |oc| {
+            const group_idx = oc / out_per_group;
+            const in_channel_start = group_idx * in_per_group;
+            const out_slice = output.data[output_batch_base + oc * plane ..][0..plane];
+            const bias_value: f32 = if (bias) |bias_values| bias_values[oc] else 0.0;
+            @memset(out_slice, bias_value);
+
+            const weight_base = oc * in_per_group;
+            for (0..in_per_group) |ic_local| {
+                const input_slice = input.data[input_batch_base + (in_channel_start + ic_local) * plane ..][0..plane];
+                const weight_value = weights.data[weight_base + ic_local];
+                for (out_slice, input_slice) |*dst, src| {
+                    dst.* += src * weight_value;
+                }
+            }
+        }
+    }
+}
+
+const Conv2DTask = struct {
+    input: *const Tensor,
+    weights: *const Tensor,
+    bias: ?[]const f32,
+    output: *Tensor,
+    options: Conv2DOptions,
+    oc_start: usize,
+    oc_end: usize,
+};
+
+fn conv2dGeneralWorker(task: Conv2DTask) void {
+    conv2dGeneralRange(task.input, task.weights, task.bias, task.output, task.options, task.oc_start, task.oc_end) catch unreachable;
+}
+
+const Conv2DPointwiseTask = struct {
+    input: *const Tensor,
+    weights: *const Tensor,
+    bias: ?[]const f32,
+    output: *Tensor,
+    groups: usize,
+    oc_start: usize,
+    oc_end: usize,
+};
+
+fn conv2dPointwiseWorker(task: Conv2DPointwiseTask) void {
+    conv2dPointwiseRange(task.input, task.weights, task.bias, task.output, task.groups, task.oc_start, task.oc_end) catch unreachable;
+}
+
+fn chooseConvThreadCount(workload: usize, out_channels: usize) usize {
+    if (out_channels < 2 or workload < 200_000) return 1;
+    const cpu_count = std.Thread.getCpuCount() catch 1;
+    return @min(@min(cpu_count, out_channels), max_conv_threads);
 }
 
 pub fn matmul(
