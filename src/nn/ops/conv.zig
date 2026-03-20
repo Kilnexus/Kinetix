@@ -205,7 +205,96 @@ fn conv2d3x3Pad1Range(
     for (0..batch) |n| {
         const input_batch_base = n * in_channels * input_plane;
         const output_batch_base = n * out_channels * output_plane;
-        for (oc_start..oc_end) |oc| {
+        var oc = oc_start;
+        while (oc + 1 < oc_end) : (oc += 2) {
+            const weights0_channel_base = oc * in_channels * 9;
+            const weights1_channel_base = (oc + 1) * in_channels * 9;
+            const output0_channel_base = output_batch_base + oc * output_plane;
+            const output1_channel_base = output_batch_base + (oc + 1) * output_plane;
+            const bias0: f32 = if (bias) |bias_values| bias_values[oc] else 0.0;
+            const bias1: f32 = if (bias) |bias_values| bias_values[oc + 1] else 0.0;
+
+            for (0..expected_h) |oy| {
+                const base_y = @as(isize, @intCast(oy)) * stride_h - 1;
+                const output0_row_base = output0_channel_base + oy * expected_w;
+                const output1_row_base = output1_channel_base + oy * expected_w;
+                for (0..expected_w) |ox| {
+                    const base_x = @as(isize, @intCast(ox)) * stride_w - 1;
+                    var acc0: f32 = bias0;
+                    var acc1: f32 = bias1;
+
+                    const interior =
+                        base_y >= 0 and base_x >= 0 and
+                        base_y + 2 < @as(isize, @intCast(in_height)) and
+                        base_x + 2 < @as(isize, @intCast(in_width));
+
+                    for (0..in_channels) |ic| {
+                        const input_channel = input.data[input_batch_base + ic * input_plane ..][0..input_plane];
+                        const weight0_base = weights0_channel_base + ic * 9;
+                        const weight1_base = weights1_channel_base + ic * 9;
+                        if (interior) {
+                            const row0 = @as(usize, @intCast(base_y)) * in_width + @as(usize, @intCast(base_x));
+                            const row1 = row0 + in_width;
+                            const row2 = row1 + in_width;
+                            const v00 = input_channel[row0];
+                            const v01 = input_channel[row0 + 1];
+                            const v02 = input_channel[row0 + 2];
+                            const v10 = input_channel[row1];
+                            const v11 = input_channel[row1 + 1];
+                            const v12 = input_channel[row1 + 2];
+                            const v20 = input_channel[row2];
+                            const v21 = input_channel[row2 + 1];
+                            const v22 = input_channel[row2 + 2];
+
+                            acc0 += v00 * weights.data[weight0_base];
+                            acc0 += v01 * weights.data[weight0_base + 1];
+                            acc0 += v02 * weights.data[weight0_base + 2];
+                            acc0 += v10 * weights.data[weight0_base + 3];
+                            acc0 += v11 * weights.data[weight0_base + 4];
+                            acc0 += v12 * weights.data[weight0_base + 5];
+                            acc0 += v20 * weights.data[weight0_base + 6];
+                            acc0 += v21 * weights.data[weight0_base + 7];
+                            acc0 += v22 * weights.data[weight0_base + 8];
+
+                            acc1 += v00 * weights.data[weight1_base];
+                            acc1 += v01 * weights.data[weight1_base + 1];
+                            acc1 += v02 * weights.data[weight1_base + 2];
+                            acc1 += v10 * weights.data[weight1_base + 3];
+                            acc1 += v11 * weights.data[weight1_base + 4];
+                            acc1 += v12 * weights.data[weight1_base + 5];
+                            acc1 += v20 * weights.data[weight1_base + 6];
+                            acc1 += v21 * weights.data[weight1_base + 7];
+                            acc1 += v22 * weights.data[weight1_base + 8];
+                        } else {
+                            const y_start: usize = @intCast(@max(@as(isize, 0), base_y));
+                            const y_end: usize = @intCast(@min(@as(isize, @intCast(in_height)), base_y + 3));
+                            const x_start: usize = @intCast(@max(@as(isize, 0), base_x));
+                            const x_end: usize = @intCast(@min(@as(isize, @intCast(in_width)), base_x + 3));
+
+                            var iy = y_start;
+                            while (iy < y_end) : (iy += 1) {
+                                const ky = @as(usize, @intCast(@as(isize, @intCast(iy)) - base_y));
+                                const input_row_base = iy * in_width;
+                                const weight0_row_base = weight0_base + ky * 3;
+                                const weight1_row_base = weight1_base + ky * 3;
+                                var ix = x_start;
+                                while (ix < x_end) : (ix += 1) {
+                                    const kx = @as(usize, @intCast(@as(isize, @intCast(ix)) - base_x));
+                                    const v = input_channel[input_row_base + ix];
+                                    acc0 += v * weights.data[weight0_row_base + kx];
+                                    acc1 += v * weights.data[weight1_row_base + kx];
+                                }
+                            }
+                        }
+                    }
+
+                    output.data[output0_row_base + ox] = acc0;
+                    output.data[output1_row_base + ox] = acc1;
+                }
+            }
+        }
+
+        while (oc < oc_end) : (oc += 1) {
             const weights_channel_base = oc * in_channels * 9;
             const output_channel_base = output_batch_base + oc * output_plane;
             const bias_value: f32 = if (bias) |bias_values| bias_values[oc] else 0.0;
@@ -288,7 +377,133 @@ fn conv2d3x3Pad1Stride2Range(
     for (0..batch) |n| {
         const input_batch_base = n * in_channels * input_plane;
         const output_batch_base = n * out_channels * output_plane;
-        for (oc_start..oc_end) |oc| {
+        var oc = oc_start;
+        while (oc + 1 < oc_end) : (oc += 2) {
+            const weights0_channel_base = oc * in_channels * 9;
+            const weights1_channel_base = (oc + 1) * in_channels * 9;
+            const output0_channel_base = output_batch_base + oc * output_plane;
+            const output1_channel_base = output_batch_base + (oc + 1) * output_plane;
+            const bias0: f32 = if (bias) |bias_values| bias_values[oc] else 0.0;
+            const bias1: f32 = if (bias) |bias_values| bias_values[oc + 1] else 0.0;
+
+            for (0..expected_h) |oy| {
+                const output0_row_base = output0_channel_base + oy * expected_w;
+                const output1_row_base = output1_channel_base + oy * expected_w;
+                if (oy == 0 or oy >= interior_h_end) {
+                    for (0..expected_w) |ox| {
+                        output.data[output0_row_base + ox] = conv2d3x3Pad1Stride2Point(
+                            input,
+                            weights,
+                            bias0,
+                            input_batch_base,
+                            weights0_channel_base,
+                            oy,
+                            ox,
+                        );
+                        output.data[output1_row_base + ox] = conv2d3x3Pad1Stride2Point(
+                            input,
+                            weights,
+                            bias1,
+                            input_batch_base,
+                            weights1_channel_base,
+                            oy,
+                            ox,
+                        );
+                    }
+                    continue;
+                }
+
+                output.data[output0_row_base] = conv2d3x3Pad1Stride2Point(
+                    input,
+                    weights,
+                    bias0,
+                    input_batch_base,
+                    weights0_channel_base,
+                    oy,
+                    0,
+                );
+                output.data[output1_row_base] = conv2d3x3Pad1Stride2Point(
+                    input,
+                    weights,
+                    bias1,
+                    input_batch_base,
+                    weights1_channel_base,
+                    oy,
+                    0,
+                );
+
+                for (1..interior_w_end) |ox| {
+                    const output0_index = output0_row_base + ox;
+                    const output1_index = output1_row_base + ox;
+                    var acc0: f32 = bias0;
+                    var acc1: f32 = bias1;
+                    const row0 = (oy * 2 - 1) * in_width + (ox * 2 - 1);
+                    const row1 = row0 + in_width;
+                    const row2 = row1 + in_width;
+
+                    for (0..in_channels) |ic| {
+                        const input_channel = input.data[input_batch_base + ic * input_plane ..][0..input_plane];
+                        const weight0_base = weights0_channel_base + ic * 9;
+                        const weight1_base = weights1_channel_base + ic * 9;
+                        const v00 = input_channel[row0];
+                        const v01 = input_channel[row0 + 1];
+                        const v02 = input_channel[row0 + 2];
+                        const v10 = input_channel[row1];
+                        const v11 = input_channel[row1 + 1];
+                        const v12 = input_channel[row1 + 2];
+                        const v20 = input_channel[row2];
+                        const v21 = input_channel[row2 + 1];
+                        const v22 = input_channel[row2 + 2];
+
+                        acc0 += v00 * weights.data[weight0_base];
+                        acc0 += v01 * weights.data[weight0_base + 1];
+                        acc0 += v02 * weights.data[weight0_base + 2];
+                        acc0 += v10 * weights.data[weight0_base + 3];
+                        acc0 += v11 * weights.data[weight0_base + 4];
+                        acc0 += v12 * weights.data[weight0_base + 5];
+                        acc0 += v20 * weights.data[weight0_base + 6];
+                        acc0 += v21 * weights.data[weight0_base + 7];
+                        acc0 += v22 * weights.data[weight0_base + 8];
+
+                        acc1 += v00 * weights.data[weight1_base];
+                        acc1 += v01 * weights.data[weight1_base + 1];
+                        acc1 += v02 * weights.data[weight1_base + 2];
+                        acc1 += v10 * weights.data[weight1_base + 3];
+                        acc1 += v11 * weights.data[weight1_base + 4];
+                        acc1 += v12 * weights.data[weight1_base + 5];
+                        acc1 += v20 * weights.data[weight1_base + 6];
+                        acc1 += v21 * weights.data[weight1_base + 7];
+                        acc1 += v22 * weights.data[weight1_base + 8];
+                    }
+
+                    output.data[output0_index] = acc0;
+                    output.data[output1_index] = acc1;
+                }
+
+                for (interior_w_end..expected_w) |ox| {
+                    output.data[output0_row_base + ox] = conv2d3x3Pad1Stride2Point(
+                        input,
+                        weights,
+                        bias0,
+                        input_batch_base,
+                        weights0_channel_base,
+                        oy,
+                        ox,
+                    );
+                    output.data[output1_row_base + ox] = conv2d3x3Pad1Stride2Point(
+                        input,
+                        weights,
+                        bias1,
+                        input_batch_base,
+                        weights1_channel_base,
+                        oy,
+                        ox,
+                    );
+                }
+            }
+        }
+
+        while (oc < oc_end) : (oc += 1) {
             const weights_channel_base = oc * in_channels * 9;
             const output_channel_base = output_batch_base + oc * output_plane;
             const bias_value: f32 = if (bias) |bias_values| bias_values[oc] else 0.0;
