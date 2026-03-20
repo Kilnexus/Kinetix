@@ -16,6 +16,16 @@ pub const C3k2Profile = struct {
     concat_ns: u64 = 0,
     cv2_ns: u64 = 0,
     child_kind: []const u8 = "",
+    child_c3k: ?C3kProfile = null,
+};
+
+pub const C3kProfile = struct {
+    cv1_ns: u64 = 0,
+    seq_ns: u64 = 0,
+    cv2_ns: u64 = 0,
+    concat_ns: u64 = 0,
+    cv3_ns: u64 = 0,
+    seq_kind: []const u8 = "",
 };
 
 pub const ProfiledTensor = struct {
@@ -189,6 +199,88 @@ pub fn runC3k(
     return try runConvModule(allocator, model_graph, weights_blob, cv3_path, &concat);
 }
 
+pub const C3kProfiledTensor = struct {
+    output: Tensor,
+    c3k_profile: C3kProfile,
+};
+
+pub fn runC3kProfile(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module_path: []const u8,
+    input: *const Tensor,
+) !C3kProfiledTensor {
+    const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
+    if (!std.mem.eql(u8, module.kind, "C3k")) return error.InvalidModuleKind;
+
+    var cv1_buffer: [256]u8 = undefined;
+    const cv1_path = try utils.childModulePath(&cv1_buffer, module_path, "cv1");
+    var cv2_buffer: [256]u8 = undefined;
+    const cv2_path = try utils.childModulePath(&cv2_buffer, module_path, "cv2");
+    var cv3_buffer: [256]u8 = undefined;
+    const cv3_path = try utils.childModulePath(&cv3_buffer, module_path, "cv3");
+    var seq_buffer: [256]u8 = undefined;
+    const seq_path = try utils.childModulePath(&seq_buffer, module_path, "m");
+
+    var profile = C3kProfile{};
+    var timer = try std.time.Timer.start();
+
+    var left = try runConvModule(allocator, model_graph, weights_blob, cv1_path, input);
+    profile.cv1_ns = timer.read();
+    defer left.deinit();
+
+    const seq_node = model_graph.findModule(seq_path) orelse return error.ModuleNotFound;
+    if (seq_node.children.len == 2 and
+        std.mem.eql(u8, seq_node.children[0].kind, "Bottleneck") and
+        std.mem.eql(u8, seq_node.children[1].kind, "Bottleneck"))
+    {
+        profile.seq_kind = "Bottleneckx2";
+        timer.reset();
+        const next0 = try runBottleneck(allocator, model_graph, weights_blob, seq_node.children[0].path, &left);
+        left.deinit();
+        left = next0;
+
+        const next1 = try runBottleneck(allocator, model_graph, weights_blob, seq_node.children[1].path, &left);
+        left.deinit();
+        left = next1;
+        profile.seq_ns = timer.read();
+    } else {
+        profile.seq_kind = seq_node.kind;
+        timer.reset();
+        for (seq_node.children) |child| {
+            const next = try runModule(allocator, model_graph, weights_blob, child.path, &left);
+            left.deinit();
+            left = next;
+        }
+        profile.seq_ns = timer.read();
+    }
+
+    timer.reset();
+    var right = try runConvModule(allocator, model_graph, weights_blob, cv2_path, input);
+    profile.cv2_ns = timer.read();
+    defer right.deinit();
+
+    timer.reset();
+    var concat = try Tensor.init(
+        allocator,
+        left.shape[0],
+        left.shape[1] + right.shape[1],
+        left.shape[2],
+        left.shape[3],
+    );
+    defer concat.deinit();
+
+    const inputs = [_]*const Tensor{ &left, &right };
+    try ops.concatChannels(&inputs, &concat);
+    profile.concat_ns = timer.read();
+
+    timer.reset();
+    const output = try runConvModule(allocator, model_graph, weights_blob, cv3_path, &concat);
+    profile.cv3_ns = timer.read();
+    return .{ .output = output, .c3k_profile = profile };
+}
+
 pub fn runC3k2(
     allocator: std.mem.Allocator,
     model_graph: *const graph.Graph,
@@ -334,9 +426,11 @@ pub fn runC3k2Profile(
         timer.reset();
         var child_out = if (std.mem.eql(u8, child.kind, "Bottleneck"))
             try runBottleneck(allocator, model_graph, weights_blob, child.path, &right)
-        else if (std.mem.eql(u8, child.kind, "C3k"))
-            try runC3k(allocator, model_graph, weights_blob, child.path, &right)
-        else
+        else if (std.mem.eql(u8, child.kind, "C3k")) blk: {
+            const profiled = try runC3kProfile(allocator, model_graph, weights_blob, child.path, &right);
+            profile.child_c3k = profiled.c3k_profile;
+            break :blk profiled.output;
+        } else
             try runModule(allocator, model_graph, weights_blob, child.path, &right);
         profile.child_ns = timer.read();
         defer child_out.deinit();

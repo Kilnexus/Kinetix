@@ -439,6 +439,19 @@ fn runProfileMode(
                     c3k2_profile.child_kind,
                 },
             );
+            if (c3k2_profile.child_c3k) |c3k_profile| {
+                try stdout.print(
+                    "c3k_profile_ms: cv1={d:.3} seq={d:.3} cv2={d:.3} concat={d:.3} cv3={d:.3} seq_kind={s}\n",
+                    .{
+                        nsToMs(c3k_profile.cv1_ns),
+                        nsToMs(c3k_profile.seq_ns),
+                        nsToMs(c3k_profile.cv2_ns),
+                        nsToMs(c3k_profile.concat_ns),
+                        nsToMs(c3k_profile.cv3_ns),
+                        c3k_profile.seq_kind,
+                    },
+                );
+            }
         }
     }
 }

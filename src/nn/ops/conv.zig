@@ -804,9 +804,35 @@ fn conv2dPointwiseRange(
     for (0..batch) |n| {
         const input_batch_base = n * in_channels * plane;
         const output_batch_base = n * out_channels * plane;
-        for (oc_start..oc_end) |oc| {
+        var oc = oc_start;
+        while (oc < oc_end) {
             const group_idx = oc / out_per_group;
             const in_channel_start = group_idx * in_per_group;
+            const pairable = oc + 1 < oc_end and (oc + 1) / out_per_group == group_idx;
+
+            if (pairable) {
+                const out0_slice = output.data[output_batch_base + oc * plane ..][0..plane];
+                const out1_slice = output.data[output_batch_base + (oc + 1) * plane ..][0..plane];
+                const bias0: f32 = if (bias) |bias_values| bias_values[oc] else 0.0;
+                const bias1: f32 = if (bias) |bias_values| bias_values[oc + 1] else 0.0;
+                @memset(out0_slice, bias0);
+                @memset(out1_slice, bias1);
+
+                const weight0_base = oc * in_per_group;
+                const weight1_base = (oc + 1) * in_per_group;
+                for (0..in_per_group) |ic_local| {
+                    const input_slice = input.data[input_batch_base + (in_channel_start + ic_local) * plane ..][0..plane];
+                    const weight0 = weights.data[weight0_base + ic_local];
+                    const weight1 = weights.data[weight1_base + ic_local];
+                    for (out0_slice, out1_slice, input_slice) |*dst0, *dst1, src| {
+                        dst0.* += src * weight0;
+                        dst1.* += src * weight1;
+                    }
+                }
+                oc += 2;
+                continue;
+            }
+
             const out_slice = output.data[output_batch_base + oc * plane ..][0..plane];
             const bias_value: f32 = if (bias) |bias_values| bias_values[oc] else 0.0;
             @memset(out_slice, bias_value);
@@ -819,6 +845,7 @@ fn conv2dPointwiseRange(
                     dst.* += src * weight_value;
                 }
             }
+            oc += 1;
         }
     }
 }
