@@ -7,7 +7,9 @@ pub const Conv2DOptions = types.Conv2DOptions;
 
 const max_supported_conv_threads = 4;
 const conv_parallel_min_workload = 2_000_000;
-const conv_parallel_two_thread_workload = 6_000_000;
+const conv_parallel_two_thread_workload = 2_500_000;
+const simd_lane_count = 8;
+const F32xN = @Vector(simd_lane_count, f32);
 
 inline fn siluValue(x: f32) f32 {
     return x / (1.0 + @exp(-x));
@@ -15,6 +17,14 @@ inline fn siluValue(x: f32) f32 {
 
 inline fn maybeApplySilu(x: f32, apply_silu: bool) f32 {
     return if (apply_silu) siluValue(x) else x;
+}
+
+inline fn loadF32xN(slice: []const f32, index: usize) F32xN {
+    return slice[index..][0..simd_lane_count].*;
+}
+
+inline fn storeF32xN(slice: []f32, index: usize, value: F32xN) void {
+    slice[index..][0..simd_lane_count].* = value;
 }
 
 pub fn conv2d(
@@ -839,9 +849,20 @@ fn conv2dPointwiseRange(
                     const input_slice = input.data[input_batch_base + (in_channel_start + ic_local) * plane ..][0..plane];
                     const weight0 = weights.data[weight0_base + ic_local];
                     const weight1 = weights.data[weight1_base + ic_local];
-                    for (out0_slice, out1_slice, input_slice) |*dst0, *dst1, src| {
-                        dst0.* += src * weight0;
-                        dst1.* += src * weight1;
+                    const w0 = @as(F32xN, @splat(weight0));
+                    const w1 = @as(F32xN, @splat(weight1));
+                    var i: usize = 0;
+                    while (i + simd_lane_count <= plane) : (i += simd_lane_count) {
+                        const src = loadF32xN(input_slice, i);
+                        const acc0 = loadF32xN(out0_slice, i) + src * w0;
+                        const acc1 = loadF32xN(out1_slice, i) + src * w1;
+                        storeF32xN(out0_slice, i, acc0);
+                        storeF32xN(out1_slice, i, acc1);
+                    }
+                    while (i < plane) : (i += 1) {
+                        const src = input_slice[i];
+                        out0_slice[i] += src * weight0;
+                        out1_slice[i] += src * weight1;
                     }
                 }
                 if (apply_silu) {
@@ -860,8 +881,15 @@ fn conv2dPointwiseRange(
             for (0..in_per_group) |ic_local| {
                 const input_slice = input.data[input_batch_base + (in_channel_start + ic_local) * plane ..][0..plane];
                 const weight_value = weights.data[weight_base + ic_local];
-                for (out_slice, input_slice) |*dst, src| {
-                    dst.* += src * weight_value;
+                const w = @as(F32xN, @splat(weight_value));
+                var i: usize = 0;
+                while (i + simd_lane_count <= plane) : (i += simd_lane_count) {
+                    const src = loadF32xN(input_slice, i);
+                    const acc = loadF32xN(out_slice, i) + src * w;
+                    storeF32xN(out_slice, i, acc);
+                }
+                while (i < plane) : (i += 1) {
+                    out_slice[i] += input_slice[i] * weight_value;
                 }
             }
             if (apply_silu) {

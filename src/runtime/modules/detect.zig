@@ -520,7 +520,10 @@ fn runDetectCv3StagePlanned(
     plan: *const Cv3StagePlan,
     input: *const Tensor,
 ) !Tensor {
-    var hidden = try runConvPlan(allocator, &plan.depthwise, input);
+    var hidden = if (canUseFastDetectCv3DepthwiseConv(input, &plan.depthwise))
+        try runDetectFastDepthwise3x3Batch1(allocator, input, &plan.depthwise)
+    else
+        try runConvPlan(allocator, &plan.depthwise, input);
     defer hidden.deinit();
     return try runConvPlan(allocator, &plan.pointwise, &hidden);
 }
@@ -558,7 +561,10 @@ fn runDetectCv3BranchPlannedProfile(
     profile: *DetectBranchProfile,
 ) !Tensor {
     var timer = try std.time.Timer.start();
-    var hidden0 = try runConvPlan(allocator, &plan.stage0.depthwise, input);
+    var hidden0 = if (canUseFastDetectCv3DepthwiseConv(input, &plan.stage0.depthwise))
+        try runDetectFastDepthwise3x3Batch1(allocator, input, &plan.stage0.depthwise)
+    else
+        try runConvPlan(allocator, &plan.stage0.depthwise, input);
     profile.stage0_ns = timer.read();
     defer hidden0.deinit();
 
@@ -568,7 +574,10 @@ fn runDetectCv3BranchPlannedProfile(
     defer hidden1.deinit();
 
     timer.reset();
-    var hidden2 = try runConvPlan(allocator, &plan.stage1.depthwise, &hidden1);
+    var hidden2 = if (canUseFastDetectCv3DepthwiseConv(&hidden1, &plan.stage1.depthwise))
+        try runDetectFastDepthwise3x3Batch1(allocator, &hidden1, &plan.stage1.depthwise)
+    else
+        try runConvPlan(allocator, &plan.stage1.depthwise, &hidden1);
     profile.stage2_ns = timer.read();
     defer hidden2.deinit();
 
@@ -619,6 +628,20 @@ fn canUseFastDetectCv2Conv(input: *const Tensor, plan: *const ConvPlan) bool {
         plan.pad_w == 1 and
         plan.groups == 1 and
         plan.activation == .silu;
+}
+
+fn canUseFastDetectCv3DepthwiseConv(input: *const Tensor, plan: *const ConvPlan) bool {
+    return input.shape[0] == 1 and
+        plan.weight.shape[2] == 3 and
+        plan.weight.shape[3] == 3 and
+        plan.stride_h == 1 and
+        plan.stride_w == 1 and
+        plan.pad_h == 1 and
+        plan.pad_w == 1 and
+        plan.activation == .silu and
+        plan.groups == input.shape[1] and
+        plan.weight.shape[1] == 1 and
+        plan.weight.shape[0] == input.shape[1];
 }
 
 
@@ -852,6 +875,175 @@ fn runDetectFast3x3Conv64Batch1Worker(task: DetectFastConvTask) void {
 fn chooseDetectFastConvThreadCount(spatial: usize) usize {
     if (spatial >= 128) return 2;
     return 1;
+}
+
+fn chooseDetectFastDepthwiseThreadCount(channels: usize, spatial: usize) usize {
+    if (channels >= 32 and spatial >= 128) return 2;
+    return 1;
+}
+
+fn runDetectFastDepthwise3x3Batch1(
+    allocator: std.mem.Allocator,
+    input: *const Tensor,
+    plan: *const ConvPlan,
+) !Tensor {
+    const channels = input.shape[1];
+    const thread_count = @min(chooseDetectFastDepthwiseThreadCount(channels, input.shape[2] * input.shape[3]), channels);
+    if (thread_count > 1) {
+        return runDetectFastDepthwise3x3Batch1Parallel(allocator, input, plan, thread_count);
+    }
+    return runDetectFastDepthwise3x3Batch1Range(allocator, input, plan, 0, channels);
+}
+
+fn runDetectFastDepthwise3x3Batch1Parallel(
+    allocator: std.mem.Allocator,
+    input: *const Tensor,
+    plan: *const ConvPlan,
+    thread_count: usize,
+) !Tensor {
+    var output = try Tensor.init(allocator, 1, input.shape[1], input.shape[2], input.shape[3]);
+    errdefer output.deinit();
+
+    var threads: [max_detect_fast_threads - 1]std.Thread = undefined;
+    var spawned: usize = 0;
+    const channels = input.shape[1];
+
+    for (0..thread_count) |thread_index| {
+        const c_start = (channels * thread_index) / thread_count;
+        const c_end = (channels * (thread_index + 1)) / thread_count;
+        if (c_start == c_end) continue;
+
+        if (thread_index + 1 == thread_count) {
+            runDetectFastDepthwise3x3Batch1Into(input, plan, &output, c_start, c_end);
+        } else {
+            threads[spawned] = std.Thread.spawn(.{}, runDetectFastDepthwise3x3Batch1Worker, .{
+                DetectFastDepthwiseTask{
+                    .input = input,
+                    .plan = plan,
+                    .output = &output,
+                    .channel_start = c_start,
+                    .channel_end = c_end,
+                },
+            }) catch {
+                runDetectFastDepthwise3x3Batch1Into(input, plan, &output, c_start, c_end);
+                continue;
+            };
+            spawned += 1;
+        }
+    }
+
+    for (threads[0..spawned]) |thread| thread.join();
+    return output;
+}
+
+fn runDetectFastDepthwise3x3Batch1Range(
+    allocator: std.mem.Allocator,
+    input: *const Tensor,
+    plan: *const ConvPlan,
+    channel_start: usize,
+    channel_end: usize,
+) !Tensor {
+    var output = try Tensor.init(allocator, 1, input.shape[1], input.shape[2], input.shape[3]);
+    errdefer output.deinit();
+    runDetectFastDepthwise3x3Batch1Into(input, plan, &output, channel_start, channel_end);
+    return output;
+}
+
+fn runDetectFastDepthwise3x3Batch1Into(
+    input: *const Tensor,
+    plan: *const ConvPlan,
+    output: *Tensor,
+    channel_start: usize,
+    channel_end: usize,
+) void {
+    const height = input.shape[2];
+    const width = input.shape[3];
+    const plane = height * width;
+    const interior_h_end = if (height > 1) height - 1 else 0;
+    const interior_w_end = if (width > 1) width - 1 else 0;
+
+    for (channel_start..channel_end) |c| {
+        const src = input.data[c * plane ..][0..plane];
+        const dst = output.data[c * plane ..][0..plane];
+        const w = plan.weight.data[c * 9 ..][0..9];
+        const bias_value: f32 = if (plan.bias) |bias| bias[c] else 0.0;
+
+        for (0..height) |y| {
+            const out_row = y * width;
+            if (y == 0 or y >= interior_h_end) {
+                for (0..width) |x| {
+                    dst[out_row + x] = silu(detectFastDepthwise3x3Point(src, width, height, w, bias_value, y, x));
+                }
+                continue;
+            }
+
+            dst[out_row] = silu(detectFastDepthwise3x3Point(src, width, height, w, bias_value, y, 0));
+
+            for (1..interior_w_end) |x| {
+                const row0 = (y - 1) * width + (x - 1);
+                const row1 = row0 + width;
+                const row2 = row1 + width;
+                var acc = bias_value;
+                acc += src[row0] * w[0];
+                acc += src[row0 + 1] * w[1];
+                acc += src[row0 + 2] * w[2];
+                acc += src[row1] * w[3];
+                acc += src[row1 + 1] * w[4];
+                acc += src[row1 + 2] * w[5];
+                acc += src[row2] * w[6];
+                acc += src[row2 + 1] * w[7];
+                acc += src[row2 + 2] * w[8];
+                dst[out_row + x] = silu(acc);
+            }
+
+            for (interior_w_end..width) |x| {
+                dst[out_row + x] = silu(detectFastDepthwise3x3Point(src, width, height, w, bias_value, y, x));
+            }
+        }
+    }
+}
+
+fn detectFastDepthwise3x3Point(
+    src: []const f32,
+    width: usize,
+    height: usize,
+    weights: []const f32,
+    bias_value: f32,
+    oy: usize,
+    ox: usize,
+) f32 {
+    const base_y = @as(isize, @intCast(oy)) - 1;
+    const base_x = @as(isize, @intCast(ox)) - 1;
+    const y_start: usize = @intCast(@max(@as(isize, 0), base_y));
+    const y_end: usize = @intCast(@min(@as(isize, @intCast(height)), base_y + 3));
+    const x_start: usize = @intCast(@max(@as(isize, 0), base_x));
+    const x_end: usize = @intCast(@min(@as(isize, @intCast(width)), base_x + 3));
+
+    var acc = bias_value;
+    var iy = y_start;
+    while (iy < y_end) : (iy += 1) {
+        const ky = @as(usize, @intCast(@as(isize, @intCast(iy)) - base_y));
+        const row_base = iy * width;
+        const weight_row = ky * 3;
+        var ix = x_start;
+        while (ix < x_end) : (ix += 1) {
+            const kx = @as(usize, @intCast(@as(isize, @intCast(ix)) - base_x));
+            acc += src[row_base + ix] * weights[weight_row + kx];
+        }
+    }
+    return acc;
+}
+
+const DetectFastDepthwiseTask = struct {
+    input: *const Tensor,
+    plan: *const ConvPlan,
+    output: *Tensor,
+    channel_start: usize,
+    channel_end: usize,
+};
+
+fn runDetectFastDepthwise3x3Batch1Worker(task: DetectFastDepthwiseTask) void {
+    runDetectFastDepthwise3x3Batch1Into(task.input, task.plan, task.output, task.channel_start, task.channel_end);
 }
 
 const DetectPairAcc = struct {
