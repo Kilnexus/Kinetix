@@ -109,6 +109,7 @@ const BranchPlan = union(enum) {
 };
 
 const max_detect_branch_levels = 8;
+const max_detect_fast_threads = 2;
 
 pub fn runDetect(
     output_allocator: std.mem.Allocator,
@@ -623,6 +624,76 @@ fn runDetectFast3x3Conv64Batch1(
     input: *const Tensor,
     plan: *const ConvPlan,
 ) !Tensor {
+    const thread_count = chooseDetectFastConvThreadCount(input.shape[2] * input.shape[3]);
+    if (thread_count > 1) {
+        return runDetectFast3x3Conv64Batch1Parallel(allocator, input, plan, thread_count);
+    }
+    return runDetectFast3x3Conv64Batch1Range(allocator, input, plan, 0, 64);
+}
+
+fn runDetectFast3x3Conv64Batch1Parallel(
+    allocator: std.mem.Allocator,
+    input: *const Tensor,
+    plan: *const ConvPlan,
+    thread_count: usize,
+) !Tensor {
+    var output = try Tensor.init(allocator, 1, 64, input.shape[2], input.shape[3]);
+    errdefer output.deinit();
+
+    var threads: [max_detect_fast_threads - 1]std.Thread = undefined;
+    var spawned: usize = 0;
+
+    for (0..thread_count) |thread_index| {
+        const oc_start = (64 * thread_index) / thread_count;
+        const oc_end = (64 * (thread_index + 1)) / thread_count;
+        if (oc_start == oc_end) continue;
+
+        if (thread_index + 1 == thread_count) {
+            runDetectFast3x3Conv64Batch1Into(input, plan, &output, oc_start, oc_end);
+        } else {
+            threads[spawned] = std.Thread.spawn(.{}, runDetectFast3x3Conv64Batch1Worker, .{
+                DetectFastConvTask{
+                    .input = input,
+                    .plan = plan,
+                    .output = &output,
+                    .oc_start = oc_start,
+                    .oc_end = oc_end,
+                },
+            }) catch {
+                runDetectFast3x3Conv64Batch1Into(input, plan, &output, oc_start, oc_end);
+                continue;
+            };
+            spawned += 1;
+        }
+    }
+
+    for (threads[0..spawned]) |thread| thread.join();
+    return output;
+}
+
+fn runDetectFast3x3Conv64Batch1Range(
+    allocator: std.mem.Allocator,
+    input: *const Tensor,
+    plan: *const ConvPlan,
+    oc_start: usize,
+    oc_end: usize,
+) !Tensor {
+    const out_height = input.shape[2];
+    const out_width = input.shape[3];
+
+    var output = try Tensor.init(allocator, 1, 64, out_height, out_width);
+    errdefer output.deinit();
+    runDetectFast3x3Conv64Batch1Into(input, plan, &output, oc_start, oc_end);
+    return output;
+}
+
+fn runDetectFast3x3Conv64Batch1Into(
+    input: *const Tensor,
+    plan: *const ConvPlan,
+    output: *Tensor,
+    oc_start: usize,
+    oc_end: usize,
+) void {
     const in_channels = input.shape[1];
     const in_height = input.shape[2];
     const in_width = input.shape[3];
@@ -630,12 +701,11 @@ fn runDetectFast3x3Conv64Batch1(
     const out_width = input.shape[3];
     const input_plane = in_height * in_width;
     const output_plane = out_height * out_width;
+    const interior_h_end = if (out_height > 1) out_height - 1 else 0;
+    const interior_w_end = if (out_width > 1) out_width - 1 else 0;
 
-    var output = try Tensor.init(allocator, 1, 64, out_height, out_width);
-    errdefer output.deinit();
-
-    var oc: usize = 0;
-    while (oc + 1 < 64) : (oc += 2) {
+    var oc: usize = oc_start;
+    while (oc + 1 < oc_end) : (oc += 2) {
         const weight0_base = oc * in_channels * 9;
         const weight1_base = (oc + 1) * in_channels * 9;
         const out0_base = oc * output_plane;
@@ -644,146 +714,231 @@ fn runDetectFast3x3Conv64Batch1(
         const bias1: f32 = if (plan.bias) |b| b[oc + 1] else 0.0;
 
         for (0..out_height) |oy| {
-            const base_y = @as(isize, @intCast(oy)) - 1;
             const out0_row = out0_base + oy * out_width;
             const out1_row = out1_base + oy * out_width;
 
-            for (0..out_width) |ox| {
-                const base_x = @as(isize, @intCast(ox)) - 1;
+            if (oy == 0 or oy >= interior_h_end) {
+                for (0..out_width) |ox| {
+                    const acc = detectFast3x3PointPair(input, &plan.weight, bias0, bias1, weight0_base, weight1_base, oy, ox);
+                    output.data[out0_row + ox] = silu(acc.a);
+                    output.data[out1_row + ox] = silu(acc.b);
+                }
+                continue;
+            }
+
+            {
+                const acc = detectFast3x3PointPair(input, &plan.weight, bias0, bias1, weight0_base, weight1_base, oy, 0);
+                output.data[out0_row] = silu(acc.a);
+                output.data[out1_row] = silu(acc.b);
+            }
+
+            for (1..interior_w_end) |ox| {
                 var acc0: f32 = bias0;
                 var acc1: f32 = bias1;
-
-                const interior =
-                    base_y >= 0 and base_x >= 0 and
-                    base_y + 2 < @as(isize, @intCast(in_height)) and
-                    base_x + 2 < @as(isize, @intCast(in_width));
+                const row0 = (oy - 1) * in_width + (ox - 1);
+                const row1 = row0 + in_width;
+                const row2 = row1 + in_width;
 
                 for (0..in_channels) |ic| {
                     const input_channel = input.data[ic * input_plane ..][0..input_plane];
                     const ic_weight0 = weight0_base + ic * 9;
                     const ic_weight1 = weight1_base + ic * 9;
 
-                    if (interior) {
-                        const row0 = @as(usize, @intCast(base_y)) * in_width + @as(usize, @intCast(base_x));
-                        const row1 = row0 + in_width;
-                        const row2 = row1 + in_width;
-                        const v00 = input_channel[row0];
-                        const v01 = input_channel[row0 + 1];
-                        const v02 = input_channel[row0 + 2];
-                        const v10 = input_channel[row1];
-                        const v11 = input_channel[row1 + 1];
-                        const v12 = input_channel[row1 + 2];
-                        const v20 = input_channel[row2];
-                        const v21 = input_channel[row2 + 1];
-                        const v22 = input_channel[row2 + 2];
+                    const v00 = input_channel[row0];
+                    const v01 = input_channel[row0 + 1];
+                    const v02 = input_channel[row0 + 2];
+                    const v10 = input_channel[row1];
+                    const v11 = input_channel[row1 + 1];
+                    const v12 = input_channel[row1 + 2];
+                    const v20 = input_channel[row2];
+                    const v21 = input_channel[row2 + 1];
+                    const v22 = input_channel[row2 + 2];
 
-                        acc0 += v00 * plan.weight.data[ic_weight0];
-                        acc0 += v01 * plan.weight.data[ic_weight0 + 1];
-                        acc0 += v02 * plan.weight.data[ic_weight0 + 2];
-                        acc0 += v10 * plan.weight.data[ic_weight0 + 3];
-                        acc0 += v11 * plan.weight.data[ic_weight0 + 4];
-                        acc0 += v12 * plan.weight.data[ic_weight0 + 5];
-                        acc0 += v20 * plan.weight.data[ic_weight0 + 6];
-                        acc0 += v21 * plan.weight.data[ic_weight0 + 7];
-                        acc0 += v22 * plan.weight.data[ic_weight0 + 8];
+                    acc0 += v00 * plan.weight.data[ic_weight0];
+                    acc0 += v01 * plan.weight.data[ic_weight0 + 1];
+                    acc0 += v02 * plan.weight.data[ic_weight0 + 2];
+                    acc0 += v10 * plan.weight.data[ic_weight0 + 3];
+                    acc0 += v11 * plan.weight.data[ic_weight0 + 4];
+                    acc0 += v12 * plan.weight.data[ic_weight0 + 5];
+                    acc0 += v20 * plan.weight.data[ic_weight0 + 6];
+                    acc0 += v21 * plan.weight.data[ic_weight0 + 7];
+                    acc0 += v22 * plan.weight.data[ic_weight0 + 8];
 
-                        acc1 += v00 * plan.weight.data[ic_weight1];
-                        acc1 += v01 * plan.weight.data[ic_weight1 + 1];
-                        acc1 += v02 * plan.weight.data[ic_weight1 + 2];
-                        acc1 += v10 * plan.weight.data[ic_weight1 + 3];
-                        acc1 += v11 * plan.weight.data[ic_weight1 + 4];
-                        acc1 += v12 * plan.weight.data[ic_weight1 + 5];
-                        acc1 += v20 * plan.weight.data[ic_weight1 + 6];
-                        acc1 += v21 * plan.weight.data[ic_weight1 + 7];
-                        acc1 += v22 * plan.weight.data[ic_weight1 + 8];
-                    } else {
-                        const y_start: usize = @intCast(@max(@as(isize, 0), base_y));
-                        const y_end: usize = @intCast(@min(@as(isize, @intCast(in_height)), base_y + 3));
-                        const x_start: usize = @intCast(@max(@as(isize, 0), base_x));
-                        const x_end: usize = @intCast(@min(@as(isize, @intCast(in_width)), base_x + 3));
-
-                        var iy = y_start;
-                        while (iy < y_end) : (iy += 1) {
-                            const ky = @as(usize, @intCast(@as(isize, @intCast(iy)) - base_y));
-                            const input_row_base = iy * in_width;
-                            const weight0_row = ic_weight0 + ky * 3;
-                            const weight1_row = ic_weight1 + ky * 3;
-                            var ix = x_start;
-                            while (ix < x_end) : (ix += 1) {
-                                const kx = @as(usize, @intCast(@as(isize, @intCast(ix)) - base_x));
-                                const src = input_channel[input_row_base + ix];
-                                acc0 += src * plan.weight.data[weight0_row + kx];
-                                acc1 += src * plan.weight.data[weight1_row + kx];
-                            }
-                        }
-                    }
+                    acc1 += v00 * plan.weight.data[ic_weight1];
+                    acc1 += v01 * plan.weight.data[ic_weight1 + 1];
+                    acc1 += v02 * plan.weight.data[ic_weight1 + 2];
+                    acc1 += v10 * plan.weight.data[ic_weight1 + 3];
+                    acc1 += v11 * plan.weight.data[ic_weight1 + 4];
+                    acc1 += v12 * plan.weight.data[ic_weight1 + 5];
+                    acc1 += v20 * plan.weight.data[ic_weight1 + 6];
+                    acc1 += v21 * plan.weight.data[ic_weight1 + 7];
+                    acc1 += v22 * plan.weight.data[ic_weight1 + 8];
                 }
 
                 output.data[out0_row + ox] = silu(acc0);
                 output.data[out1_row + ox] = silu(acc1);
             }
+
+            for (interior_w_end..out_width) |ox| {
+                const acc = detectFast3x3PointPair(input, &plan.weight, bias0, bias1, weight0_base, weight1_base, oy, ox);
+                output.data[out0_row + ox] = silu(acc.a);
+                output.data[out1_row + ox] = silu(acc.b);
+            }
         }
     }
 
-    while (oc < 64) : (oc += 1) {
+    while (oc < oc_end) : (oc += 1) {
         const weight_base = oc * in_channels * 9;
         const out_base = oc * output_plane;
         const bias_value: f32 = if (plan.bias) |b| b[oc] else 0.0;
 
         for (0..out_height) |oy| {
-            const base_y = @as(isize, @intCast(oy)) - 1;
             const out_row = out_base + oy * out_width;
-            for (0..out_width) |ox| {
-                const base_x = @as(isize, @intCast(ox)) - 1;
-                var acc: f32 = bias_value;
+            if (oy == 0 or oy >= interior_h_end) {
+                for (0..out_width) |ox| {
+                    output.data[out_row + ox] = silu(detectFast3x3Point(input, &plan.weight, bias_value, weight_base, oy, ox));
+                }
+                continue;
+            }
 
-                const interior =
-                    base_y >= 0 and base_x >= 0 and
-                    base_y + 2 < @as(isize, @intCast(in_height)) and
-                    base_x + 2 < @as(isize, @intCast(in_width));
+            output.data[out_row] = silu(detectFast3x3Point(input, &plan.weight, bias_value, weight_base, oy, 0));
+
+            for (1..interior_w_end) |ox| {
+                var acc: f32 = bias_value;
+                const row0 = (oy - 1) * in_width + (ox - 1);
+                const row1 = row0 + in_width;
+                const row2 = row1 + in_width;
 
                 for (0..in_channels) |ic| {
                     const input_channel = input.data[ic * input_plane ..][0..input_plane];
                     const ic_weight = weight_base + ic * 9;
-                    if (interior) {
-                        const row0 = @as(usize, @intCast(base_y)) * in_width + @as(usize, @intCast(base_x));
-                        const row1 = row0 + in_width;
-                        const row2 = row1 + in_width;
-                        acc += input_channel[row0] * plan.weight.data[ic_weight];
-                        acc += input_channel[row0 + 1] * plan.weight.data[ic_weight + 1];
-                        acc += input_channel[row0 + 2] * plan.weight.data[ic_weight + 2];
-                        acc += input_channel[row1] * plan.weight.data[ic_weight + 3];
-                        acc += input_channel[row1 + 1] * plan.weight.data[ic_weight + 4];
-                        acc += input_channel[row1 + 2] * plan.weight.data[ic_weight + 5];
-                        acc += input_channel[row2] * plan.weight.data[ic_weight + 6];
-                        acc += input_channel[row2 + 1] * plan.weight.data[ic_weight + 7];
-                        acc += input_channel[row2 + 2] * plan.weight.data[ic_weight + 8];
-                    } else {
-                        const y_start: usize = @intCast(@max(@as(isize, 0), base_y));
-                        const y_end: usize = @intCast(@min(@as(isize, @intCast(in_height)), base_y + 3));
-                        const x_start: usize = @intCast(@max(@as(isize, 0), base_x));
-                        const x_end: usize = @intCast(@min(@as(isize, @intCast(in_width)), base_x + 3));
-
-                        var iy = y_start;
-                        while (iy < y_end) : (iy += 1) {
-                            const ky = @as(usize, @intCast(@as(isize, @intCast(iy)) - base_y));
-                            const input_row_base = iy * in_width;
-                            const weight_row = ic_weight + ky * 3;
-                            var ix = x_start;
-                            while (ix < x_end) : (ix += 1) {
-                                const kx = @as(usize, @intCast(@as(isize, @intCast(ix)) - base_x));
-                                acc += input_channel[input_row_base + ix] * plan.weight.data[weight_row + kx];
-                            }
-                        }
-                    }
+                    acc += input_channel[row0] * plan.weight.data[ic_weight];
+                    acc += input_channel[row0 + 1] * plan.weight.data[ic_weight + 1];
+                    acc += input_channel[row0 + 2] * plan.weight.data[ic_weight + 2];
+                    acc += input_channel[row1] * plan.weight.data[ic_weight + 3];
+                    acc += input_channel[row1 + 1] * plan.weight.data[ic_weight + 4];
+                    acc += input_channel[row1 + 2] * plan.weight.data[ic_weight + 5];
+                    acc += input_channel[row2] * plan.weight.data[ic_weight + 6];
+                    acc += input_channel[row2 + 1] * plan.weight.data[ic_weight + 7];
+                    acc += input_channel[row2 + 2] * plan.weight.data[ic_weight + 8];
                 }
 
                 output.data[out_row + ox] = silu(acc);
             }
+
+            for (interior_w_end..out_width) |ox| {
+                output.data[out_row + ox] = silu(detectFast3x3Point(input, &plan.weight, bias_value, weight_base, oy, ox));
+            }
         }
     }
 
-    return output;
+}
+
+const DetectFastConvTask = struct {
+    input: *const Tensor,
+    plan: *const ConvPlan,
+    output: *Tensor,
+    oc_start: usize,
+    oc_end: usize,
+};
+
+fn runDetectFast3x3Conv64Batch1Worker(task: DetectFastConvTask) void {
+    runDetectFast3x3Conv64Batch1Into(task.input, task.plan, task.output, task.oc_start, task.oc_end);
+}
+
+fn chooseDetectFastConvThreadCount(spatial: usize) usize {
+    if (spatial >= 256) return 2;
+    return 1;
+}
+
+const DetectPairAcc = struct {
+    a: f32,
+    b: f32,
+};
+
+fn detectFast3x3PointPair(
+    input: *const Tensor,
+    weights: *const Tensor,
+    bias0: f32,
+    bias1: f32,
+    weight0_base: usize,
+    weight1_base: usize,
+    oy: usize,
+    ox: usize,
+) DetectPairAcc {
+    const in_channels = input.shape[1];
+    const in_height = input.shape[2];
+    const in_width = input.shape[3];
+    const input_plane = in_height * in_width;
+    const base_y = @as(isize, @intCast(oy)) - 1;
+    const base_x = @as(isize, @intCast(ox)) - 1;
+
+    var acc0: f32 = bias0;
+    var acc1: f32 = bias1;
+    for (0..in_channels) |ic| {
+        const input_channel = input.data[ic * input_plane ..][0..input_plane];
+        const ic_weight0 = weight0_base + ic * 9;
+        const ic_weight1 = weight1_base + ic * 9;
+        const y_start: usize = @intCast(@max(@as(isize, 0), base_y));
+        const y_end: usize = @intCast(@min(@as(isize, @intCast(in_height)), base_y + 3));
+        const x_start: usize = @intCast(@max(@as(isize, 0), base_x));
+        const x_end: usize = @intCast(@min(@as(isize, @intCast(in_width)), base_x + 3));
+
+        var iy = y_start;
+        while (iy < y_end) : (iy += 1) {
+            const ky = @as(usize, @intCast(@as(isize, @intCast(iy)) - base_y));
+            const input_row_base = iy * in_width;
+            const weight0_row = ic_weight0 + ky * 3;
+            const weight1_row = ic_weight1 + ky * 3;
+            var ix = x_start;
+            while (ix < x_end) : (ix += 1) {
+                const kx = @as(usize, @intCast(@as(isize, @intCast(ix)) - base_x));
+                const src = input_channel[input_row_base + ix];
+                acc0 += src * weights.data[weight0_row + kx];
+                acc1 += src * weights.data[weight1_row + kx];
+            }
+        }
+    }
+    return .{ .a = acc0, .b = acc1 };
+}
+
+fn detectFast3x3Point(
+    input: *const Tensor,
+    weights: *const Tensor,
+    bias_value: f32,
+    weight_base: usize,
+    oy: usize,
+    ox: usize,
+) f32 {
+    const in_channels = input.shape[1];
+    const in_height = input.shape[2];
+    const in_width = input.shape[3];
+    const input_plane = in_height * in_width;
+    const base_y = @as(isize, @intCast(oy)) - 1;
+    const base_x = @as(isize, @intCast(ox)) - 1;
+
+    var acc: f32 = bias_value;
+    for (0..in_channels) |ic| {
+        const input_channel = input.data[ic * input_plane ..][0..input_plane];
+        const ic_weight = weight_base + ic * 9;
+        const y_start: usize = @intCast(@max(@as(isize, 0), base_y));
+        const y_end: usize = @intCast(@min(@as(isize, @intCast(in_height)), base_y + 3));
+        const x_start: usize = @intCast(@max(@as(isize, 0), base_x));
+        const x_end: usize = @intCast(@min(@as(isize, @intCast(in_width)), base_x + 3));
+
+        var iy = y_start;
+        while (iy < y_end) : (iy += 1) {
+            const ky = @as(usize, @intCast(@as(isize, @intCast(iy)) - base_y));
+            const input_row_base = iy * in_width;
+            const weight_row = ic_weight + ky * 3;
+            var ix = x_start;
+            while (ix < x_end) : (ix += 1) {
+                const kx = @as(usize, @intCast(@as(isize, @intCast(ix)) - base_x));
+                acc += input_channel[input_row_base + ix] * weights.data[weight_row + kx];
+            }
+        }
+    }
+    return acc;
 }
 
 fn silu(x: f32) f32 {
