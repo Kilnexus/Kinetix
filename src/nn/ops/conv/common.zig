@@ -26,6 +26,10 @@ pub inline fn storeF32xN(slice: []f32, index: usize, value: F32xN) void {
     slice[index..][0..simd_lane_count].* = value;
 }
 
+pub inline fn dotF32xN(lhs: F32xN, rhs: F32xN) f32 {
+    return @reduce(.Add, lhs * rhs);
+}
+
 pub fn chooseConvThreadCount(workload: usize, out_channels: usize) usize {
     if (out_channels < 2 or workload < conv_parallel_min_workload) return 1;
     if (workload < conv_parallel_two_thread_workload) return @min(out_channels, 2);

@@ -370,25 +370,14 @@ fn runDetectFast3x3Conv64Batch1Into(
                     const v20 = input_channel[row2];
                     const v21 = input_channel[row2 + 1];
                     const v22 = input_channel[row2 + 2];
+                    const src8: @Vector(8, f32) = .{ v00, v01, v02, v10, v11, v12, v20, v21 };
+                    const w0: @Vector(8, f32) = plan.weight.data[ic_weight0..][0..8].*;
+                    const w1: @Vector(8, f32) = plan.weight.data[ic_weight1..][0..8].*;
 
-                    acc0 += v00 * plan.weight.data[ic_weight0];
-                    acc0 += v01 * plan.weight.data[ic_weight0 + 1];
-                    acc0 += v02 * plan.weight.data[ic_weight0 + 2];
-                    acc0 += v10 * plan.weight.data[ic_weight0 + 3];
-                    acc0 += v11 * plan.weight.data[ic_weight0 + 4];
-                    acc0 += v12 * plan.weight.data[ic_weight0 + 5];
-                    acc0 += v20 * plan.weight.data[ic_weight0 + 6];
-                    acc0 += v21 * plan.weight.data[ic_weight0 + 7];
+                    acc0 += @reduce(.Add, src8 * w0);
                     acc0 += v22 * plan.weight.data[ic_weight0 + 8];
 
-                    acc1 += v00 * plan.weight.data[ic_weight1];
-                    acc1 += v01 * plan.weight.data[ic_weight1 + 1];
-                    acc1 += v02 * plan.weight.data[ic_weight1 + 2];
-                    acc1 += v10 * plan.weight.data[ic_weight1 + 3];
-                    acc1 += v11 * plan.weight.data[ic_weight1 + 4];
-                    acc1 += v12 * plan.weight.data[ic_weight1 + 5];
-                    acc1 += v20 * plan.weight.data[ic_weight1 + 6];
-                    acc1 += v21 * plan.weight.data[ic_weight1 + 7];
+                    acc1 += @reduce(.Add, src8 * w1);
                     acc1 += v22 * plan.weight.data[ic_weight1 + 8];
                 }
 
@@ -429,14 +418,17 @@ fn runDetectFast3x3Conv64Batch1Into(
                 for (0..in_channels) |ic| {
                     const input_channel = input.data[ic * input_plane ..][0..input_plane];
                     const ic_weight = weight_base + ic * 9;
-                    acc += input_channel[row0] * plan.weight.data[ic_weight];
-                    acc += input_channel[row0 + 1] * plan.weight.data[ic_weight + 1];
-                    acc += input_channel[row0 + 2] * plan.weight.data[ic_weight + 2];
-                    acc += input_channel[row1] * plan.weight.data[ic_weight + 3];
-                    acc += input_channel[row1 + 1] * plan.weight.data[ic_weight + 4];
-                    acc += input_channel[row1 + 2] * plan.weight.data[ic_weight + 5];
-                    acc += input_channel[row2] * plan.weight.data[ic_weight + 6];
-                    acc += input_channel[row2 + 1] * plan.weight.data[ic_weight + 7];
+                    const v00 = input_channel[row0];
+                    const v01 = input_channel[row0 + 1];
+                    const v02 = input_channel[row0 + 2];
+                    const v10 = input_channel[row1];
+                    const v11 = input_channel[row1 + 1];
+                    const v12 = input_channel[row1 + 2];
+                    const v20 = input_channel[row2];
+                    const v21 = input_channel[row2 + 1];
+                    const src8: @Vector(8, f32) = .{ v00, v01, v02, v10, v11, v12, v20, v21 };
+                    const w: @Vector(8, f32) = plan.weight.data[ic_weight..][0..8].*;
+                    acc += @reduce(.Add, src8 * w);
                     acc += input_channel[row2 + 2] * plan.weight.data[ic_weight + 8];
                 }
 
@@ -574,14 +566,18 @@ fn runDetectFastDepthwise3x3Batch1Into(
                 const row1 = row0 + width;
                 const row2 = row1 + width;
                 var acc = bias_value;
-                acc += src[row0] * w[0];
-                acc += src[row0 + 1] * w[1];
-                acc += src[row0 + 2] * w[2];
-                acc += src[row1] * w[3];
-                acc += src[row1 + 1] * w[4];
-                acc += src[row1 + 2] * w[5];
-                acc += src[row2] * w[6];
-                acc += src[row2 + 1] * w[7];
+                const src8: @Vector(8, f32) = .{
+                    src[row0],
+                    src[row0 + 1],
+                    src[row0 + 2],
+                    src[row1],
+                    src[row1 + 1],
+                    src[row1 + 2],
+                    src[row2],
+                    src[row2 + 1],
+                };
+                const w8: @Vector(8, f32) = w[0..8].*;
+                acc += @reduce(.Add, src8 * w8);
                 acc += src[row2 + 2] * w[8];
                 dst[out_row + x] = silu(acc);
             }
@@ -616,6 +612,13 @@ fn detectFastDepthwise3x3Point(
         const row_base = iy * width;
         const weight_row = ky * 3;
         var ix = x_start;
+        if (x_end - x_start == 3) {
+            const kx0 = @as(usize, @intCast(@as(isize, @intCast(x_start)) - base_x));
+            acc += src[row_base + x_start] * weights[weight_row + kx0];
+            acc += src[row_base + x_start + 1] * weights[weight_row + kx0 + 1];
+            acc += src[row_base + x_start + 2] * weights[weight_row + kx0 + 2];
+            continue;
+        }
         while (ix < x_end) : (ix += 1) {
             const kx = @as(usize, @intCast(@as(isize, @intCast(ix)) - base_x));
             acc += src[row_base + ix] * weights[weight_row + kx];
@@ -676,6 +679,15 @@ fn detectFast3x3PointPair(
             const weight0_row = ic_weight0 + ky * 3;
             const weight1_row = ic_weight1 + ky * 3;
             var ix = x_start;
+            if (x_end - x_start == 3) {
+                const kx0 = @as(usize, @intCast(@as(isize, @intCast(x_start)) - base_x));
+                const s0 = input_channel[input_row_base + x_start];
+                const s1 = input_channel[input_row_base + x_start + 1];
+                const s2 = input_channel[input_row_base + x_start + 2];
+                acc0 += s0 * weights.data[weight0_row + kx0] + s1 * weights.data[weight0_row + kx0 + 1] + s2 * weights.data[weight0_row + kx0 + 2];
+                acc1 += s0 * weights.data[weight1_row + kx0] + s1 * weights.data[weight1_row + kx0 + 1] + s2 * weights.data[weight1_row + kx0 + 2];
+                continue;
+            }
             while (ix < x_end) : (ix += 1) {
                 const kx = @as(usize, @intCast(@as(isize, @intCast(ix)) - base_x));
                 const src = input_channel[input_row_base + ix];
@@ -717,6 +729,13 @@ fn detectFast3x3Point(
             const input_row_base = iy * in_width;
             const weight_row = ic_weight + ky * 3;
             var ix = x_start;
+            if (x_end - x_start == 3) {
+                const kx0 = @as(usize, @intCast(@as(isize, @intCast(x_start)) - base_x));
+                acc += input_channel[input_row_base + x_start] * weights.data[weight_row + kx0];
+                acc += input_channel[input_row_base + x_start + 1] * weights.data[weight_row + kx0 + 1];
+                acc += input_channel[input_row_base + x_start + 2] * weights.data[weight_row + kx0 + 2];
+                continue;
+            }
             while (ix < x_end) : (ix += 1) {
                 const kx = @as(usize, @intCast(@as(isize, @intCast(ix)) - base_x));
                 acc += input_channel[input_row_base + ix] * weights.data[weight_row + kx];

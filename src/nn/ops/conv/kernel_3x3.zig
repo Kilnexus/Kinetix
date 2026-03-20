@@ -192,25 +192,12 @@ fn conv2d3x3Pad1Range(
                             const v20 = input_channel[row2];
                             const v21 = input_channel[row2 + 1];
                             const v22 = input_channel[row2 + 2];
+                            const src8: common.F32xN = .{ v00, v01, v02, v10, v11, v12, v20, v21 };
 
-                            acc0 += v00 * weights.data[weight0_base];
-                            acc0 += v01 * weights.data[weight0_base + 1];
-                            acc0 += v02 * weights.data[weight0_base + 2];
-                            acc0 += v10 * weights.data[weight0_base + 3];
-                            acc0 += v11 * weights.data[weight0_base + 4];
-                            acc0 += v12 * weights.data[weight0_base + 5];
-                            acc0 += v20 * weights.data[weight0_base + 6];
-                            acc0 += v21 * weights.data[weight0_base + 7];
+                            acc0 += common.dotF32xN(src8, common.loadF32xN(weights.data, weight0_base));
                             acc0 += v22 * weights.data[weight0_base + 8];
 
-                            acc1 += v00 * weights.data[weight1_base];
-                            acc1 += v01 * weights.data[weight1_base + 1];
-                            acc1 += v02 * weights.data[weight1_base + 2];
-                            acc1 += v10 * weights.data[weight1_base + 3];
-                            acc1 += v11 * weights.data[weight1_base + 4];
-                            acc1 += v12 * weights.data[weight1_base + 5];
-                            acc1 += v20 * weights.data[weight1_base + 6];
-                            acc1 += v21 * weights.data[weight1_base + 7];
+                            acc1 += common.dotF32xN(src8, common.loadF32xN(weights.data, weight1_base));
                             acc1 += v22 * weights.data[weight1_base + 8];
                         } else {
                             const y_start: usize = @intCast(@max(@as(isize, 0), base_y));
@@ -265,15 +252,18 @@ fn conv2d3x3Pad1Range(
                             const row0 = @as(usize, @intCast(base_y)) * in_width + @as(usize, @intCast(base_x));
                             const row1 = row0 + in_width;
                             const row2 = row1 + in_width;
-                            acc += input_channel[row0] * weights.data[weight_base];
-                            acc += input_channel[row0 + 1] * weights.data[weight_base + 1];
-                            acc += input_channel[row0 + 2] * weights.data[weight_base + 2];
-                            acc += input_channel[row1] * weights.data[weight_base + 3];
-                            acc += input_channel[row1 + 1] * weights.data[weight_base + 4];
-                            acc += input_channel[row1 + 2] * weights.data[weight_base + 5];
-                            acc += input_channel[row2] * weights.data[weight_base + 6];
-                            acc += input_channel[row2 + 1] * weights.data[weight_base + 7];
-                            acc += input_channel[row2 + 2] * weights.data[weight_base + 8];
+                            const v00 = input_channel[row0];
+                            const v01 = input_channel[row0 + 1];
+                            const v02 = input_channel[row0 + 2];
+                            const v10 = input_channel[row1];
+                            const v11 = input_channel[row1 + 1];
+                            const v12 = input_channel[row1 + 2];
+                            const v20 = input_channel[row2];
+                            const v21 = input_channel[row2 + 1];
+                            const v22 = input_channel[row2 + 2];
+                            const src8: common.F32xN = .{ v00, v01, v02, v10, v11, v12, v20, v21 };
+                            acc += common.dotF32xN(src8, common.loadF32xN(weights.data, weight_base));
+                            acc += v22 * weights.data[weight_base + 8];
                         } else {
                             const y_start: usize = @intCast(@max(@as(isize, 0), base_y));
                             const y_end: usize = @intCast(@min(@as(isize, @intCast(in_height)), base_y + 3));
@@ -370,25 +360,12 @@ fn conv2d3x3Pad1Stride2Range(
                         const v20 = input_channel[row2];
                         const v21 = input_channel[row2 + 1];
                         const v22 = input_channel[row2 + 2];
+                        const src8: common.F32xN = .{ v00, v01, v02, v10, v11, v12, v20, v21 };
 
-                        acc0 += v00 * weights.data[weight0_base];
-                        acc0 += v01 * weights.data[weight0_base + 1];
-                        acc0 += v02 * weights.data[weight0_base + 2];
-                        acc0 += v10 * weights.data[weight0_base + 3];
-                        acc0 += v11 * weights.data[weight0_base + 4];
-                        acc0 += v12 * weights.data[weight0_base + 5];
-                        acc0 += v20 * weights.data[weight0_base + 6];
-                        acc0 += v21 * weights.data[weight0_base + 7];
+                        acc0 += common.dotF32xN(src8, common.loadF32xN(weights.data, weight0_base));
                         acc0 += v22 * weights.data[weight0_base + 8];
 
-                        acc1 += v00 * weights.data[weight1_base];
-                        acc1 += v01 * weights.data[weight1_base + 1];
-                        acc1 += v02 * weights.data[weight1_base + 2];
-                        acc1 += v10 * weights.data[weight1_base + 3];
-                        acc1 += v11 * weights.data[weight1_base + 4];
-                        acc1 += v12 * weights.data[weight1_base + 5];
-                        acc1 += v20 * weights.data[weight1_base + 6];
-                        acc1 += v21 * weights.data[weight1_base + 7];
+                        acc1 += common.dotF32xN(src8, common.loadF32xN(weights.data, weight1_base));
                         acc1 += v22 * weights.data[weight1_base + 8];
                     }
 
@@ -429,15 +406,18 @@ fn conv2d3x3Pad1Stride2Range(
                     for (0..in_channels) |ic| {
                         const input_channel = input.data[input_batch_base + ic * input_plane ..][0..input_plane];
                         const weight_base = weights_channel_base + ic * 9;
-                        acc += input_channel[row0] * weights.data[weight_base];
-                        acc += input_channel[row0 + 1] * weights.data[weight_base + 1];
-                        acc += input_channel[row0 + 2] * weights.data[weight_base + 2];
-                        acc += input_channel[row1] * weights.data[weight_base + 3];
-                        acc += input_channel[row1 + 1] * weights.data[weight_base + 4];
-                        acc += input_channel[row1 + 2] * weights.data[weight_base + 5];
-                        acc += input_channel[row2] * weights.data[weight_base + 6];
-                        acc += input_channel[row2 + 1] * weights.data[weight_base + 7];
-                        acc += input_channel[row2 + 2] * weights.data[weight_base + 8];
+                        const v00 = input_channel[row0];
+                        const v01 = input_channel[row0 + 1];
+                        const v02 = input_channel[row0 + 2];
+                        const v10 = input_channel[row1];
+                        const v11 = input_channel[row1 + 1];
+                        const v12 = input_channel[row1 + 2];
+                        const v20 = input_channel[row2];
+                        const v21 = input_channel[row2 + 1];
+                        const v22 = input_channel[row2 + 2];
+                        const src8: common.F32xN = .{ v00, v01, v02, v10, v11, v12, v20, v21 };
+                        acc += common.dotF32xN(src8, common.loadF32xN(weights.data, weight_base));
+                        acc += v22 * weights.data[weight_base + 8];
                     }
 
                     output.data[output_index] = common.maybeApplySilu(acc, options.apply_silu);
@@ -482,6 +462,16 @@ fn conv2d3x3Pad1Stride2Point(
             const input_row_base = iy * in_width;
             const weight_row_base = weight_base + ky * 3;
             var ix = x_start;
+            if (x_end - x_start == 3) {
+                const v0 = input_channel[input_row_base + x_start];
+                const v1 = input_channel[input_row_base + x_start + 1];
+                const v2 = input_channel[input_row_base + x_start + 2];
+                const w0 = weights.data[weight_row_base + @as(usize, @intCast(@as(isize, @intCast(x_start)) - base_x))];
+                const w1 = weights.data[weight_row_base + @as(usize, @intCast(@as(isize, @intCast(x_start + 1)) - base_x))];
+                const w2 = weights.data[weight_row_base + @as(usize, @intCast(@as(isize, @intCast(x_start + 2)) - base_x))];
+                acc += v0 * w0 + v1 * w1 + v2 * w2;
+                continue;
+            }
             while (ix < x_end) : (ix += 1) {
                 const kx = @as(usize, @intCast(@as(isize, @intCast(ix)) - base_x));
                 acc += input_channel[input_row_base + ix] * weights.data[weight_row_base + kx];
