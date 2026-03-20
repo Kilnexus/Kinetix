@@ -64,12 +64,28 @@ pub fn runGraph(
 ) !DetectOutput {
     var reuse = reuse_allocator.ReuseAllocator.init(allocator);
     defer reuse.deinit();
-    const tensor_allocator = reuse.allocator();
-
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const scratch = arena.allocator();
+    return runGraphWithAllocators(
+        allocator,
+        reuse.allocator(),
+        arena.allocator(),
+        model_graph,
+        weights_blob,
+        input,
+        detect_options,
+    );
+}
 
+pub fn runGraphWithAllocators(
+    allocator: std.mem.Allocator,
+    tensor_allocator: std.mem.Allocator,
+    scratch: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    input: *const Tensor,
+    detect_options: DetectOptions,
+) !DetectOutput {
     var outputs = try scratch.alloc(?Tensor, model_graph.execution_nodes.len);
     for (outputs) |*item| item.* = null;
     const use_counts = try buildUseCounts(scratch, model_graph);

@@ -43,6 +43,7 @@ pub const GraphProfile = graph_exec.GraphProfile;
 pub const runDetect = detect.runDetect;
 pub const runUpsampleModule = graph_exec.runUpsampleModule;
 pub const runGraph = graph_exec.runGraph;
+pub const runGraphWithAllocators = graph_exec.runGraphWithAllocators;
 pub const profileGraph = graph_exec.profileGraph;
 pub const NodeTrace = trace.NodeTrace;
 pub const GraphTrace = trace.GraphTrace;
