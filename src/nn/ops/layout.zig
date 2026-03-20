@@ -63,14 +63,13 @@ pub fn concatChannels(inputs: []const *const Tensor, output: *Tensor) OpError!vo
     var channel_offset: usize = 0;
     for (inputs) |input| {
         const plane = height * width;
+        const block_len = input.shape[1] * plane;
         for (0..batch) |n| {
             const input_batch_base = n * input.shape[1] * plane;
-            const output_batch_base = n * output.shape[1] * plane;
-            for (0..input.shape[1]) |c| {
-                const src = input.data[input_batch_base + c * plane ..][0..plane];
-                const dst = output.data[output_batch_base + (channel_offset + c) * plane ..][0..plane];
-                @memcpy(dst, src);
-            }
+            const output_batch_base = n * output.shape[1] * plane + channel_offset * plane;
+            const src = input.data[input_batch_base..][0..block_len];
+            const dst = output.data[output_batch_base..][0..block_len];
+            @memcpy(dst, src);
         }
         channel_offset += input.shape[1];
     }
