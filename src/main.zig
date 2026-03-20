@@ -452,6 +452,17 @@ fn runProfileMode(
                     },
                 );
             }
+            if (c3k2_profile.child_bottleneck) |bottleneck_profile| {
+                try stdout.print(
+                    "bottleneck_profile_ms: cv1={d:.3} cv2={d:.3} add={d:.3} has_add={}\n",
+                    .{
+                        nsToMs(bottleneck_profile.cv1_ns),
+                        nsToMs(bottleneck_profile.cv2_ns),
+                        nsToMs(bottleneck_profile.add_ns),
+                        bottleneck_profile.has_add,
+                    },
+                );
+            }
         }
     }
 }

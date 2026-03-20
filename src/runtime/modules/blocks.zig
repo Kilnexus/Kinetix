@@ -17,6 +17,7 @@ pub const C3k2Profile = struct {
     cv2_ns: u64 = 0,
     child_kind: []const u8 = "",
     child_c3k: ?C3kProfile = null,
+    child_bottleneck: ?BottleneckProfile = null,
 };
 
 pub const C3kProfile = struct {
@@ -26,6 +27,13 @@ pub const C3kProfile = struct {
     concat_ns: u64 = 0,
     cv3_ns: u64 = 0,
     seq_kind: []const u8 = "",
+};
+
+pub const BottleneckProfile = struct {
+    cv1_ns: u64 = 0,
+    cv2_ns: u64 = 0,
+    add_ns: u64 = 0,
+    has_add: bool = false,
 };
 
 pub const ProfiledTensor = struct {
@@ -85,6 +93,48 @@ pub fn runBottleneck(
         for (output.data, input.data) |*dst, src| dst.* += src;
     }
     return output;
+}
+
+pub const BottleneckProfiledTensor = struct {
+    output: Tensor,
+    bottleneck_profile: BottleneckProfile,
+};
+
+pub fn runBottleneckProfile(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module_path: []const u8,
+    input: *const Tensor,
+) !BottleneckProfiledTensor {
+    const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
+    if (!std.mem.eql(u8, module.kind, "Bottleneck")) return error.InvalidModuleKind;
+
+    var cv1_buffer: [256]u8 = undefined;
+    const cv1_path = try utils.childModulePath(&cv1_buffer, module_path, "cv1");
+    var cv2_buffer: [256]u8 = undefined;
+    const cv2_path = try utils.childModulePath(&cv2_buffer, module_path, "cv2");
+
+    var profile = BottleneckProfile{};
+    var timer = try std.time.Timer.start();
+
+    var hidden = try runConvModule(allocator, model_graph, weights_blob, cv1_path, input);
+    profile.cv1_ns = timer.read();
+    defer hidden.deinit();
+
+    timer.reset();
+    var output = try runConvModule(allocator, model_graph, weights_blob, cv2_path, &hidden);
+    profile.cv2_ns = timer.read();
+
+    const has_add = (module.getAttr("add") orelse return error.MissingAttribute).asBool() orelse return error.InvalidAttributeType;
+    profile.has_add = has_add;
+    if (has_add) {
+        if (!output.sameShape(input)) return ops.OpError.ShapeMismatch;
+        timer.reset();
+        for (output.data, input.data) |*dst, src| dst.* += src;
+        profile.add_ns = timer.read();
+    }
+    return .{ .output = output, .bottleneck_profile = profile };
 }
 
 pub fn runSPPF(
@@ -424,8 +474,11 @@ pub fn runC3k2Profile(
         defer if (!right_is_view) right.deinit();
 
         timer.reset();
-        var child_out = if (std.mem.eql(u8, child.kind, "Bottleneck"))
-            try runBottleneck(allocator, model_graph, weights_blob, child.path, &right)
+        var child_out = if (std.mem.eql(u8, child.kind, "Bottleneck")) blk: {
+            const profiled = try runBottleneckProfile(allocator, model_graph, weights_blob, child.path, &right);
+            profile.child_bottleneck = profiled.bottleneck_profile;
+            break :blk profiled.output;
+        }
         else if (std.mem.eql(u8, child.kind, "C3k")) blk: {
             const profiled = try runC3kProfile(allocator, model_graph, weights_blob, child.path, &right);
             profile.child_c3k = profiled.c3k_profile;
