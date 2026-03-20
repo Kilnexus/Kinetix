@@ -15,4 +15,5 @@ pub const Conv2DOptions = struct {
     pad_h: usize = 0,
     pad_w: usize = 0,
     groups: usize = 1,
+    apply_silu: bool = false,
 };

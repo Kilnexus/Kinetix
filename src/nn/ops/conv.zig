@@ -9,6 +9,14 @@ const max_supported_conv_threads = 4;
 const conv_parallel_min_workload = 2_000_000;
 const conv_parallel_two_thread_workload = 6_000_000;
 
+inline fn siluValue(x: f32) f32 {
+    return x / (1.0 + @exp(-x));
+}
+
+inline fn maybeApplySilu(x: f32, apply_silu: bool) f32 {
+    return if (apply_silu) siluValue(x) else x;
+}
+
 pub fn conv2d(
     input: *const Tensor,
     weights: *const Tensor,
@@ -40,7 +48,7 @@ pub fn conv2d(
     }
 
     if (kernel_h == 1 and kernel_w == 1 and options.stride_h == 1 and options.stride_w == 1 and options.pad_h == 0 and options.pad_w == 0) {
-        return conv2dPointwise(input, weights, bias, output, options.groups);
+        return conv2dPointwise(input, weights, bias, output, options.groups, options.apply_silu);
     }
     if (kernel_h == 3 and kernel_w == 3 and options.pad_h == 1 and options.pad_w == 1 and options.groups == 1) {
         return conv2d3x3Pad1(input, weights, bias, output, options);
@@ -96,7 +104,7 @@ fn conv2d3x3Pad1Stride2(
         return conv2d3x3Pad1Stride2Parallel(input, weights, bias, output, options, thread_count);
     }
 
-    return conv2d3x3Pad1Stride2Range(input, weights, bias, output, 0, out_channels);
+    return conv2d3x3Pad1Stride2Range(input, weights, bias, output, options, 0, out_channels);
 }
 
 fn conv2d3x3Pad1Parallel(
@@ -158,7 +166,7 @@ fn conv2d3x3Pad1Stride2Parallel(
         if (oc_start == oc_end) continue;
 
         if (thread_index + 1 == thread_count) {
-            try conv2d3x3Pad1Stride2Range(input, weights, bias, output, oc_start, oc_end);
+            try conv2d3x3Pad1Stride2Range(input, weights, bias, output, options, oc_start, oc_end);
         } else {
             threads[spawned] = std.Thread.spawn(.{}, conv2d3x3Pad1Stride2Worker, .{
                 Conv2DTask{
@@ -171,7 +179,7 @@ fn conv2d3x3Pad1Stride2Parallel(
                     .oc_end = oc_end,
                 },
             }) catch {
-                try conv2d3x3Pad1Stride2Range(input, weights, bias, output, oc_start, oc_end);
+                try conv2d3x3Pad1Stride2Range(input, weights, bias, output, options, oc_start, oc_end);
                 continue;
             };
             spawned += 1;
@@ -288,8 +296,8 @@ fn conv2d3x3Pad1Range(
                         }
                     }
 
-                    output.data[output0_row_base + ox] = acc0;
-                    output.data[output1_row_base + ox] = acc1;
+                    output.data[output0_row_base + ox] = maybeApplySilu(acc0, options.apply_silu);
+                    output.data[output1_row_base + ox] = maybeApplySilu(acc1, options.apply_silu);
                 }
             }
         }
@@ -347,7 +355,7 @@ fn conv2d3x3Pad1Range(
                         }
                     }
 
-                    output.data[output_row_base + ox] = acc;
+                    output.data[output_row_base + ox] = maybeApplySilu(acc, options.apply_silu);
                 }
             }
         }
@@ -359,6 +367,7 @@ fn conv2d3x3Pad1Stride2Range(
     weights: *const Tensor,
     bias: ?[]const f32,
     output: *Tensor,
+    options: Conv2DOptions,
     oc_start: usize,
     oc_end: usize,
 ) OpError!void {
@@ -391,7 +400,7 @@ fn conv2d3x3Pad1Stride2Range(
                 const output1_row_base = output1_channel_base + oy * expected_w;
                 if (oy == 0 or oy >= interior_h_end) {
                     for (0..expected_w) |ox| {
-                        output.data[output0_row_base + ox] = conv2d3x3Pad1Stride2Point(
+                        output.data[output0_row_base + ox] = maybeApplySilu(conv2d3x3Pad1Stride2Point(
                             input,
                             weights,
                             bias0,
@@ -399,8 +408,8 @@ fn conv2d3x3Pad1Stride2Range(
                             weights0_channel_base,
                             oy,
                             ox,
-                        );
-                        output.data[output1_row_base + ox] = conv2d3x3Pad1Stride2Point(
+                        ), options.apply_silu);
+                        output.data[output1_row_base + ox] = maybeApplySilu(conv2d3x3Pad1Stride2Point(
                             input,
                             weights,
                             bias1,
@@ -408,12 +417,12 @@ fn conv2d3x3Pad1Stride2Range(
                             weights1_channel_base,
                             oy,
                             ox,
-                        );
+                        ), options.apply_silu);
                     }
                     continue;
                 }
 
-                output.data[output0_row_base] = conv2d3x3Pad1Stride2Point(
+                output.data[output0_row_base] = maybeApplySilu(conv2d3x3Pad1Stride2Point(
                     input,
                     weights,
                     bias0,
@@ -421,8 +430,8 @@ fn conv2d3x3Pad1Stride2Range(
                     weights0_channel_base,
                     oy,
                     0,
-                );
-                output.data[output1_row_base] = conv2d3x3Pad1Stride2Point(
+                ), options.apply_silu);
+                output.data[output1_row_base] = maybeApplySilu(conv2d3x3Pad1Stride2Point(
                     input,
                     weights,
                     bias1,
@@ -430,7 +439,7 @@ fn conv2d3x3Pad1Stride2Range(
                     weights1_channel_base,
                     oy,
                     0,
-                );
+                ), options.apply_silu);
 
                 for (1..interior_w_end) |ox| {
                     const output0_index = output0_row_base + ox;
@@ -476,12 +485,12 @@ fn conv2d3x3Pad1Stride2Range(
                         acc1 += v22 * weights.data[weight1_base + 8];
                     }
 
-                    output.data[output0_index] = acc0;
-                    output.data[output1_index] = acc1;
+                    output.data[output0_index] = maybeApplySilu(acc0, options.apply_silu);
+                    output.data[output1_index] = maybeApplySilu(acc1, options.apply_silu);
                 }
 
                 for (interior_w_end..expected_w) |ox| {
-                    output.data[output0_row_base + ox] = conv2d3x3Pad1Stride2Point(
+                    output.data[output0_row_base + ox] = maybeApplySilu(conv2d3x3Pad1Stride2Point(
                         input,
                         weights,
                         bias0,
@@ -489,8 +498,8 @@ fn conv2d3x3Pad1Stride2Range(
                         weights0_channel_base,
                         oy,
                         ox,
-                    );
-                    output.data[output1_row_base + ox] = conv2d3x3Pad1Stride2Point(
+                    ), options.apply_silu);
+                    output.data[output1_row_base + ox] = maybeApplySilu(conv2d3x3Pad1Stride2Point(
                         input,
                         weights,
                         bias1,
@@ -498,7 +507,7 @@ fn conv2d3x3Pad1Stride2Range(
                         weights1_channel_base,
                         oy,
                         ox,
-                    );
+                    ), options.apply_silu);
                 }
             }
         }
@@ -512,7 +521,7 @@ fn conv2d3x3Pad1Stride2Range(
                 const output_row_base = output_channel_base + oy * expected_w;
                 if (oy == 0 or oy >= interior_h_end) {
                     for (0..expected_w) |ox| {
-                        output.data[output_row_base + ox] = conv2d3x3Pad1Stride2Point(
+                        output.data[output_row_base + ox] = maybeApplySilu(conv2d3x3Pad1Stride2Point(
                             input,
                             weights,
                             bias_value,
@@ -520,12 +529,12 @@ fn conv2d3x3Pad1Stride2Range(
                             weights_channel_base,
                             oy,
                             ox,
-                        );
+                        ), options.apply_silu);
                     }
                     continue;
                 }
 
-                output.data[output_row_base] = conv2d3x3Pad1Stride2Point(
+                output.data[output_row_base] = maybeApplySilu(conv2d3x3Pad1Stride2Point(
                     input,
                     weights,
                     bias_value,
@@ -533,7 +542,7 @@ fn conv2d3x3Pad1Stride2Range(
                     weights_channel_base,
                     oy,
                     0,
-                );
+                ), options.apply_silu);
 
                 for (1..interior_w_end) |ox| {
                     const output_index = output_row_base + ox;
@@ -556,11 +565,11 @@ fn conv2d3x3Pad1Stride2Range(
                         acc += input_channel[row2 + 2] * weights.data[weight_base + 8];
                     }
 
-                    output.data[output_index] = acc;
+                    output.data[output_index] = maybeApplySilu(acc, options.apply_silu);
                 }
 
                 for (interior_w_end..expected_w) |ox| {
-                    output.data[output_row_base + ox] = conv2d3x3Pad1Stride2Point(
+                    output.data[output_row_base + ox] = maybeApplySilu(conv2d3x3Pad1Stride2Point(
                         input,
                         weights,
                         bias_value,
@@ -568,7 +577,7 @@ fn conv2d3x3Pad1Stride2Range(
                         weights_channel_base,
                         oy,
                         ox,
-                    );
+                    ), options.apply_silu);
                 }
             }
         }
@@ -718,7 +727,7 @@ fn conv2dGeneralRange(
                             }
                         }
                     }
-                    output.data[output_row_base + ox] = acc;
+                    output.data[output_row_base + ox] = maybeApplySilu(acc, options.apply_silu);
                 }
             }
         }
@@ -731,6 +740,7 @@ fn conv2dPointwise(
     bias: ?[]const f32,
     output: *Tensor,
     groups: usize,
+    apply_silu: bool,
 ) OpError!void {
     const batch = input.shape[0];
     const out_channels = weights.shape[0];
@@ -738,10 +748,10 @@ fn conv2dPointwise(
     const workload = batch * out_channels * plane * (input.shape[1] / groups);
     const thread_count = chooseConvThreadCount(workload, out_channels);
     if (thread_count > 1) {
-        return conv2dPointwiseParallel(input, weights, bias, output, groups, thread_count);
+        return conv2dPointwiseParallel(input, weights, bias, output, groups, thread_count, apply_silu);
     }
 
-    return conv2dPointwiseRange(input, weights, bias, output, groups, 0, out_channels);
+    return conv2dPointwiseRange(input, weights, bias, output, groups, 0, out_channels, apply_silu);
 }
 
 fn conv2dPointwiseParallel(
@@ -751,6 +761,7 @@ fn conv2dPointwiseParallel(
     output: *Tensor,
     groups: usize,
     thread_count: usize,
+    apply_silu: bool,
 ) OpError!void {
     var threads: [max_supported_conv_threads - 1]std.Thread = undefined;
     var spawned: usize = 0;
@@ -762,7 +773,7 @@ fn conv2dPointwiseParallel(
         if (oc_start == oc_end) continue;
 
         if (thread_index + 1 == thread_count) {
-            try conv2dPointwiseRange(input, weights, bias, output, groups, oc_start, oc_end);
+            try conv2dPointwiseRange(input, weights, bias, output, groups, oc_start, oc_end, apply_silu);
         } else {
             threads[spawned] = std.Thread.spawn(.{}, conv2dPointwiseWorker, .{
                 Conv2DPointwiseTask{
@@ -773,9 +784,10 @@ fn conv2dPointwiseParallel(
                     .groups = groups,
                     .oc_start = oc_start,
                     .oc_end = oc_end,
+                    .apply_silu = apply_silu,
                 },
             }) catch {
-                try conv2dPointwiseRange(input, weights, bias, output, groups, oc_start, oc_end);
+                try conv2dPointwiseRange(input, weights, bias, output, groups, oc_start, oc_end, apply_silu);
                 continue;
             };
             spawned += 1;
@@ -793,6 +805,7 @@ fn conv2dPointwiseRange(
     groups: usize,
     oc_start: usize,
     oc_end: usize,
+    apply_silu: bool,
 ) OpError!void {
     const batch = input.shape[0];
     const in_channels = input.shape[1];
@@ -831,6 +844,10 @@ fn conv2dPointwiseRange(
                         dst1.* += src * weight1;
                     }
                 }
+                if (apply_silu) {
+                    for (out0_slice) |*dst| dst.* = siluValue(dst.*);
+                    for (out1_slice) |*dst| dst.* = siluValue(dst.*);
+                }
                 oc += 2;
                 continue;
             }
@@ -846,6 +863,9 @@ fn conv2dPointwiseRange(
                 for (out_slice, input_slice) |*dst, src| {
                     dst.* += src * weight_value;
                 }
+            }
+            if (apply_silu) {
+                for (out_slice) |*dst| dst.* = siluValue(dst.*);
             }
             oc += 1;
         }
@@ -871,7 +891,7 @@ fn conv2d3x3Pad1Worker(task: Conv2DTask) void {
 }
 
 fn conv2d3x3Pad1Stride2Worker(task: Conv2DTask) void {
-    conv2d3x3Pad1Stride2Range(task.input, task.weights, task.bias, task.output, task.oc_start, task.oc_end) catch unreachable;
+    conv2d3x3Pad1Stride2Range(task.input, task.weights, task.bias, task.output, task.options, task.oc_start, task.oc_end) catch unreachable;
 }
 
 const Conv2DPointwiseTask = struct {
@@ -882,10 +902,11 @@ const Conv2DPointwiseTask = struct {
     groups: usize,
     oc_start: usize,
     oc_end: usize,
+    apply_silu: bool,
 };
 
 fn conv2dPointwiseWorker(task: Conv2DPointwiseTask) void {
-    conv2dPointwiseRange(task.input, task.weights, task.bias, task.output, task.groups, task.oc_start, task.oc_end) catch unreachable;
+    conv2dPointwiseRange(task.input, task.weights, task.bias, task.output, task.groups, task.oc_start, task.oc_end, task.apply_silu) catch unreachable;
 }
 
 fn chooseConvThreadCount(workload: usize, out_channels: usize) usize {

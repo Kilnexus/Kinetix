@@ -600,8 +600,11 @@ fn runConvPlan(
         .pad_h = plan.pad_h,
         .pad_w = plan.pad_w,
         .groups = plan.groups,
+        .apply_silu = plan.activation == .silu,
     });
-    utils.applyActivation(&output, plan.activation);
+    if (plan.activation != .silu) {
+        utils.applyActivation(&output, plan.activation);
+    }
     return output;
 }
 

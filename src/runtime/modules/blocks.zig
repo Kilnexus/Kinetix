@@ -73,8 +73,11 @@ pub fn runConvModule(
         .pad_h = conv_spec.padding[0],
         .pad_w = conv_spec.padding[1],
         .groups = conv_spec.groups,
+        .apply_silu = conv_spec.activation == .silu,
     });
-    utils.applyActivation(&output, conv_spec.activation);
+    if (conv_spec.activation != .silu) {
+        utils.applyActivation(&output, conv_spec.activation);
+    }
     return output;
 }
 
