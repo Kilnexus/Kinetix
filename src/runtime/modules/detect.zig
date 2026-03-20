@@ -49,7 +49,8 @@ pub const ProfiledDetectOutput = struct {
 };
 
 pub fn runDetect(
-    allocator: std.mem.Allocator,
+    output_allocator: std.mem.Allocator,
+    tensor_allocator: std.mem.Allocator,
     scratch_allocator: std.mem.Allocator,
     model_graph: *const graph.Graph,
     weights_blob: *const weights_mod.WeightsBlob,
@@ -58,7 +59,8 @@ pub fn runDetect(
     options: DetectOptions,
 ) !DetectOutput {
     const profiled = try runDetectProfile(
-        allocator,
+        output_allocator,
+        tensor_allocator,
         scratch_allocator,
         model_graph,
         weights_blob,
@@ -70,7 +72,8 @@ pub fn runDetect(
 }
 
 pub fn runDetectProfile(
-    allocator: std.mem.Allocator,
+    output_allocator: std.mem.Allocator,
+    tensor_allocator: std.mem.Allocator,
     scratch_allocator: std.mem.Allocator,
     model_graph: *const graph.Graph,
     weights_blob: *const weights_mod.WeightsBlob,
@@ -109,9 +112,9 @@ pub fn runDetectProfile(
 
     for (feature_inputs, 0..) |feature, level| {
         var branch_timer = try std.time.Timer.start();
-        var reg = try runDetectBranch(scratch_allocator, model_graph, weights_blob, reg_branch, level, feature);
+        var reg = try runDetectBranch(tensor_allocator, model_graph, weights_blob, reg_branch, level, feature);
         defer reg.deinit();
-        var cls = try runDetectBranch(scratch_allocator, model_graph, weights_blob, cls_branch, level, feature);
+        var cls = try runDetectBranch(tensor_allocator, model_graph, weights_blob, cls_branch, level, feature);
         defer cls.deinit();
         profile.branch_ns += branch_timer.read();
 
@@ -166,14 +169,14 @@ pub fn runDetectProfile(
     const candidate_count = candidates.items.len;
     profile.candidate_count = candidate_count;
     var nms_timer = try std.time.Timer.start();
-    const selected = try nms(scratch_allocator, allocator, candidates.items, options);
+    const selected = try nms(scratch_allocator, output_allocator, candidates.items, options);
     profile.nms_ns = nms_timer.read();
     candidates.deinit(scratch_allocator);
     profile.kept_count = selected.len;
 
     return .{
         .output = .{
-            .allocator = allocator,
+            .allocator = output_allocator,
             .detections = selected,
             .candidate_count = candidate_count,
         },

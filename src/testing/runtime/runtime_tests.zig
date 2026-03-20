@@ -222,7 +222,7 @@ test "runDetect decodes three feature maps into bounded detections" {
     p5.fill(0.0);
 
     const features = [_]*const Tensor{ &p3, &p4, &p5 };
-    var output = try runtime.runDetect(testing.allocator, testing.allocator, &model_graph, &weights_blob, "model.model.23", &features, .{
+    var output = try runtime.runDetect(testing.allocator, testing.allocator, testing.allocator, &model_graph, &weights_blob, "model.model.23", &features, .{
         .score_threshold = 0.0,
         .iou_threshold = 0.7,
         .max_det = 300,

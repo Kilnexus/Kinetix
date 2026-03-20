@@ -3,6 +3,7 @@ const graph = @import("graph");
 const ops = @import("ops");
 const detect = @import("../modules/detect.zig");
 const blocks = @import("../modules/blocks.zig");
+const reuse_allocator = @import("../base/reuse_allocator.zig");
 const types = @import("../base/types.zig");
 const weights_mod = @import("weights");
 
@@ -59,6 +60,10 @@ pub fn runGraph(
     input: *const Tensor,
     detect_options: DetectOptions,
 ) !DetectOutput {
+    var reuse = reuse_allocator.ReuseAllocator.init(allocator);
+    defer reuse.deinit();
+    const tensor_allocator = reuse.allocator();
+
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const scratch = arena.allocator();
@@ -83,6 +88,7 @@ pub fn runGraph(
             var module_path_buffer: [256]u8 = undefined;
             detect_output = try detect.runDetect(
                 allocator,
+                tensor_allocator,
                 scratch,
                 model_graph,
                 weights_blob,
@@ -110,7 +116,7 @@ pub fn runGraph(
                 }
             }
 
-            var merged = try Tensor.init(allocator, tensor_ptrs[0].shape[0], channels, height, width);
+            var merged = try Tensor.init(tensor_allocator, tensor_ptrs[0].shape[0], channels, height, width);
             errdefer merged.deinit();
             try ops.concatChannels(tensor_ptrs, &merged);
             outputs[node_index] = merged;
@@ -123,9 +129,9 @@ pub fn runGraph(
         const module_path = try modulePathForNode(&module_path_buffer, node.path);
 
         const output = if (std.mem.eql(u8, node.kind, "Upsample"))
-            try runUpsampleModule(allocator, model_graph, module_path, source)
+            try runUpsampleModule(tensor_allocator, model_graph, module_path, source)
         else
-            try blocks.runModule(allocator, model_graph, weights_blob, module_path, source);
+            try blocks.runModule(tensor_allocator, model_graph, weights_blob, module_path, source);
         outputs[node_index] = output;
         releaseInputs(node.from, node_index, use_counts, outputs);
     }
@@ -140,6 +146,10 @@ pub fn profileGraph(
     input: *const Tensor,
     detect_options: DetectOptions,
 ) !GraphProfile {
+    var reuse = reuse_allocator.ReuseAllocator.init(allocator);
+    defer reuse.deinit();
+    const tensor_allocator = reuse.allocator();
+
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const scratch = arena.allocator();
@@ -167,6 +177,7 @@ pub fn profileGraph(
             var module_path_buffer: [256]u8 = undefined;
             var profiled_detect = try detect.runDetectProfile(
                 allocator,
+                tensor_allocator,
                 scratch,
                 model_graph,
                 weights_blob,
@@ -198,7 +209,7 @@ pub fn profileGraph(
                 }
             }
 
-            var merged = try Tensor.init(allocator, tensor_ptrs[0].shape[0], channels, height, width);
+            var merged = try Tensor.init(tensor_allocator, tensor_ptrs[0].shape[0], channels, height, width);
             errdefer merged.deinit();
             try ops.concatChannels(tensor_ptrs, &merged);
             outputs[node_index] = merged;
@@ -214,9 +225,9 @@ pub fn profileGraph(
             const module_path = try modulePathForNode(&module_path_buffer, node.path);
 
             const output = if (std.mem.eql(u8, node.kind, "Upsample"))
-                try runUpsampleModule(allocator, model_graph, module_path, source)
+                try runUpsampleModule(tensor_allocator, model_graph, module_path, source)
             else
-                try blocks.runModule(allocator, model_graph, weights_blob, module_path, source);
+                try blocks.runModule(tensor_allocator, model_graph, weights_blob, module_path, source);
             outputs[node_index] = output;
             profile_nodes[node_index] = .{
                 .path = node.path,
