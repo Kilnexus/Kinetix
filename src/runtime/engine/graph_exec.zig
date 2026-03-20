@@ -16,6 +16,7 @@ pub const NodeProfile = struct {
     kind: []const u8,
     elapsed_ns: u64,
     detect_profile: ?detect.DetectProfile = null,
+    c3k2_profile: ?blocks.C3k2Profile = null,
 };
 
 pub const GraphProfile = struct {
@@ -224,16 +225,32 @@ pub fn profileGraph(
             var module_path_buffer: [256]u8 = undefined;
             const module_path = try modulePathForNode(&module_path_buffer, node.path);
 
-            const output = if (std.mem.eql(u8, node.kind, "Upsample"))
-                try runUpsampleModule(tensor_allocator, model_graph, module_path, source)
-            else
-                try blocks.runModule(tensor_allocator, model_graph, weights_blob, module_path, source);
-            outputs[node_index] = output;
-            profile_nodes[node_index] = .{
-                .path = node.path,
-                .kind = node.kind,
-                .elapsed_ns = timer.read(),
-            };
+            if (std.mem.eql(u8, node.kind, "Upsample")) {
+                const output = try runUpsampleModule(tensor_allocator, model_graph, module_path, source);
+                outputs[node_index] = output;
+                profile_nodes[node_index] = .{
+                    .path = node.path,
+                    .kind = node.kind,
+                    .elapsed_ns = timer.read(),
+                };
+            } else if (std.mem.eql(u8, node.kind, "C3k2")) {
+                const profiled = try blocks.runC3k2Profile(tensor_allocator, model_graph, weights_blob, module_path, source);
+                outputs[node_index] = profiled.output;
+                profile_nodes[node_index] = .{
+                    .path = node.path,
+                    .kind = node.kind,
+                    .elapsed_ns = timer.read(),
+                    .c3k2_profile = profiled.c3k2_profile,
+                };
+            } else {
+                const output = try blocks.runModule(tensor_allocator, model_graph, weights_blob, module_path, source);
+                outputs[node_index] = output;
+                profile_nodes[node_index] = .{
+                    .path = node.path,
+                    .kind = node.kind,
+                    .elapsed_ns = timer.read(),
+                };
+            }
             releaseInputs(node.from, node_index, use_counts, outputs);
         }
     }

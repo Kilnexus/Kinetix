@@ -10,6 +10,19 @@ const utils = @import("../base/utils.zig");
 pub const Tensor = types.Tensor;
 pub const RuntimeError = types.RuntimeError;
 
+pub const C3k2Profile = struct {
+    cv1_ns: u64 = 0,
+    child_ns: u64 = 0,
+    concat_ns: u64 = 0,
+    cv2_ns: u64 = 0,
+    child_kind: []const u8 = "",
+};
+
+pub const ProfiledTensor = struct {
+    output: Tensor,
+    c3k2_profile: C3k2Profile,
+};
+
 pub fn runConvModule(
     allocator: std.mem.Allocator,
     model_graph: *const graph.Graph,
@@ -274,8 +287,130 @@ pub fn runC3k2(
         try ops.copyChannelRange(part, 0, part.shape[1], &concat, channel_offset);
         channel_offset += part.shape[1];
     }
-
     return try runConvModule(allocator, model_graph, weights_blob, cv2_path, &concat);
+}
+
+pub fn runC3k2Profile(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module_path: []const u8,
+    input: *const Tensor,
+) !ProfiledTensor {
+    const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
+    if (!std.mem.eql(u8, module.kind, "C3k2")) return error.InvalidModuleKind;
+
+    const chunk_channels: usize = @intCast(
+        (module.getAttr("c") orelse return error.MissingAttribute).asInteger() orelse return error.InvalidAttributeType,
+    );
+
+    var cv1_buffer: [256]u8 = undefined;
+    const cv1_path = try utils.childModulePath(&cv1_buffer, module_path, "cv1");
+    var cv2_buffer: [256]u8 = undefined;
+    const cv2_path = try utils.childModulePath(&cv2_buffer, module_path, "cv2");
+    var list_buffer: [256]u8 = undefined;
+    const list_path = try utils.childModulePath(&list_buffer, module_path, "m");
+
+    var profile = C3k2Profile{};
+    var timer = try std.time.Timer.start();
+
+    var stem = try runConvModule(allocator, model_graph, weights_blob, cv1_path, input);
+    profile.cv1_ns = timer.read();
+    defer stem.deinit();
+
+    if (stem.shape[1] != chunk_channels * 2) return ops.OpError.ShapeMismatch;
+
+    const module_list = model_graph.findModule(list_path) orelse return error.ModuleNotFound;
+    if (module_list.children.len == 1) {
+        const child = &module_list.children[0];
+        profile.child_kind = child.kind;
+        const right_is_view = stem.shape[0] == 1;
+        var right = if (right_is_view)
+            try utils.sliceChannelsViewBatch1(&stem, chunk_channels, chunk_channels)
+        else
+            try utils.sliceChannels(allocator, &stem, chunk_channels, chunk_channels);
+        defer if (!right_is_view) right.deinit();
+
+        timer.reset();
+        var child_out = if (std.mem.eql(u8, child.kind, "Bottleneck"))
+            try runBottleneck(allocator, model_graph, weights_blob, child.path, &right)
+        else if (std.mem.eql(u8, child.kind, "C3k"))
+            try runC3k(allocator, model_graph, weights_blob, child.path, &right)
+        else
+            try runModule(allocator, model_graph, weights_blob, child.path, &right);
+        profile.child_ns = timer.read();
+        defer child_out.deinit();
+
+        timer.reset();
+        var concat = try Tensor.init(
+            allocator,
+            stem.shape[0],
+            chunk_channels + right.shape[1] + child_out.shape[1],
+            stem.shape[2],
+            stem.shape[3],
+        );
+        defer concat.deinit();
+
+        try ops.copyChannelRange(&stem, 0, chunk_channels, &concat, 0);
+        try ops.copyChannelRange(&right, 0, right.shape[1], &concat, chunk_channels);
+        try ops.copyChannelRange(&child_out, 0, child_out.shape[1], &concat, chunk_channels + right.shape[1]);
+        profile.concat_ns = timer.read();
+
+        timer.reset();
+        const output = try runConvModule(allocator, model_graph, weights_blob, cv2_path, &concat);
+        profile.cv2_ns = timer.read();
+        return .{ .output = output, .c3k2_profile = profile };
+    }
+
+    var parts = try allocator.alloc(Tensor, 2 + module_list.children.len);
+    defer allocator.free(parts);
+
+    var initialized_parts: usize = 0;
+    errdefer {
+        for (parts[0..initialized_parts]) |*part| part.deinit();
+    }
+
+    parts[0] = try utils.sliceChannels(allocator, &stem, chunk_channels, chunk_channels);
+    initialized_parts += 1;
+
+    var current_index: usize = 0;
+    profile.child_kind = "ModuleList";
+    timer.reset();
+    for (module_list.children) |child| {
+        parts[initialized_parts] = try runModule(allocator, model_graph, weights_blob, child.path, &parts[current_index]);
+        current_index = initialized_parts;
+        initialized_parts += 1;
+    }
+    profile.child_ns = timer.read();
+    defer {
+        for (parts[0..initialized_parts]) |*part| part.deinit();
+    }
+
+    var concat_channels: usize = chunk_channels;
+    for (parts[0..initialized_parts]) |*part| concat_channels += part.shape[1];
+
+    timer.reset();
+    var concat = try Tensor.init(
+        allocator,
+        stem.shape[0],
+        concat_channels,
+        stem.shape[2],
+        stem.shape[3],
+    );
+    defer concat.deinit();
+
+    try ops.copyChannelRange(&stem, 0, chunk_channels, &concat, 0);
+    var channel_offset = chunk_channels;
+    for (parts[0..initialized_parts]) |*part| {
+        try ops.copyChannelRange(part, 0, part.shape[1], &concat, channel_offset);
+        channel_offset += part.shape[1];
+    }
+    profile.concat_ns = timer.read();
+
+    timer.reset();
+    const output = try runConvModule(allocator, model_graph, weights_blob, cv2_path, &concat);
+    profile.cv2_ns = timer.read();
+    return .{ .output = output, .c3k2_profile = profile };
 }
 
 pub fn runModule(
