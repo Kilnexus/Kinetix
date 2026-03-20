@@ -57,7 +57,18 @@ pub fn runConvModule(
     module_path: []const u8,
     input: *const Tensor,
 ) !Tensor {
-    const conv_spec = try spec.resolveConvSpec(model_graph, module_path);
+    const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
+    return runConvNode(allocator, model_graph, weights_blob, module, input);
+}
+
+fn runConvNode(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+    input: *const Tensor,
+) !Tensor {
+    const conv_spec = try spec.resolveConvSpecNode(model_graph, module);
     const out_height = ((input.shape[2] + 2 * conv_spec.padding[0] - conv_spec.weight.shape[2]) / conv_spec.stride[0]) + 1;
     const out_width = ((input.shape[3] + 2 * conv_spec.padding[1] - conv_spec.weight.shape[3]) / conv_spec.stride[1]) + 1;
 
@@ -89,22 +100,7 @@ pub fn runBottleneck(
     input: *const Tensor,
 ) !Tensor {
     const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
-    if (!std.mem.eql(u8, module.kind, "Bottleneck")) return error.InvalidModuleKind;
-
-    var cv1_buffer: [256]u8 = undefined;
-    const cv1_path = try utils.childModulePath(&cv1_buffer, module_path, "cv1");
-    var cv2_buffer: [256]u8 = undefined;
-    const cv2_path = try utils.childModulePath(&cv2_buffer, module_path, "cv2");
-
-    var hidden = try runConvModule(allocator, model_graph, weights_blob, cv1_path, input);
-    defer hidden.deinit();
-
-    var output = try runConvModule(allocator, model_graph, weights_blob, cv2_path, &hidden);
-    if ((module.getAttr("add") orelse return error.MissingAttribute).asBool() orelse return error.InvalidAttributeType) {
-        if (!output.sameShape(input)) return ops.OpError.ShapeMismatch;
-        for (output.data, input.data) |*dst, src| dst.* += src;
-    }
-    return output;
+    return runBottleneckNode(allocator, model_graph, weights_blob, module, input);
 }
 
 pub const BottleneckProfiledTensor = struct {
@@ -127,20 +123,15 @@ pub fn runBottleneckProfile(
     const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
     if (!std.mem.eql(u8, module.kind, "Bottleneck")) return error.InvalidModuleKind;
 
-    var cv1_buffer: [256]u8 = undefined;
-    const cv1_path = try utils.childModulePath(&cv1_buffer, module_path, "cv1");
-    var cv2_buffer: [256]u8 = undefined;
-    const cv2_path = try utils.childModulePath(&cv2_buffer, module_path, "cv2");
-
     var profile = BottleneckProfile{};
     var timer = try std.time.Timer.start();
 
-    var hidden = try runConvModule(allocator, model_graph, weights_blob, cv1_path, input);
+    var hidden = try runConvNode(allocator, model_graph, weights_blob, &module.children[0], input);
     profile.cv1_ns = timer.read();
     defer hidden.deinit();
 
     timer.reset();
-    var output = try runConvModule(allocator, model_graph, weights_blob, cv2_path, &hidden);
+    var output = try runConvNode(allocator, model_graph, weights_blob, &module.children[1], &hidden);
     profile.cv2_ns = timer.read();
 
     const has_add = (module.getAttr("add") orelse return error.MissingAttribute).asBool() orelse return error.InvalidAttributeType;
@@ -281,41 +272,62 @@ pub fn runC3k(
     input: *const Tensor,
 ) !Tensor {
     const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
+    return runC3kNode(allocator, model_graph, weights_blob, module, input);
+}
+
+fn runBottleneckNode(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+    input: *const Tensor,
+) !Tensor {
+    if (!std.mem.eql(u8, module.kind, "Bottleneck")) return error.InvalidModuleKind;
+
+    var hidden = try runConvModule(allocator, model_graph, weights_blob, module.children[0].path, input);
+    defer hidden.deinit();
+
+    var output = try runConvModule(allocator, model_graph, weights_blob, module.children[1].path, &hidden);
+    if ((module.getAttr("add") orelse return error.MissingAttribute).asBool() orelse return error.InvalidAttributeType) {
+        if (!output.sameShape(input)) return ops.OpError.ShapeMismatch;
+        for (output.data, input.data) |*dst, src| dst.* += src;
+    }
+    return output;
+}
+
+fn runC3kNode(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+    input: *const Tensor,
+) !Tensor {
     if (!std.mem.eql(u8, module.kind, "C3k")) return error.InvalidModuleKind;
 
-    var cv1_buffer: [256]u8 = undefined;
-    const cv1_path = try utils.childModulePath(&cv1_buffer, module_path, "cv1");
-    var cv2_buffer: [256]u8 = undefined;
-    const cv2_path = try utils.childModulePath(&cv2_buffer, module_path, "cv2");
-    var cv3_buffer: [256]u8 = undefined;
-    const cv3_path = try utils.childModulePath(&cv3_buffer, module_path, "cv3");
-    var seq_buffer: [256]u8 = undefined;
-    const seq_path = try utils.childModulePath(&seq_buffer, module_path, "m");
-
-    var left = try runConvModule(allocator, model_graph, weights_blob, cv1_path, input);
+    var left = try runConvNode(allocator, model_graph, weights_blob, &module.children[0], input);
     defer left.deinit();
 
-    const seq_node = model_graph.findModule(seq_path) orelse return error.ModuleNotFound;
+    const seq_node = &module.children[3];
     if (seq_node.children.len == 2 and
         std.mem.eql(u8, seq_node.children[0].kind, "Bottleneck") and
         std.mem.eql(u8, seq_node.children[1].kind, "Bottleneck"))
     {
-        const next0 = try runBottleneck(allocator, model_graph, weights_blob, seq_node.children[0].path, &left);
+        const next0 = try runBottleneckNode(allocator, model_graph, weights_blob, &seq_node.children[0], &left);
         left.deinit();
         left = next0;
 
-        const next1 = try runBottleneck(allocator, model_graph, weights_blob, seq_node.children[1].path, &left);
+        const next1 = try runBottleneckNode(allocator, model_graph, weights_blob, &seq_node.children[1], &left);
         left.deinit();
         left = next1;
     } else {
         for (seq_node.children) |child| {
-            const next = try runModule(allocator, model_graph, weights_blob, child.path, &left);
+            const next = try runModuleNode(allocator, model_graph, weights_blob, &child, &left);
             left.deinit();
             left = next;
         }
     }
 
-    var right = try runConvModule(allocator, model_graph, weights_blob, cv2_path, input);
+    var right = try runConvNode(allocator, model_graph, weights_blob, &module.children[1], input);
     defer right.deinit();
 
     var concat = try Tensor.init(
@@ -330,7 +342,7 @@ pub fn runC3k(
     const inputs = [_]*const Tensor{ &left, &right };
     try ops.concatChannels(&inputs, &concat);
 
-    return try runConvModule(allocator, model_graph, weights_blob, cv3_path, &concat);
+    return try runConvNode(allocator, model_graph, weights_blob, &module.children[2], &concat);
 }
 
 pub const C3kProfiledTensor = struct {
@@ -423,25 +435,28 @@ pub fn runC3k2(
     input: *const Tensor,
 ) !Tensor {
     const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
+    return runC3k2Node(allocator, model_graph, weights_blob, module, input);
+}
+
+fn runC3k2Node(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+    input: *const Tensor,
+) !Tensor {
     if (!std.mem.eql(u8, module.kind, "C3k2")) return error.InvalidModuleKind;
 
     const chunk_channels: usize = @intCast(
         (module.getAttr("c") orelse return error.MissingAttribute).asInteger() orelse return error.InvalidAttributeType,
     );
 
-    var cv1_buffer: [256]u8 = undefined;
-    const cv1_path = try utils.childModulePath(&cv1_buffer, module_path, "cv1");
-    var cv2_buffer: [256]u8 = undefined;
-    const cv2_path = try utils.childModulePath(&cv2_buffer, module_path, "cv2");
-    var list_buffer: [256]u8 = undefined;
-    const list_path = try utils.childModulePath(&list_buffer, module_path, "m");
-
-    var stem = try runConvModule(allocator, model_graph, weights_blob, cv1_path, input);
+    var stem = try runConvNode(allocator, model_graph, weights_blob, &module.children[0], input);
     defer stem.deinit();
 
     if (stem.shape[1] != chunk_channels * 2) return ops.OpError.ShapeMismatch;
 
-    const module_list = model_graph.findModule(list_path) orelse return error.ModuleNotFound;
+    const module_list = &module.children[2];
     if (module_list.children.len == 1) {
         const child = &module_list.children[0];
         const right_is_view = stem.shape[0] == 1;
@@ -471,7 +486,7 @@ pub fn runC3k2(
         try ops.copyChannelRange(&stem, 0, chunk_channels, &concat, 0);
         try ops.copyChannelRange(&right, 0, right.shape[1], &concat, chunk_channels);
         try ops.copyChannelRange(&child_out, 0, child_out.shape[1], &concat, chunk_channels + right.shape[1]);
-        return try runConvModule(allocator, model_graph, weights_blob, cv2_path, &concat);
+        return try runConvNode(allocator, model_graph, weights_blob, &module.children[1], &concat);
     }
 
     var parts = try allocator.alloc(Tensor, 2 + module_list.children.len);
@@ -513,7 +528,7 @@ pub fn runC3k2(
         try ops.copyChannelRange(part, 0, part.shape[1], &concat, channel_offset);
         channel_offset += part.shape[1];
     }
-    return try runConvModule(allocator, model_graph, weights_blob, cv2_path, &concat);
+    return try runConvNode(allocator, model_graph, weights_blob, &module.children[1], &concat);
 }
 
 pub fn runC3k2Profile(
@@ -568,7 +583,7 @@ pub fn runC3k2Profile(
             profile.child_c3k = profiled.c3k_profile;
             break :blk profiled.output;
         } else
-            try runModule(allocator, model_graph, weights_blob, child.path, &right);
+            try runModuleNode(allocator, model_graph, weights_blob, child, &right);
         profile.child_ns = timer.read();
         defer child_out.deinit();
 
@@ -652,45 +667,54 @@ pub fn runModule(
     input: *const Tensor,
 ) anyerror!Tensor {
     const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
+    return runModuleNode(allocator, model_graph, weights_blob, module, input);
+}
 
+fn runModuleNode(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+    input: *const Tensor,
+) anyerror!Tensor {
     if (std.mem.eql(u8, module.kind, "Identity")) {
         return input.clone();
     }
     if (std.mem.eql(u8, module.kind, "Sequential")) {
         if (module.children.len == 0) return input.clone();
 
-        var current = try runModule(allocator, model_graph, weights_blob, module.children[0].path, input);
+        var current = try runModuleNode(allocator, model_graph, weights_blob, &module.children[0], input);
         errdefer current.deinit();
         for (module.children[1..]) |child| {
-            const next = try runModule(allocator, model_graph, weights_blob, child.path, &current);
+            const next = try runModuleNode(allocator, model_graph, weights_blob, &child, &current);
             current.deinit();
             current = next;
         }
         return current;
     }
     if (std.mem.eql(u8, module.kind, "Conv") or std.mem.eql(u8, module.kind, "DWConv") or std.mem.eql(u8, module.kind, "Conv2d")) {
-        return runConvModule(allocator, model_graph, weights_blob, module_path, input);
+        return runConvNode(allocator, model_graph, weights_blob, module, input);
     }
     if (std.mem.eql(u8, module.kind, "Bottleneck")) {
-        return runBottleneck(allocator, model_graph, weights_blob, module_path, input);
+        return runBottleneckNode(allocator, model_graph, weights_blob, module, input);
     }
     if (std.mem.eql(u8, module.kind, "SPPF")) {
-        return runSPPF(allocator, model_graph, weights_blob, module_path, input);
+        return runSPPF(allocator, model_graph, weights_blob, module.path, input);
     }
     if (std.mem.eql(u8, module.kind, "C3k")) {
-        return runC3k(allocator, model_graph, weights_blob, module_path, input);
+        return runC3kNode(allocator, model_graph, weights_blob, module, input);
     }
     if (std.mem.eql(u8, module.kind, "C3k2")) {
-        return runC3k2(allocator, model_graph, weights_blob, module_path, input);
+        return runC3k2Node(allocator, model_graph, weights_blob, module, input);
     }
     if (std.mem.eql(u8, module.kind, "Attention")) {
-        return psa.runAttention(allocator, model_graph, weights_blob, module_path, input);
+        return psa.runAttention(allocator, model_graph, weights_blob, module.path, input);
     }
     if (std.mem.eql(u8, module.kind, "PSABlock")) {
-        return psa.runPSABlock(allocator, model_graph, weights_blob, module_path, input);
+        return psa.runPSABlock(allocator, model_graph, weights_blob, module.path, input);
     }
     if (std.mem.eql(u8, module.kind, "C2PSA")) {
-        return psa.runC2PSA(allocator, model_graph, weights_blob, module_path, input);
+        return psa.runC2PSA(allocator, model_graph, weights_blob, module.path, input);
     }
     return error.InvalidModuleKind;
 }

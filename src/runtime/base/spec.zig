@@ -8,6 +8,11 @@ pub const RuntimeError = types.RuntimeError;
 
 pub fn resolveConvSpec(model_graph: *const graph.Graph, module_path: []const u8) RuntimeError!ConvSpec {
     const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
+    return resolveConvSpecNode(model_graph, module);
+}
+
+pub fn resolveConvSpecNode(model_graph: *const graph.Graph, module: *const graph.ModuleNode) RuntimeError!ConvSpec {
+    const module_path = module.path;
 
     const is_wrapped_conv =
         std.mem.eql(u8, module.kind, "Conv") or
