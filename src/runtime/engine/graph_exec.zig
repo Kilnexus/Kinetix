@@ -17,6 +17,7 @@ pub const NodeProfile = struct {
     elapsed_ns: u64,
     detect_profile: ?detect.DetectProfile = null,
     c3k2_profile: ?blocks.C3k2Profile = null,
+    sppf_profile: ?blocks.SPPFProfile = null,
 };
 
 pub const GraphProfile = struct {
@@ -241,6 +242,15 @@ pub fn profileGraph(
                     .kind = node.kind,
                     .elapsed_ns = timer.read(),
                     .c3k2_profile = profiled.c3k2_profile,
+                };
+            } else if (std.mem.eql(u8, node.kind, "SPPF")) {
+                const profiled = try blocks.runSPPFProfile(tensor_allocator, model_graph, weights_blob, module_path, source);
+                outputs[node_index] = profiled.output;
+                profile_nodes[node_index] = .{
+                    .path = node.path,
+                    .kind = node.kind,
+                    .elapsed_ns = timer.read(),
+                    .sppf_profile = profiled.sppf_profile,
                 };
             } else {
                 const output = try blocks.runModule(tensor_allocator, model_graph, weights_blob, module_path, source);

@@ -35,6 +35,7 @@ pub const runAttention = psa.runAttention;
 pub const runPSABlock = psa.runPSABlock;
 pub const runC2PSA = psa.runC2PSA;
 pub const Detection = detect.Detection;
+pub const DetectBranchKind = detect.DetectBranchKind;
 pub const DetectOptions = detect.DetectOptions;
 pub const DetectOutput = detect.DetectOutput;
 pub const NodeProfile = graph_exec.NodeProfile;

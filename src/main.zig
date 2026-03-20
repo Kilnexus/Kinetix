@@ -427,6 +427,41 @@ fn runProfileMode(
                     detect_profile.kept_count,
                 },
             );
+            for (detect_profile.levels[0..detect_profile.level_count], 0..) |level_profile, level| {
+                try stdout.print(
+                    "detect_level_ms[{d}]: reg={d:.3} cls={d:.3} decode={d:.3}\n",
+                    .{
+                        level,
+                        nsToMs(level_profile.reg_ns),
+                        nsToMs(level_profile.cls_ns),
+                        nsToMs(level_profile.decode_ns),
+                    },
+                );
+                try stdout.print(
+                    "detect_level_reg_detail[{d}]: kind={s} s0={d:.3} s1={d:.3} s2={d:.3} s3={d:.3} s4={d:.3}\n",
+                    .{
+                        level,
+                        detectBranchKindName(level_profile.reg_detail.kind),
+                        nsToMs(level_profile.reg_detail.stage0_ns),
+                        nsToMs(level_profile.reg_detail.stage1_ns),
+                        nsToMs(level_profile.reg_detail.stage2_ns),
+                        nsToMs(level_profile.reg_detail.stage3_ns),
+                        nsToMs(level_profile.reg_detail.stage4_ns),
+                    },
+                );
+                try stdout.print(
+                    "detect_level_cls_detail[{d}]: kind={s} s0={d:.3} s1={d:.3} s2={d:.3} s3={d:.3} s4={d:.3}\n",
+                    .{
+                        level,
+                        detectBranchKindName(level_profile.cls_detail.kind),
+                        nsToMs(level_profile.cls_detail.stage0_ns),
+                        nsToMs(level_profile.cls_detail.stage1_ns),
+                        nsToMs(level_profile.cls_detail.stage2_ns),
+                        nsToMs(level_profile.cls_detail.stage3_ns),
+                        nsToMs(level_profile.cls_detail.stage4_ns),
+                    },
+                );
+            }
         }
         if (node.c3k2_profile) |c3k2_profile| {
             try stdout.print(
@@ -464,11 +499,32 @@ fn runProfileMode(
                 );
             }
         }
+        if (node.sppf_profile) |sppf_profile| {
+            try stdout.print(
+                "sppf_profile_ms: cv1={d:.3} pool1={d:.3} pool2={d:.3} pool3={d:.3} concat={d:.3} cv2={d:.3}\n",
+                .{
+                    nsToMs(sppf_profile.cv1_ns),
+                    nsToMs(sppf_profile.pool1_ns),
+                    nsToMs(sppf_profile.pool2_ns),
+                    nsToMs(sppf_profile.pool3_ns),
+                    nsToMs(sppf_profile.concat_ns),
+                    nsToMs(sppf_profile.cv2_ns),
+                },
+            );
+        }
     }
 }
 
 fn nsToMs(ns: u64) f64 {
     return @as(f64, @floatFromInt(ns)) / 1_000_000.0;
+}
+
+fn detectBranchKindName(kind: runtime.DetectBranchKind) []const u8 {
+    return switch (kind) {
+        .generic => "generic",
+        .cv2 => "cv2",
+        .cv3 => "cv3",
+    };
 }
 
 fn printMemoryStats(writer: anytype, stats: MemoryStats) !void {

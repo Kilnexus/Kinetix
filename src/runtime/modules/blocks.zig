@@ -36,6 +36,15 @@ pub const BottleneckProfile = struct {
     has_add: bool = false,
 };
 
+pub const SPPFProfile = struct {
+    cv1_ns: u64 = 0,
+    pool1_ns: u64 = 0,
+    pool2_ns: u64 = 0,
+    pool3_ns: u64 = 0,
+    concat_ns: u64 = 0,
+    cv2_ns: u64 = 0,
+};
+
 pub const ProfiledTensor = struct {
     output: Tensor,
     c3k2_profile: C3k2Profile,
@@ -98,6 +107,11 @@ pub fn runBottleneck(
 pub const BottleneckProfiledTensor = struct {
     output: Tensor,
     bottleneck_profile: BottleneckProfile,
+};
+
+pub const SPPFProfiledTensor = struct {
+    output: Tensor,
+    sppf_profile: SPPFProfile,
 };
 
 pub fn runBottleneckProfile(
@@ -187,6 +201,73 @@ pub fn runSPPF(
     try ops.concatChannels(&inputs, &concat);
 
     return try runConvModule(allocator, model_graph, weights_blob, cv2_path, &concat);
+}
+
+pub fn runSPPFProfile(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module_path: []const u8,
+    input: *const Tensor,
+) !SPPFProfiledTensor {
+    const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
+    if (!std.mem.eql(u8, module.kind, "SPPF")) return error.InvalidModuleKind;
+
+    var cv1_buffer: [256]u8 = undefined;
+    const cv1_path = try utils.childModulePath(&cv1_buffer, module_path, "cv1");
+    var cv2_buffer: [256]u8 = undefined;
+    const cv2_path = try utils.childModulePath(&cv2_buffer, module_path, "cv2");
+    var pool_path_buffer: [256]u8 = undefined;
+    const pool_path = try utils.childModulePath(&pool_path_buffer, module_path, "m");
+
+    const pool = model_graph.findModule(pool_path) orelse return error.ModuleNotFound;
+    const stride = try spec.getNodePair(pool, "stride");
+    const padding = try spec.getNodePair(pool, "padding");
+    const kernel = .{ padding[0] * 2 + 1, padding[1] * 2 + 1 };
+
+    var profile = SPPFProfile{};
+    var timer = try std.time.Timer.start();
+
+    var base = try runConvModule(allocator, model_graph, weights_blob, cv1_path, input);
+    profile.cv1_ns = timer.read();
+    defer base.deinit();
+
+    timer.reset();
+    var pool1 = try Tensor.init(allocator, base.shape[0], base.shape[1], base.shape[2], base.shape[3]);
+    defer pool1.deinit();
+    try ops.maxPool2d(&base, &pool1, kernel[0], kernel[1], stride[0], stride[1], padding[0], padding[1]);
+    profile.pool1_ns = timer.read();
+
+    timer.reset();
+    var pool2 = try Tensor.init(allocator, base.shape[0], base.shape[1], base.shape[2], base.shape[3]);
+    defer pool2.deinit();
+    try ops.maxPool2d(&pool1, &pool2, kernel[0], kernel[1], stride[0], stride[1], padding[0], padding[1]);
+    profile.pool2_ns = timer.read();
+
+    timer.reset();
+    var pool3 = try Tensor.init(allocator, base.shape[0], base.shape[1], base.shape[2], base.shape[3]);
+    defer pool3.deinit();
+    try ops.maxPool2d(&pool2, &pool3, kernel[0], kernel[1], stride[0], stride[1], padding[0], padding[1]);
+    profile.pool3_ns = timer.read();
+
+    timer.reset();
+    var concat = try Tensor.init(
+        allocator,
+        base.shape[0],
+        base.shape[1] * 4,
+        base.shape[2],
+        base.shape[3],
+    );
+    defer concat.deinit();
+
+    const inputs = [_]*const Tensor{ &base, &pool1, &pool2, &pool3 };
+    try ops.concatChannels(&inputs, &concat);
+    profile.concat_ns = timer.read();
+
+    timer.reset();
+    const output = try runConvModule(allocator, model_graph, weights_blob, cv2_path, &concat);
+    profile.cv2_ns = timer.read();
+    return .{ .output = output, .sppf_profile = profile };
 }
 
 pub fn runC3k(

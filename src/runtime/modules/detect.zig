@@ -42,6 +42,31 @@ pub const DetectProfile = struct {
     nms_ns: u64 = 0,
     candidate_count: usize = 0,
     kept_count: usize = 0,
+    level_count: usize = 0,
+    levels: [max_detect_branch_levels]DetectLevelProfile = std.mem.zeroes([max_detect_branch_levels]DetectLevelProfile),
+};
+
+pub const DetectLevelProfile = struct {
+    reg_ns: u64 = 0,
+    cls_ns: u64 = 0,
+    decode_ns: u64 = 0,
+    reg_detail: DetectBranchProfile = .{},
+    cls_detail: DetectBranchProfile = .{},
+};
+
+pub const DetectBranchProfile = struct {
+    kind: DetectBranchKind = .generic,
+    stage0_ns: u64 = 0,
+    stage1_ns: u64 = 0,
+    stage2_ns: u64 = 0,
+    stage3_ns: u64 = 0,
+    stage4_ns: u64 = 0,
+};
+
+pub const DetectBranchKind = enum {
+    generic,
+    cv2,
+    cv3,
 };
 
 pub const ProfiledDetectOutput = struct {
@@ -150,17 +175,25 @@ pub fn runDetectProfile(
     } else null;
     const score_logit_threshold = sigmoidThresholdToLogit(options.score_threshold);
     var profile = DetectProfile{};
+    profile.level_count = nl;
 
     var candidates: std.ArrayListUnmanaged(Detection) = .empty;
     errdefer candidates.deinit(scratch_allocator);
 
     for (feature_inputs, 0..) |feature, level| {
-        var branch_timer = try std.time.Timer.start();
-        var reg = try runDetectBranchPlan(tensor_allocator, model_graph, weights_blob, reg_plans[level], feature);
+        var reg_profile = DetectBranchProfile{};
+        var timer = try std.time.Timer.start();
+        var reg = try runDetectBranchPlanProfile(tensor_allocator, model_graph, weights_blob, reg_plans[level], feature, &reg_profile);
+        profile.levels[level].reg_ns = timer.read();
+        profile.levels[level].reg_detail = reg_profile;
         defer reg.deinit();
-        var cls = try runDetectBranchPlan(tensor_allocator, model_graph, weights_blob, cls_plans[level], feature);
+        var cls_profile = DetectBranchProfile{};
+        timer.reset();
+        var cls = try runDetectBranchPlanProfile(tensor_allocator, model_graph, weights_blob, cls_plans[level], feature, &cls_profile);
+        profile.levels[level].cls_ns = timer.read();
+        profile.levels[level].cls_detail = cls_profile;
         defer cls.deinit();
-        profile.branch_ns += branch_timer.read();
+        profile.branch_ns += profile.levels[level].reg_ns + profile.levels[level].cls_ns;
 
         if (reg.shape[0] != cls.shape[0] or reg.shape[2] != cls.shape[2] or reg.shape[3] != cls.shape[3]) {
             return error.InvalidAttributeType;
@@ -207,7 +240,8 @@ pub fn runDetectProfile(
                 }
             }
         }
-        profile.decode_ns += decode_timer.read();
+        profile.levels[level].decode_ns = decode_timer.read();
+        profile.decode_ns += profile.levels[level].decode_ns;
     }
 
     const candidate_count = candidates.items.len;
@@ -288,6 +322,30 @@ fn runDetectBranchPlan(
         .cv2 => |cv2| runDetectCv2BranchPlanned(allocator, &cv2, input),
         .cv3 => |cv3| runDetectCv3BranchPlanned(allocator, &cv3, input),
         .generic => |node| runNodeChain(allocator, model_graph, weights_blob, node, input),
+    };
+}
+
+fn runDetectBranchPlanProfile(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    plan: BranchPlan,
+    input: *const Tensor,
+    profile: *DetectBranchProfile,
+) !Tensor {
+    return switch (plan) {
+        .cv2 => |cv2| blk: {
+            profile.kind = .cv2;
+            break :blk runDetectCv2BranchPlannedProfile(allocator, &cv2, input, profile);
+        },
+        .cv3 => |cv3| blk: {
+            profile.kind = .cv3;
+            break :blk runDetectCv3BranchPlannedProfile(allocator, &cv3, input, profile);
+        },
+        .generic => |node| blk: {
+            profile.kind = .generic;
+            break :blk runNodeChain(allocator, model_graph, weights_blob, node, input);
+        },
     };
 }
 
@@ -410,6 +468,28 @@ fn runDetectCv2BranchPlanned(
     return try runConvPlan(allocator, &plan.head, &hidden1);
 }
 
+fn runDetectCv2BranchPlannedProfile(
+    allocator: std.mem.Allocator,
+    plan: *const Cv2BranchPlan,
+    input: *const Tensor,
+    profile: *DetectBranchProfile,
+) !Tensor {
+    var timer = try std.time.Timer.start();
+    var hidden0 = try runConvPlan(allocator, &plan.conv0, input);
+    profile.stage0_ns = timer.read();
+    defer hidden0.deinit();
+
+    timer.reset();
+    var hidden1 = try runConvPlan(allocator, &plan.conv1, &hidden0);
+    profile.stage1_ns = timer.read();
+    defer hidden1.deinit();
+
+    timer.reset();
+    const output = try runConvPlan(allocator, &plan.head, &hidden1);
+    profile.stage2_ns = timer.read();
+    return output;
+}
+
 fn runDetectCv3Stage(
     allocator: std.mem.Allocator,
     model_graph: *const graph.Graph,
@@ -456,6 +536,38 @@ fn runDetectCv3BranchPlanned(
     var hidden1 = try runDetectCv3StagePlanned(allocator, &plan.stage1, &hidden0);
     defer hidden1.deinit();
     return try runConvPlan(allocator, &plan.head, &hidden1);
+}
+
+fn runDetectCv3BranchPlannedProfile(
+    allocator: std.mem.Allocator,
+    plan: *const Cv3BranchPlan,
+    input: *const Tensor,
+    profile: *DetectBranchProfile,
+) !Tensor {
+    var timer = try std.time.Timer.start();
+    var hidden0 = try runConvPlan(allocator, &plan.stage0.depthwise, input);
+    profile.stage0_ns = timer.read();
+    defer hidden0.deinit();
+
+    timer.reset();
+    var hidden1 = try runConvPlan(allocator, &plan.stage0.pointwise, &hidden0);
+    profile.stage1_ns = timer.read();
+    defer hidden1.deinit();
+
+    timer.reset();
+    var hidden2 = try runConvPlan(allocator, &plan.stage1.depthwise, &hidden1);
+    profile.stage2_ns = timer.read();
+    defer hidden2.deinit();
+
+    timer.reset();
+    var hidden3 = try runConvPlan(allocator, &plan.stage1.pointwise, &hidden2);
+    profile.stage3_ns = timer.read();
+    defer hidden3.deinit();
+
+    timer.reset();
+    const output = try runConvPlan(allocator, &plan.head, &hidden3);
+    profile.stage4_ns = timer.read();
+    return output;
 }
 
 fn runConvPlan(

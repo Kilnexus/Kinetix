@@ -24,27 +24,39 @@ pub fn maxPool2d(
         return OpError.InvalidOutputShape;
     }
 
+    const in_height = input.shape[2];
+    const in_width = input.shape[3];
+    const in_plane = in_height * in_width;
+    const out_width = output.shape[3];
+    const out_plane = output.shape[2] * out_width;
+
     for (0..input.shape[0]) |n| {
+        const input_batch_base = n * input.shape[1] * in_plane;
+        const output_batch_base = n * output.shape[1] * out_plane;
         for (0..input.shape[1]) |c| {
+            const input_channel = input.data[input_batch_base + c * in_plane ..][0..in_plane];
+            const output_channel = output.data[output_batch_base + c * out_plane ..][0..out_plane];
             for (0..output.shape[2]) |oy| {
-                for (0..output.shape[3]) |ox| {
+                const base_y = @as(isize, @intCast(oy * stride_h)) - @as(isize, @intCast(pad_h));
+                const out_row = output_channel[oy * out_width ..][0..out_width];
+                for (0..out_width) |ox| {
                     var max_value = -std.math.inf(f32);
-                    const base_y = @as(isize, @intCast(oy * stride_h)) - @as(isize, @intCast(pad_h));
                     const base_x = @as(isize, @intCast(ox * stride_w)) - @as(isize, @intCast(pad_w));
 
                     for (0..kernel_h) |ky| {
                         const in_y = base_y + @as(isize, @intCast(ky));
-                        if (in_y < 0 or in_y >= @as(isize, @intCast(input.shape[2]))) continue;
+                        if (in_y < 0 or in_y >= @as(isize, @intCast(in_height))) continue;
 
+                        const input_row = input_channel[@as(usize, @intCast(in_y)) * in_width ..][0..in_width];
                         for (0..kernel_w) |kx| {
                             const in_x = base_x + @as(isize, @intCast(kx));
-                            if (in_x < 0 or in_x >= @as(isize, @intCast(input.shape[3]))) continue;
+                            if (in_x < 0 or in_x >= @as(isize, @intCast(in_width))) continue;
 
-                            const value = input.get(n, c, @intCast(in_y), @intCast(in_x));
+                            const value = input_row[@as(usize, @intCast(in_x))];
                             if (value > max_value) max_value = value;
                         }
                     }
-                    output.set(n, c, oy, ox, max_value);
+                    out_row[ox] = max_value;
                 }
             }
         }
