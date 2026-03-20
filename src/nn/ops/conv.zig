@@ -7,6 +7,7 @@ pub const Conv2DOptions = types.Conv2DOptions;
 
 const max_supported_conv_threads = 4;
 const conv_parallel_min_workload = 2_000_000;
+const conv_parallel_two_thread_workload = 6_000_000;
 
 pub fn conv2d(
     input: *const Tensor,
@@ -889,7 +890,8 @@ fn conv2dPointwiseWorker(task: Conv2DPointwiseTask) void {
 
 fn chooseConvThreadCount(workload: usize, out_channels: usize) usize {
     if (out_channels < 2 or workload < conv_parallel_min_workload) return 1;
-    return @min(out_channels, 4);
+    if (workload < conv_parallel_two_thread_workload) return @min(out_channels, 2);
+    return @min(out_channels, max_supported_conv_threads);
 }
 
 test "conv2d 1x1 sums channels" {

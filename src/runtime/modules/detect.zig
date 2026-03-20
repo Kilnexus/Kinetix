@@ -847,7 +847,7 @@ fn runDetectFast3x3Conv64Batch1Worker(task: DetectFastConvTask) void {
 }
 
 fn chooseDetectFastConvThreadCount(spatial: usize) usize {
-    if (spatial >= 256) return 2;
+    if (spatial >= 128) return 2;
     return 1;
 }
 
