@@ -1,5 +1,6 @@
 const std = @import("std");
 const graph = @import("graph");
+const ops = @import("ops");
 const blocks = @import("blocks.zig");
 const spec = @import("../base/spec.zig");
 const types = @import("../base/types.zig");
@@ -48,6 +49,42 @@ pub const ProfiledDetectOutput = struct {
     profile: DetectProfile,
 };
 
+const ConvPlan = struct {
+    weight: Tensor,
+    bias: ?[]const f32,
+    stride_h: usize,
+    stride_w: usize,
+    pad_h: usize,
+    pad_w: usize,
+    groups: usize,
+    activation: types.Activation,
+};
+
+const Cv2BranchPlan = struct {
+    conv0: ConvPlan,
+    conv1: ConvPlan,
+    head: ConvPlan,
+};
+
+const Cv3StagePlan = struct {
+    depthwise: ConvPlan,
+    pointwise: ConvPlan,
+};
+
+const Cv3BranchPlan = struct {
+    stage0: Cv3StagePlan,
+    stage1: Cv3StagePlan,
+    head: ConvPlan,
+};
+
+const BranchPlan = union(enum) {
+    cv2: Cv2BranchPlan,
+    cv3: Cv3BranchPlan,
+    generic: *const graph.ModuleNode,
+};
+
+const max_detect_branch_levels = 8;
+
 pub fn runDetect(
     output_allocator: std.mem.Allocator,
     tensor_allocator: std.mem.Allocator,
@@ -95,9 +132,16 @@ pub fn runDetectProfile(
     );
 
     if (feature_inputs.len != nl or model_graph.strides.len != nl) return error.InvalidAttributeType;
+    if (nl > max_detect_branch_levels) return error.InvalidAttributeType;
 
     const reg_branch = resolveDetectBranch(model_graph, module_path, "cv2", "one2one_cv2") orelse return error.ModuleNotFound;
     const cls_branch = resolveDetectBranch(model_graph, module_path, "cv3", "one2one_cv3") orelse return error.ModuleNotFound;
+    var reg_plan_storage: [max_detect_branch_levels]BranchPlan = undefined;
+    var cls_plan_storage: [max_detect_branch_levels]BranchPlan = undefined;
+    const reg_plans = reg_plan_storage[0..nl];
+    const cls_plans = cls_plan_storage[0..nl];
+    try buildDetectBranchPlans(reg_plans, model_graph, weights_blob, reg_branch);
+    try buildDetectBranchPlans(cls_plans, model_graph, weights_blob, cls_branch);
     const dfl_weights = if (reg_max > 1) blk: {
         var dfl_conv_buffer: [256]u8 = undefined;
         const dfl_conv_path = try utils.childModulePath(&dfl_conv_buffer, module_path, "dfl.conv");
@@ -112,9 +156,9 @@ pub fn runDetectProfile(
 
     for (feature_inputs, 0..) |feature, level| {
         var branch_timer = try std.time.Timer.start();
-        var reg = try runDetectBranch(tensor_allocator, model_graph, weights_blob, reg_branch, level, feature);
+        var reg = try runDetectBranchPlan(tensor_allocator, model_graph, weights_blob, reg_plans[level], feature);
         defer reg.deinit();
-        var cls = try runDetectBranch(tensor_allocator, model_graph, weights_blob, cls_branch, level, feature);
+        var cls = try runDetectBranchPlan(tensor_allocator, model_graph, weights_blob, cls_plans[level], feature);
         defer cls.deinit();
         profile.branch_ns += branch_timer.read();
 
@@ -184,25 +228,67 @@ pub fn runDetectProfile(
     };
 }
 
-fn runDetectBranch(
-    allocator: std.mem.Allocator,
+fn buildDetectBranchPlans(
+    plans: []BranchPlan,
     model_graph: *const graph.Graph,
     weights_blob: *const weights_mod.WeightsBlob,
     branch: *const graph.ModuleNode,
-    branch_index: usize,
+) !void {
+    if (plans.len != branch.children.len) return error.InvalidAttributeType;
+    for (branch.children, 0..) |*node, index| {
+        plans[index] = if (matchesDetectCv2Branch(node))
+            .{ .cv2 = .{
+                .conv0 = try buildConvPlan(model_graph, weights_blob, node.children[0].path),
+                .conv1 = try buildConvPlan(model_graph, weights_blob, node.children[1].path),
+                .head = try buildConvPlan(model_graph, weights_blob, node.children[2].path),
+            } }
+        else if (matchesDetectCv3Branch(node))
+            .{ .cv3 = .{
+                .stage0 = .{
+                    .depthwise = try buildConvPlan(model_graph, weights_blob, node.children[0].children[0].path),
+                    .pointwise = try buildConvPlan(model_graph, weights_blob, node.children[0].children[1].path),
+                },
+                .stage1 = .{
+                    .depthwise = try buildConvPlan(model_graph, weights_blob, node.children[1].children[0].path),
+                    .pointwise = try buildConvPlan(model_graph, weights_blob, node.children[1].children[1].path),
+                },
+                .head = try buildConvPlan(model_graph, weights_blob, node.children[2].path),
+            } }
+        else
+            .{ .generic = node };
+    }
+}
+
+fn buildConvPlan(
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module_path: []const u8,
+) !ConvPlan {
+    const conv_spec = try spec.resolveConvSpec(model_graph, module_path);
+    return .{
+        .weight = utils.tensorView(conv_spec.weight, weights_blob.slice(conv_spec.weight)),
+        .bias = if (conv_spec.bias) |bias_meta| weights_blob.slice(bias_meta) else null,
+        .stride_h = conv_spec.stride[0],
+        .stride_w = conv_spec.stride[1],
+        .pad_h = conv_spec.padding[0],
+        .pad_w = conv_spec.padding[1],
+        .groups = conv_spec.groups,
+        .activation = conv_spec.activation,
+    };
+}
+
+fn runDetectBranchPlan(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    plan: BranchPlan,
     input: *const Tensor,
 ) !Tensor {
-    if (branch_index >= branch.children.len) return error.InvalidAttributeType;
-    const node = &branch.children[branch_index];
-
-    if (matchesDetectCv2Branch(node)) {
-        return runDetectCv2Branch(allocator, model_graph, weights_blob, node, input);
-    }
-    if (matchesDetectCv3Branch(node)) {
-        return runDetectCv3Branch(allocator, model_graph, weights_blob, node, input);
-    }
-
-    return runNodeChain(allocator, model_graph, weights_blob, node, input);
+    return switch (plan) {
+        .cv2 => |cv2| runDetectCv2BranchPlanned(allocator, &cv2, input),
+        .cv3 => |cv3| runDetectCv3BranchPlanned(allocator, &cv3, input),
+        .generic => |node| runNodeChain(allocator, model_graph, weights_blob, node, input),
+    };
 }
 
 fn runNodeChain(
@@ -312,6 +398,18 @@ fn runDetectCv2Branch(
     return try blocks.runConvModule(allocator, model_graph, weights_blob, node.children[2].path, &hidden1);
 }
 
+fn runDetectCv2BranchPlanned(
+    allocator: std.mem.Allocator,
+    plan: *const Cv2BranchPlan,
+    input: *const Tensor,
+) !Tensor {
+    var hidden0 = try runConvPlan(allocator, &plan.conv0, input);
+    defer hidden0.deinit();
+    var hidden1 = try runConvPlan(allocator, &plan.conv1, &hidden0);
+    defer hidden1.deinit();
+    return try runConvPlan(allocator, &plan.head, &hidden1);
+}
+
 fn runDetectCv3Stage(
     allocator: std.mem.Allocator,
     model_graph: *const graph.Graph,
@@ -322,6 +420,16 @@ fn runDetectCv3Stage(
     var hidden = try blocks.runConvModule(allocator, model_graph, weights_blob, node.children[0].path, input);
     defer hidden.deinit();
     return try blocks.runConvModule(allocator, model_graph, weights_blob, node.children[1].path, &hidden);
+}
+
+fn runDetectCv3StagePlanned(
+    allocator: std.mem.Allocator,
+    plan: *const Cv3StagePlan,
+    input: *const Tensor,
+) !Tensor {
+    var hidden = try runConvPlan(allocator, &plan.depthwise, input);
+    defer hidden.deinit();
+    return try runConvPlan(allocator, &plan.pointwise, &hidden);
 }
 
 fn runDetectCv3Branch(
@@ -336,6 +444,40 @@ fn runDetectCv3Branch(
     var hidden1 = try runDetectCv3Stage(allocator, model_graph, weights_blob, &node.children[1], &hidden0);
     defer hidden1.deinit();
     return try blocks.runConvModule(allocator, model_graph, weights_blob, node.children[2].path, &hidden1);
+}
+
+fn runDetectCv3BranchPlanned(
+    allocator: std.mem.Allocator,
+    plan: *const Cv3BranchPlan,
+    input: *const Tensor,
+) !Tensor {
+    var hidden0 = try runDetectCv3StagePlanned(allocator, &plan.stage0, input);
+    defer hidden0.deinit();
+    var hidden1 = try runDetectCv3StagePlanned(allocator, &plan.stage1, &hidden0);
+    defer hidden1.deinit();
+    return try runConvPlan(allocator, &plan.head, &hidden1);
+}
+
+fn runConvPlan(
+    allocator: std.mem.Allocator,
+    plan: *const ConvPlan,
+    input: *const Tensor,
+) !Tensor {
+    const out_height = ((input.shape[2] + 2 * plan.pad_h - plan.weight.shape[2]) / plan.stride_h) + 1;
+    const out_width = ((input.shape[3] + 2 * plan.pad_w - plan.weight.shape[3]) / plan.stride_w) + 1;
+
+    var output = try Tensor.init(allocator, input.shape[0], plan.weight.shape[0], out_height, out_width);
+    errdefer output.deinit();
+
+    try ops.conv2d(input, &plan.weight, plan.bias, &output, .{
+        .stride_h = plan.stride_h,
+        .stride_w = plan.stride_w,
+        .pad_h = plan.pad_h,
+        .pad_w = plan.pad_w,
+        .groups = plan.groups,
+    });
+    utils.applyActivation(&output, plan.activation);
+    return output;
 }
 
 fn sigmoid(value: f32) f32 {
