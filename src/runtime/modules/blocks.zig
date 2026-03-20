@@ -204,6 +204,7 @@ pub fn runC3k2(
 
     const module_list = model_graph.findModule(list_path) orelse return error.ModuleNotFound;
     if (module_list.children.len == 1) {
+        const child = &module_list.children[0];
         const right_is_view = stem.shape[0] == 1;
         var right = if (right_is_view)
             try utils.sliceChannelsViewBatch1(&stem, chunk_channels, chunk_channels)
@@ -211,7 +212,6 @@ pub fn runC3k2(
             try utils.sliceChannels(allocator, &stem, chunk_channels, chunk_channels);
         defer if (!right_is_view) right.deinit();
 
-        const child = &module_list.children[0];
         var child_out = if (std.mem.eql(u8, child.kind, "Bottleneck"))
             try runBottleneck(allocator, model_graph, weights_blob, child.path, &right)
         else if (std.mem.eql(u8, child.kind, "C3k"))
