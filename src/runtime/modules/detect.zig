@@ -617,6 +617,7 @@ fn canUseFastDetectCv2Conv(input: *const Tensor, plan: *const ConvPlan) bool {
         plan.activation == .silu;
 }
 
+
 fn runDetectFast3x3Conv64Batch1(
     allocator: std.mem.Allocator,
     input: *const Tensor,
