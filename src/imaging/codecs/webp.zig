@@ -1,242 +1,40 @@
 const std = @import("std");
-const types = @import("../types.zig");
+const types_mod = @import("webp/types.zig");
+const bitreader_mod = @import("webp/bitreader.zig");
+const container = @import("webp/container.zig");
+const probe = @import("webp/probe.zig");
 
-pub const ImageU8 = types.ImageU8;
-
-pub const WebpKind = enum {
-    vp8,
-    vp8l,
-    vp8x,
-};
-
-pub const WebpChunkTag = enum {
-    vp8,
-    vp8l,
-    vp8x,
-    alph,
-    anim,
-    anmf,
-    iccp,
-    exif,
-    xmp,
-    unknown,
-};
-
-pub const WebpChunk = struct {
-    tag: WebpChunkTag,
-    payload: []const u8,
-};
-
-pub const Vp8lTransformType = enum {
-    predictor,
-    color,
-    subtract_green,
-    color_indexing,
-};
-
-pub const Vp8lImageRole = enum {
-    argb,
-    predictor,
-    color,
-    color_indexing,
-    entropy,
-};
-
-pub const Vp8lPrefixCodeKind = enum {
-    simple,
-    normal,
-};
-
-pub const Vp8lSimplePrefixCode = struct {
-    num_symbols: usize,
-    is_first_8bits: bool,
-    symbol0: usize,
-    symbol1: ?usize,
-    canonical_summary: ?Vp8lCanonicalPrefixSummary = null,
-    end_bit_pos: usize,
-};
-
-pub const Vp8lNormalPrefixCode = struct {
-    num_code_length_codes: usize,
-    code_length_code_lengths: [19]usize,
-    use_explicit_max_symbol: bool,
-    length_nbits: ?usize,
-    max_symbol: usize,
-    decoded_symbol_tokens: ?usize = null,
-    emitted_code_lengths: ?usize = null,
-    non_zero_code_lengths: ?usize = null,
-    preview_len: usize = 0,
-    preview: [32]u8 = [_]u8{0} ** 32,
-    canonical_summary: ?Vp8lCanonicalPrefixSummary = null,
-    end_bit_pos: usize,
-};
-
-pub const Vp8lCanonicalCodeEntry = struct {
-    symbol: usize,
-    len: usize,
-    lsb_code: usize,
-};
-
-pub const Vp8lCanonicalPrefixSummary = struct {
-    active_symbol_count: usize,
-    max_code_length: usize,
-    preview_len: usize,
-    preview: [16]Vp8lCanonicalCodeEntry,
-};
-
-pub const Vp8lCanonicalSymbolStream = struct {
-    start_bit_pos: usize,
-    end_bit_pos: usize,
-    symbol_count: usize,
-    preview_len: usize,
-    preview: [32]usize,
-};
-
-pub const Vp8lPrefixCodeGroupDetail = struct {
-    start_bit_pos: usize,
-    end_bit_pos: usize,
-    alphabet_sizes: [5]usize,
-    group: Vp8lPrefixCodeGroup,
-};
-
-pub const Vp8lEventKind = enum {
-    literal,
-    copy,
-    color_cache,
-};
-
-pub const Vp8lEvent = struct {
-    kind: Vp8lEventKind,
-    green: u16 = 0,
-    red: u16 = 0,
-    blue: u16 = 0,
-    alpha: u16 = 0,
-    cache_index: ?usize = null,
-    length_symbol: ?usize = null,
-    length: ?usize = null,
-    distance_symbol: ?usize = null,
-    distance_code: ?usize = null,
-    distance: ?usize = null,
-};
-
-pub const Vp8lEventStream = struct {
-    prefix_group_start_bit_pos: usize,
-    event_stream_start_bit_pos: usize,
-    end_bit_pos: usize,
-    event_count: usize,
-    emitted_pixels: usize,
-    preview_len: usize,
-    preview: [32]Vp8lEvent,
-};
-
-pub const Vp8lArgbImage = struct {
-    allocator: std.mem.Allocator,
-    width: usize,
-    height: usize,
-    end_bit_pos: usize,
-    pixels: []u32,
-
-    pub fn deinit(self: *Vp8lArgbImage) void {
-        self.allocator.free(self.pixels);
-        self.* = undefined;
-    }
-};
-
-pub const Vp8lPrefixCodeHeader = struct {
-    kind: Vp8lPrefixCodeKind,
-    start_bit_pos: usize,
-    simple: ?Vp8lSimplePrefixCode = null,
-    normal: ?Vp8lNormalPrefixCode = null,
-};
-
-pub const Vp8lPrefixCodeGroup = struct {
-    parsed_count: usize,
-    all_simple: bool,
-    codes: [5]Vp8lPrefixCodeHeader,
-};
-
-pub const Vp8lEntropyImageDataHeader = struct {
-    width: usize,
-    height: usize,
-    start_bit_pos: usize,
-    use_color_cache: bool,
-    color_cache_bits: ?usize,
-    header_end_bit_pos: usize,
-    prefix_codes_start_bit_pos: usize,
-    prefix_group: Vp8lPrefixCodeGroup,
-};
-
-pub const Vp8lImageDataHeader = struct {
-    role: Vp8lImageRole,
-    width: usize,
-    height: usize,
-    start_bit_pos: usize,
-    use_color_cache: bool,
-    color_cache_bits: ?usize,
-    meta_prefix_present: ?bool,
-    prefix_bits: ?usize,
-    prefix_image_width: ?usize,
-    prefix_image_height: ?usize,
-    prefix_image_start_bit_pos: ?usize,
-    prefix_image_header: ?Vp8lEntropyImageDataHeader,
-    header_end_bit_pos: usize,
-    prefix_codes_start_bit_pos: ?usize,
-    prefix_group: ?Vp8lPrefixCodeGroup,
-};
-
-pub const Vp8lTransform = struct {
-    kind: Vp8lTransformType,
-    size_bits: ?usize = null,
-    color_table_size: ?usize = null,
-    width_bits: ?usize = null,
-    subimage_start_bit_pos: ?usize = null,
-    subimage_width: ?usize = null,
-    subimage_height: ?usize = null,
-    subimage_header: ?Vp8lImageDataHeader = null,
-    transform_width: ?usize = null,
-    transform_height: ?usize = null,
-    next_image_width: usize,
-    next_image_height: usize,
-};
-
-pub const Vp8lStreamInfo = struct {
-    width: usize,
-    height: usize,
-    has_alpha: bool,
-    header_end_bit_pos: usize,
-    image_data_start_bit_pos: ?usize,
-    main_image_header: ?Vp8lImageDataHeader,
-    transform_count: usize,
-    transforms: [4]Vp8lTransform,
-    tail_flags_known: bool,
-    use_color_cache: ?bool,
-    color_cache_bits: ?usize,
-    use_meta_prefix: ?bool,
-};
-
-pub const WebpInfo = struct {
-    width: usize,
-    height: usize,
-    has_alpha: bool,
-    is_animated: bool,
-    has_icc: bool,
-    has_exif: bool,
-    has_xmp: bool,
-    kind: WebpKind,
-};
-
-pub const WebpError = types.ImageError || error{
-    InvalidWebpHeader,
-    InvalidWebpChunk,
-    InvalidWebpData,
-    MissingWebpChunk,
-    TooManyWebpTransforms,
-    UnsupportedWebpAnimation,
-    UnsupportedWebpBitstream,
-};
+pub const ImageU8 = types_mod.ImageU8;
+pub const WebpKind = types_mod.WebpKind;
+pub const WebpChunkTag = types_mod.WebpChunkTag;
+pub const WebpChunk = types_mod.WebpChunk;
+pub const Vp8lTransformType = types_mod.Vp8lTransformType;
+pub const Vp8lImageRole = types_mod.Vp8lImageRole;
+pub const Vp8lPrefixCodeKind = types_mod.Vp8lPrefixCodeKind;
+pub const Vp8lSimplePrefixCode = types_mod.Vp8lSimplePrefixCode;
+pub const Vp8lNormalPrefixCode = types_mod.Vp8lNormalPrefixCode;
+pub const Vp8lCanonicalCodeEntry = types_mod.Vp8lCanonicalCodeEntry;
+pub const Vp8lCanonicalPrefixSummary = types_mod.Vp8lCanonicalPrefixSummary;
+pub const Vp8lCanonicalSymbolStream = types_mod.Vp8lCanonicalSymbolStream;
+pub const Vp8lPrefixCodeGroupDetail = types_mod.Vp8lPrefixCodeGroupDetail;
+pub const Vp8lEventKind = types_mod.Vp8lEventKind;
+pub const Vp8lEvent = types_mod.Vp8lEvent;
+pub const Vp8lEventStream = types_mod.Vp8lEventStream;
+pub const Vp8lArgbImage = types_mod.Vp8lArgbImage;
+pub const Vp8lPrefixCodeHeader = types_mod.Vp8lPrefixCodeHeader;
+pub const Vp8lPrefixCodeGroup = types_mod.Vp8lPrefixCodeGroup;
+pub const Vp8lEntropyImageDataHeader = types_mod.Vp8lEntropyImageDataHeader;
+pub const Vp8lImageDataHeader = types_mod.Vp8lImageDataHeader;
+pub const Vp8lTransform = types_mod.Vp8lTransform;
+pub const Vp8lStreamInfo = types_mod.Vp8lStreamInfo;
+pub const WebpInfo = types_mod.WebpInfo;
+pub const WebpError = types_mod.WebpError;
+pub const ChunkIterator = container.ChunkIterator;
+pub const validateHeader = container.validateHeader;
+const Vp8lBitReader = bitreader_mod.Vp8lBitReader;
 
 pub fn decodeRgb8(allocator: std.mem.Allocator, bytes: []const u8) !ImageU8 {
-    const scan = try scanChunks(bytes);
+    const scan = try probe.scanChunks(bytes);
     if (scan.info.is_animated) return error.UnsupportedWebpAnimation;
     return switch (scan.primary.tag) {
         .vp8 => error.UnsupportedWebpBitstream,
@@ -253,11 +51,11 @@ fn decodeVp8lRgb8(allocator: std.mem.Allocator, payload: []const u8) !ImageU8 {
 }
 
 pub fn probeInfo(bytes: []const u8) !WebpInfo {
-    return (try scanChunks(bytes)).info;
+    return probe.probeInfo(bytes);
 }
 
 pub fn findPrimaryChunk(bytes: []const u8) !WebpChunk {
-    return (try scanChunks(bytes)).primary;
+    return probe.findPrimaryChunk(bytes);
 }
 
 pub fn inspectVp8l(bytes: []const u8) !Vp8lStreamInfo {
@@ -476,7 +274,7 @@ pub fn decodeVp8lSingleGroupArgbAtBitPos(
 }
 
 pub fn inspectVp8lPayload(payload: []const u8) !Vp8lStreamInfo {
-    const info = try parseVp8l(payload);
+    const info = try probe.parseVp8l(payload);
     var reader = Vp8lBitReader.init(payload);
     _ = try reader.readBits(8);
     _ = try reader.readBits(14);
@@ -1108,69 +906,6 @@ fn buildCanonicalPrefixSummary(code_lengths: []const u8) !Vp8lCanonicalPrefixSum
     };
 }
 
-pub const ChunkIterator = struct {
-    bytes: []const u8,
-    pos: usize = 12,
-
-    pub fn init(bytes: []const u8) !ChunkIterator {
-        try validateHeader(bytes);
-        return .{ .bytes = bytes };
-    }
-
-    pub fn next(self: *ChunkIterator) !?WebpChunk {
-        if (self.pos + 8 > self.bytes.len) return null;
-
-        const raw_tag = self.bytes[self.pos .. self.pos + 4];
-        const chunk_size = readU32le(self.bytes[self.pos + 4 .. self.pos + 8]);
-        const payload_offset = self.pos + 8;
-        const payload_end = payload_offset + chunk_size;
-        if (payload_end > self.bytes.len) return error.InvalidWebpChunk;
-
-        const chunk = WebpChunk{
-            .tag = mapChunkTag(raw_tag),
-            .payload = self.bytes[payload_offset..payload_end],
-        };
-        self.pos = payload_end + (chunk_size & 1);
-        return chunk;
-    }
-};
-
-const Vp8lBitReader = struct {
-    bytes: []const u8,
-    bit_pos: usize = 0,
-
-    fn init(bytes: []const u8) Vp8lBitReader {
-        return .{ .bytes = bytes };
-    }
-
-    fn initAtBit(bytes: []const u8, bit_pos: usize) Vp8lBitReader {
-        return .{
-            .bytes = bytes,
-            .bit_pos = bit_pos,
-        };
-    }
-
-    fn readBits(self: *Vp8lBitReader, count: usize) !usize {
-        if (count > 24) return error.InvalidWebpData;
-
-        var value: usize = 0;
-        for (0..count) |i| {
-            const byte_index = self.bit_pos / 8;
-            if (byte_index >= self.bytes.len) return error.InvalidWebpData;
-            const bit_index: u3 = @intCast(self.bit_pos % 8);
-            const bit = (self.bytes[byte_index] >> bit_index) & 1;
-            value |= @as(usize, bit) << @intCast(i);
-            self.bit_pos += 1;
-        }
-        return value;
-    }
-};
-
-const WebpScan = struct {
-    info: WebpInfo,
-    primary: WebpChunk,
-};
-
 const maxPrefixAlphabetSize = 256 + 24 + (1 << 11);
 const codeLengthLiteralCount = 16;
 const codeLengthRepeatCode = 16;
@@ -1255,64 +990,6 @@ const CanonicalPrefixDecoder = struct {
         return error.InvalidWebpData;
     }
 };
-
-fn scanChunks(bytes: []const u8) !WebpScan {
-    try validateHeader(bytes);
-    var it = try ChunkIterator.init(bytes);
-    var vp8x_info: ?WebpInfo = null;
-    var primary_info: ?WebpInfo = null;
-    var primary_chunk: ?WebpChunk = null;
-
-    while (try it.next()) |chunk| {
-        switch (chunk.tag) {
-            .vp8x => vp8x_info = try parseVp8x(chunk.payload),
-            .vp8 => {
-                primary_info = try parseVp8(chunk.payload);
-                primary_chunk = chunk;
-                break;
-            },
-            .vp8l => {
-                primary_info = try parseVp8l(chunk.payload);
-                primary_chunk = chunk;
-                break;
-            },
-            else => {},
-        }
-    }
-
-    if (primary_info) |info| {
-        if (vp8x_info) |extended| {
-            return .{
-                .info = .{
-                    .width = extended.width,
-                    .height = extended.height,
-                    .has_alpha = extended.has_alpha or info.has_alpha,
-                    .is_animated = extended.is_animated,
-                    .has_icc = extended.has_icc,
-                    .has_exif = extended.has_exif,
-                    .has_xmp = extended.has_xmp,
-                    .kind = info.kind,
-                },
-                .primary = primary_chunk.?,
-            };
-        }
-        return .{
-            .info = info,
-            .primary = primary_chunk.?,
-        };
-    }
-
-    if (vp8x_info) |info| {
-        return .{
-            .info = info,
-            .primary = .{
-                .tag = .vp8x,
-                .payload = &.{},
-            },
-        };
-    }
-    return error.MissingWebpChunk;
-}
 
 fn parseRuntimePrefixCodeGroup(reader: *Vp8lBitReader, alphabet_sizes: [numPrefixCodes]usize) !RuntimePrefixCodeGroup {
     var decoders = [_]CanonicalPrefixDecoder{undefined} ** numPrefixCodes;
@@ -1433,85 +1110,6 @@ fn argbToRgb8(allocator: std.mem.Allocator, pixels: []const u32, width: usize, h
     return image;
 }
 
-pub fn validateHeader(bytes: []const u8) !void {
-    if (bytes.len < 12) return error.InvalidWebpHeader;
-    if (!std.mem.eql(u8, bytes[0..4], "RIFF") or !std.mem.eql(u8, bytes[8..12], "WEBP")) {
-        return error.InvalidWebpHeader;
-    }
-}
-
-fn parseVp8(payload: []const u8) !WebpInfo {
-    if (payload.len < 10) return error.InvalidWebpData;
-    if (payload[0] & 0x01 != 0) return error.UnsupportedWebpBitstream;
-    if (!std.mem.eql(u8, payload[3..6], "\x9d\x01\x2a")) return error.InvalidWebpData;
-
-    const width = readU16le(payload[6..8]) & 0x3fff;
-    const height = readU16le(payload[8..10]) & 0x3fff;
-    if (width == 0 or height == 0) return error.InvalidWebpData;
-
-    return .{
-        .width = width,
-        .height = height,
-        .has_alpha = false,
-        .is_animated = false,
-        .has_icc = false,
-        .has_exif = false,
-        .has_xmp = false,
-        .kind = .vp8,
-    };
-}
-
-fn parseVp8l(payload: []const u8) !WebpInfo {
-    if (payload.len < 5) return error.InvalidWebpData;
-    if (payload[0] != 0x2f) return error.InvalidWebpData;
-
-    const bits = readU32le(payload[1..5]);
-    const width = 1 + (bits & 0x3fff);
-    const height = 1 + ((bits >> 14) & 0x3fff);
-    const has_alpha = ((bits >> 28) & 0x1) != 0;
-    const version = (bits >> 29) & 0x7;
-    if (version != 0) return error.UnsupportedWebpBitstream;
-
-    return .{
-        .width = width,
-        .height = height,
-        .has_alpha = has_alpha,
-        .is_animated = false,
-        .has_icc = false,
-        .has_exif = false,
-        .has_xmp = false,
-        .kind = .vp8l,
-    };
-}
-
-fn parseVp8x(payload: []const u8) !WebpInfo {
-    if (payload.len < 10) return error.InvalidWebpData;
-
-    return .{
-        .width = 1 + readU24le(payload[4..7]),
-        .height = 1 + readU24le(payload[7..10]),
-        .has_alpha = (payload[0] & 0x10) != 0,
-        .is_animated = (payload[0] & 0x02) != 0,
-        .has_icc = (payload[0] & 0x20) != 0,
-        .has_exif = (payload[0] & 0x08) != 0,
-        .has_xmp = (payload[0] & 0x04) != 0,
-        .kind = .vp8x,
-    };
-}
-
-fn mapChunkTag(raw: []const u8) WebpChunkTag {
-    if (std.mem.eql(u8, raw, "VP8 ")) return .vp8;
-    if (std.mem.eql(u8, raw, "VP8L")) return .vp8l;
-    if (std.mem.eql(u8, raw, "VP8X")) return .vp8x;
-    if (std.mem.eql(u8, raw, "ALPH")) return .alph;
-    if (std.mem.eql(u8, raw, "ANIM")) return .anim;
-    if (std.mem.eql(u8, raw, "ANMF")) return .anmf;
-    if (std.mem.eql(u8, raw, "ICCP")) return .iccp;
-    if (std.mem.eql(u8, raw, "EXIF")) return .exif;
-    if (std.mem.eql(u8, raw, "XMP ")) return .xmp;
-    return .unknown;
-}
-
 fn divRoundUp(num: usize, den: usize) usize {
     return (num + den - 1) / den;
 }
@@ -1530,19 +1128,4 @@ fn reverseBits(value: usize, bit_count: usize) usize {
         result |= (value >> @intCast(i)) & 1;
     }
     return result;
-}
-
-fn readU24le(bytes: []const u8) usize {
-    return @as(usize, bytes[0]) | (@as(usize, bytes[1]) << 8) | (@as(usize, bytes[2]) << 16);
-}
-
-fn readU16le(bytes: []const u8) usize {
-    return @as(usize, bytes[0]) | (@as(usize, bytes[1]) << 8);
-}
-
-fn readU32le(bytes: []const u8) usize {
-    return @as(usize, bytes[0]) |
-        (@as(usize, bytes[1]) << 8) |
-        (@as(usize, bytes[2]) << 16) |
-        (@as(usize, bytes[3]) << 24);
 }
