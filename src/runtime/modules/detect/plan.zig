@@ -45,6 +45,13 @@ pub fn buildConvPlan(
     module_path: []const u8,
 ) !ConvPlan {
     const conv_spec = try spec.resolveConvSpec(model_graph, module_path);
+    return convPlanFromSpec(weights_blob, conv_spec);
+}
+
+fn convPlanFromSpec(
+    weights_blob: *const weights_mod.WeightsBlob,
+    conv_spec: spec.ConvSpec,
+) ConvPlan {
     return .{
         .weight = utils.tensorView(conv_spec.weight, weights_blob.slice(conv_spec.weight)),
         .bias = if (conv_spec.bias) |bias_meta| weights_blob.slice(bias_meta) else null,
