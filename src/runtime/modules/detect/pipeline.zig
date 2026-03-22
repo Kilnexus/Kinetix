@@ -54,15 +54,15 @@ pub fn runDetectProfile(
     const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
     if (!std.mem.eql(u8, module.kind, "Detect")) return error.InvalidModuleKind;
 
-    const nl: usize = @intCast(
+    const nl = module.cached_attrs.nl orelse @as(usize, @intCast(
         (module.getAttr("nl") orelse return error.MissingAttribute).asInteger() orelse return error.InvalidAttributeType,
-    );
-    const nc: usize = @intCast(
+    ));
+    const nc = module.cached_attrs.nc orelse @as(usize, @intCast(
         (module.getAttr("nc") orelse return error.MissingAttribute).asInteger() orelse return error.InvalidAttributeType,
-    );
-    const reg_max: usize = @intCast(
+    ));
+    const reg_max = module.cached_attrs.reg_max orelse @as(usize, @intCast(
         (module.getAttr("reg_max") orelse return error.MissingAttribute).asInteger() orelse return error.InvalidAttributeType,
-    );
+    ));
 
     if (feature_inputs.len != nl or model_graph.strides.len != nl) return error.InvalidAttributeType;
     if (nl > max_detect_branch_levels) return error.InvalidAttributeType;

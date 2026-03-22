@@ -184,11 +184,12 @@ fn runBottleneckProfileInternal(
     var output = try runConvNode(allocator, model_graph, weights_blob, &module.children[1], &hidden);
     profile.cv2_ns = timer.read();
 
-    const has_add = (module.getAttr("add") orelse return error.MissingAttribute).asBool() orelse return error.InvalidAttributeType;
+    const has_add = module.cached_attrs.add orelse
+        ((module.getAttr("add") orelse return error.MissingAttribute).asBool() orelse return error.InvalidAttributeType);
     profile.has_add = has_add;
     if (has_add) {
         timer.reset();
-        try ops.addInPlace(&output, input);
+        ops.addInPlaceUnchecked(&output, input);
         profile.add_ns = timer.read();
     }
     return .{ .output = output, .bottleneck_profile = profile };
@@ -343,8 +344,10 @@ fn runBottleneckNode(
     defer hidden.deinit();
 
     var output = try runConvNode(allocator, model_graph, weights_blob, &module.children[1], &hidden);
-    if ((module.getAttr("add") orelse return error.MissingAttribute).asBool() orelse return error.InvalidAttributeType) {
-        try ops.addInPlace(&output, input);
+    const has_add = module.cached_attrs.add orelse
+        ((module.getAttr("add") orelse return error.MissingAttribute).asBool() orelse return error.InvalidAttributeType);
+    if (has_add) {
+        ops.addInPlaceUnchecked(&output, input);
     }
     return output;
 }
@@ -503,9 +506,9 @@ fn runC3k2Node(
 ) !Tensor {
     if (!std.mem.eql(u8, module.kind, "C3k2")) return error.InvalidModuleKind;
 
-    const chunk_channels: usize = @intCast(
+    const chunk_channels = module.cached_attrs.c orelse @as(usize, @intCast(
         (module.getAttr("c") orelse return error.MissingAttribute).asInteger() orelse return error.InvalidAttributeType,
-    );
+    ));
 
     var stem = try runConvNode(allocator, model_graph, weights_blob, &module.children[0], input);
     defer stem.deinit();
@@ -612,9 +615,9 @@ fn runC3k2ProfileInternal(
 ) !ProfiledTensor {
     if (!std.mem.eql(u8, module.kind, "C3k2")) return error.InvalidModuleKind;
 
-    const chunk_channels: usize = @intCast(
+    const chunk_channels = module.cached_attrs.c orelse @as(usize, @intCast(
         (module.getAttr("c") orelse return error.MissingAttribute).asInteger() orelse return error.InvalidAttributeType,
-    );
+    ));
 
     var profile = C3k2Profile{};
     var timer = try std.time.Timer.start();

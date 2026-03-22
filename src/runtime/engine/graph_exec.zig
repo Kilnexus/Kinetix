@@ -98,7 +98,8 @@ pub fn runGraphWithAllocators(
 ) !DetectOutput {
     var outputs = try scratch.alloc(?Tensor, model_graph.execution_nodes.len);
     for (outputs) |*item| item.* = null;
-    const use_counts = try buildUseCounts(scratch, model_graph);
+    const use_counts = try scratch.alloc(usize, model_graph.execution_use_counts.len);
+    @memcpy(use_counts, model_graph.execution_use_counts);
     defer {
         for (outputs) |*item| {
             if (item.*) |*tensor| tensor.deinit();
@@ -183,7 +184,8 @@ pub fn profileGraph(
 
     var outputs = try scratch.alloc(?Tensor, model_graph.execution_nodes.len);
     for (outputs) |*item| item.* = null;
-    const use_counts = try buildUseCounts(scratch, model_graph);
+    const use_counts = try scratch.alloc(usize, model_graph.execution_use_counts.len);
+    @memcpy(use_counts, model_graph.execution_use_counts);
     defer {
         for (outputs) |*item| {
             if (item.*) |*tensor| tensor.deinit();
@@ -311,22 +313,6 @@ pub fn resolveInput(
     if (index >= outputs.len) return null;
     if (outputs[index]) |*tensor| return tensor;
     return null;
-}
-
-fn buildUseCounts(allocator: std.mem.Allocator, model_graph: *const graph.Graph) ![]usize {
-    const counts = try allocator.alloc(usize, model_graph.execution_nodes.len);
-    @memset(counts, 0);
-
-    for (model_graph.execution_nodes, 0..) |node, node_index| {
-        for (node.from) |source| {
-            if (source == -1) {
-                if (node_index > 0) counts[node_index - 1] += 1;
-            } else {
-                counts[@intCast(source)] += 1;
-            }
-        }
-    }
-    return counts;
 }
 
 fn releaseInputs(

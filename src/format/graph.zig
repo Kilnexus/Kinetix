@@ -96,11 +96,20 @@ pub const ModuleNode = struct {
         apply_silu: bool = false,
     };
 
+    pub const CachedAttrs = struct {
+        c: ?usize = null,
+        add: ?bool = null,
+        nl: ?usize = null,
+        nc: ?usize = null,
+        reg_max: ?usize = null,
+    };
+
     path: []u8,
     kind: []u8,
     attrs: []AttrEntry,
     children: []ModuleNode,
     cached_conv: CachedConvSpec,
+    cached_attrs: CachedAttrs,
 
     pub fn deinit(self: *ModuleNode, allocator: std.mem.Allocator) void {
         allocator.free(self.path);
@@ -156,6 +165,7 @@ pub const Graph = struct {
     tensors: []TensorMeta,
     execution_nodes: []ExecutionNode,
     execution_modules: []?*const ModuleNode,
+    execution_use_counts: []usize,
     module_tree: ModuleNode,
     module_index: std.StringHashMapUnmanaged(*const ModuleNode),
     tensor_index: std.StringHashMapUnmanaged(*const TensorMeta),
@@ -174,6 +184,7 @@ pub const Graph = struct {
         }
         self.allocator.free(self.execution_nodes);
         self.allocator.free(self.execution_modules);
+        self.allocator.free(self.execution_use_counts);
         self.module_tree.deinit(self.allocator);
         self.* = undefined;
     }
@@ -292,6 +303,7 @@ fn parseGraph(allocator: std.mem.Allocator, contents: []const u8) !Graph {
         .tensors = tensors,
         .execution_nodes = execution_nodes,
         .execution_modules = try allocator.alloc(?*const ModuleNode, execution_nodes.len),
+        .execution_use_counts = try allocator.alloc(usize, execution_nodes.len),
         .module_tree = module_tree,
         .module_index = .{},
         .tensor_index = .{},
@@ -341,6 +353,7 @@ fn parseModuleNode(allocator: std.mem.Allocator, node_value: std.json.Value) !Mo
         .attrs = attrs,
         .children = children,
         .cached_conv = .{},
+        .cached_attrs = .{},
     };
 }
 
@@ -397,10 +410,12 @@ fn indexGraph(model_graph: *Graph) !void {
     try model_graph.module_index.ensureTotalCapacity(model_graph.allocator, @intCast(module_count));
     indexModuleNode(&model_graph.module_index, &model_graph.module_tree);
     cacheConvSpecs(model_graph, &model_graph.module_tree);
+    cacheModuleAttrs(&model_graph.module_tree);
 
     for (model_graph.execution_nodes, 0..) |*node, index| {
         model_graph.execution_modules[index] = executionModuleForPath(model_graph, node.path);
     }
+    buildExecutionUseCounts(model_graph);
 }
 
 fn countModules(node: *const ModuleNode) usize {
@@ -420,6 +435,28 @@ fn cacheConvSpecs(model_graph: *const Graph, node: *ModuleNode) void {
     }
     for (node.children) |*child| {
         cacheConvSpecs(model_graph, child);
+    }
+}
+
+fn cacheModuleAttrs(node: *ModuleNode) void {
+    if (node.getAttr("c")) |value| {
+        if (value.asInteger()) |integer| node.cached_attrs.c = @intCast(integer);
+    }
+    if (node.getAttr("add")) |value| {
+        if (value.asBool()) |flag| node.cached_attrs.add = flag;
+    }
+    if (node.getAttr("nl")) |value| {
+        if (value.asInteger()) |integer| node.cached_attrs.nl = @intCast(integer);
+    }
+    if (node.getAttr("nc")) |value| {
+        if (value.asInteger()) |integer| node.cached_attrs.nc = @intCast(integer);
+    }
+    if (node.getAttr("reg_max")) |value| {
+        if (value.asInteger()) |integer| node.cached_attrs.reg_max = @intCast(integer);
+    }
+
+    for (node.children) |*child| {
+        cacheModuleAttrs(child);
     }
 }
 
@@ -522,6 +559,19 @@ fn executionModuleForPath(model_graph: *const Graph, path: []const u8) ?*const M
     var buffer: [256]u8 = undefined;
     const module_path = std.fmt.bufPrint(&buffer, "model.model.{s}", .{path["model.".len..]}) catch return null;
     return model_graph.findModule(module_path);
+}
+
+fn buildExecutionUseCounts(model_graph: *Graph) void {
+    @memset(model_graph.execution_use_counts, 0);
+    for (model_graph.execution_nodes, 0..) |node, node_index| {
+        for (node.from) |source| {
+            if (source == -1) {
+                if (node_index > 0) model_graph.execution_use_counts[node_index - 1] += 1;
+            } else {
+                model_graph.execution_use_counts[@intCast(source)] += 1;
+            }
+        }
+    }
 }
 
 test "parseGraph exposes module tree and attrs" {

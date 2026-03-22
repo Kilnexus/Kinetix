@@ -26,7 +26,10 @@ pub fn add(output: *Tensor, lhs: *const Tensor, rhs: *const Tensor) OpError!void
 
 pub fn addInPlace(output: *Tensor, rhs: *const Tensor) OpError!void {
     if (!output.sameShape(rhs)) return OpError.ShapeMismatch;
+    addInPlaceUnchecked(output, rhs);
+}
 
+pub fn addInPlaceUnchecked(output: *Tensor, rhs: *const Tensor) void {
     var i: usize = 0;
     while (i + lane_count <= output.data.len) : (i += lane_count) {
         const lhs_vec: F32xN = output.data[i..][0..lane_count].*;
