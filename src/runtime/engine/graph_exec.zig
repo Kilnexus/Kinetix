@@ -30,6 +30,8 @@ pub const GraphProfile = struct {
     }
 };
 
+const node_input_stack_limit = 8;
+
 pub fn runUpsampleModule(
     allocator: std.mem.Allocator,
     model_graph: *const graph.Graph,
@@ -110,7 +112,11 @@ pub fn runGraphWithAllocators(
 
     for (model_graph.execution_nodes, 0..) |*node, node_index| {
         if (std.mem.eql(u8, node.kind, "Detect")) {
-            var feature_ptrs = try scratch.alloc(*const Tensor, node.from.len);
+            var feature_ptr_stack: [node_input_stack_limit]*const Tensor = undefined;
+            const feature_ptrs = if (node.from.len <= feature_ptr_stack.len)
+                feature_ptr_stack[0..node.from.len]
+            else
+                try scratch.alloc(*const Tensor, node.from.len);
             for (node.from, 0..) |source, source_index| {
                 feature_ptrs[source_index] = resolveInput(source, node_index, input, outputs) orelse return error.ModuleNotFound;
             }
@@ -130,7 +136,11 @@ pub fn runGraphWithAllocators(
         }
 
         if (std.mem.eql(u8, node.kind, "Concat")) {
-            var tensor_ptrs = try scratch.alloc(*const Tensor, node.from.len);
+            var tensor_ptr_stack: [node_input_stack_limit]*const Tensor = undefined;
+            const tensor_ptrs = if (node.from.len <= tensor_ptr_stack.len)
+                tensor_ptr_stack[0..node.from.len]
+            else
+                try scratch.alloc(*const Tensor, node.from.len);
 
             var channels: usize = 0;
             var height: usize = 0;
@@ -199,7 +209,11 @@ pub fn profileGraph(
         var timer = try std.time.Timer.start();
 
         if (std.mem.eql(u8, node.kind, "Detect")) {
-            var feature_ptrs = try scratch.alloc(*const Tensor, node.from.len);
+            var feature_ptr_stack: [node_input_stack_limit]*const Tensor = undefined;
+            const feature_ptrs = if (node.from.len <= feature_ptr_stack.len)
+                feature_ptr_stack[0..node.from.len]
+            else
+                try scratch.alloc(*const Tensor, node.from.len);
             for (node.from, 0..) |source, source_index| {
                 feature_ptrs[source_index] = resolveInput(source, node_index, input, outputs) orelse return error.ModuleNotFound;
             }
@@ -223,7 +237,11 @@ pub fn profileGraph(
             };
             releaseInputs(node.from, node_index, use_counts, outputs);
         } else if (std.mem.eql(u8, node.kind, "Concat")) {
-            var tensor_ptrs = try scratch.alloc(*const Tensor, node.from.len);
+            var tensor_ptr_stack: [node_input_stack_limit]*const Tensor = undefined;
+            const tensor_ptrs = if (node.from.len <= tensor_ptr_stack.len)
+                tensor_ptr_stack[0..node.from.len]
+            else
+                try scratch.alloc(*const Tensor, node.from.len);
 
             var channels: usize = 0;
             var height: usize = 0;

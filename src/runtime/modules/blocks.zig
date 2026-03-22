@@ -9,6 +9,7 @@ const utils = @import("../base/utils.zig");
 
 pub const Tensor = types.Tensor;
 pub const RuntimeError = types.RuntimeError;
+const c3k2_stack_part_limit = 8;
 
 pub const C3k2Profile = struct {
     cv1_ns: u64 = 0,
@@ -547,8 +548,17 @@ fn runC3k2Node(
         return try runConvNode(allocator, model_graph, weights_blob, &module.children[1], &concat);
     }
 
-    var parts = try allocator.alloc(Tensor, 2 + module_list.children.len);
-    defer allocator.free(parts);
+    var parts_stack: [c3k2_stack_part_limit]Tensor = undefined;
+    const parts_len = 2 + module_list.children.len;
+    const use_stack_parts = parts_len <= parts_stack.len;
+    var parts_heap: []Tensor = &.{};
+    const parts = if (use_stack_parts)
+        parts_stack[0..parts_len]
+    else blk: {
+        parts_heap = try allocator.alloc(Tensor, parts_len);
+        break :blk parts_heap;
+    };
+    defer if (!use_stack_parts) allocator.free(parts_heap);
 
     var initialized_parts: usize = 0;
     const first_part_is_view = stem.shape[0] == 1;
@@ -664,6 +674,7 @@ fn runC3k2ProfileInternal(
         );
         defer concat.deinit();
 
+        timer.reset();
         try ops.copyTensorBlock(&stem, &concat, 0);
         try ops.copyTensorBlock(&child_out, &concat, stem.shape[1]);
         profile.concat_ns = timer.read();
@@ -674,8 +685,17 @@ fn runC3k2ProfileInternal(
         return .{ .output = output, .c3k2_profile = profile };
     }
 
-    var parts = try allocator.alloc(Tensor, 2 + module_list.children.len);
-    defer allocator.free(parts);
+    var parts_stack: [c3k2_stack_part_limit]Tensor = undefined;
+    const parts_len = 2 + module_list.children.len;
+    const use_stack_parts = parts_len <= parts_stack.len;
+    var parts_heap: []Tensor = &.{};
+    const parts = if (use_stack_parts)
+        parts_stack[0..parts_len]
+    else blk: {
+        parts_heap = try allocator.alloc(Tensor, parts_len);
+        break :blk parts_heap;
+    };
+    defer if (!use_stack_parts) allocator.free(parts_heap);
 
     var initialized_parts: usize = 0;
     const first_part_is_view = stem.shape[0] == 1;
@@ -717,6 +737,8 @@ fn runC3k2ProfileInternal(
     );
     defer concat.deinit();
 
+    timer.reset();
+    timer.reset();
     try ops.copyTensorBlock(&stem, &concat, 0);
     var channel_offset = stem.shape[1];
     for (parts[1..initialized_parts]) |*part| {
