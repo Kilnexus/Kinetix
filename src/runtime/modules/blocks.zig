@@ -50,6 +50,46 @@ pub const ProfiledTensor = struct {
     c3k2_profile: C3k2Profile,
 };
 
+pub fn runModuleNodeDirect(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+    input: *const Tensor,
+) anyerror!Tensor {
+    return runModuleNode(allocator, model_graph, weights_blob, module, input);
+}
+
+pub fn runSPPFNode(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+    input: *const Tensor,
+) !Tensor {
+    return runSPPFInternal(allocator, model_graph, weights_blob, module, input);
+}
+
+pub fn runSPPFProfileNode(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+    input: *const Tensor,
+) !SPPFProfiledTensor {
+    return runSPPFProfileInternal(allocator, model_graph, weights_blob, module, input);
+}
+
+pub fn runC3k2ProfileNode(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+    input: *const Tensor,
+) !ProfiledTensor {
+    return runC3k2ProfileInternal(allocator, model_graph, weights_blob, module, input);
+}
+
 pub fn runConvModule(
     allocator: std.mem.Allocator,
     model_graph: *const graph.Graph,
@@ -121,6 +161,16 @@ pub fn runBottleneckProfile(
     input: *const Tensor,
 ) !BottleneckProfiledTensor {
     const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
+    return runBottleneckProfileInternal(allocator, model_graph, weights_blob, module, input);
+}
+
+fn runBottleneckProfileInternal(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+    input: *const Tensor,
+) !BottleneckProfiledTensor {
     if (!std.mem.eql(u8, module.kind, "Bottleneck")) return error.InvalidModuleKind;
 
     var profile = BottleneckProfile{};
@@ -152,6 +202,16 @@ pub fn runSPPF(
     input: *const Tensor,
 ) !Tensor {
     const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
+    return runSPPFInternal(allocator, model_graph, weights_blob, module, input);
+}
+
+fn runSPPFInternal(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+    input: *const Tensor,
+) !Tensor {
     if (!std.mem.eql(u8, module.kind, "SPPF")) return error.InvalidModuleKind;
 
     const pool = &module.children[2];
@@ -197,6 +257,16 @@ pub fn runSPPFProfile(
     input: *const Tensor,
 ) !SPPFProfiledTensor {
     const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
+    return runSPPFProfileInternal(allocator, model_graph, weights_blob, module, input);
+}
+
+fn runSPPFProfileInternal(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+    input: *const Tensor,
+) !SPPFProfiledTensor {
     if (!std.mem.eql(u8, module.kind, "SPPF")) return error.InvalidModuleKind;
 
     const pool = &module.children[2];
@@ -269,10 +339,10 @@ fn runBottleneckNode(
 ) !Tensor {
     if (!std.mem.eql(u8, module.kind, "Bottleneck")) return error.InvalidModuleKind;
 
-    var hidden = try runConvModule(allocator, model_graph, weights_blob, module.children[0].path, input);
+    var hidden = try runConvNode(allocator, model_graph, weights_blob, &module.children[0], input);
     defer hidden.deinit();
 
-    var output = try runConvModule(allocator, model_graph, weights_blob, module.children[1].path, &hidden);
+    var output = try runConvNode(allocator, model_graph, weights_blob, &module.children[1], &hidden);
     if ((module.getAttr("add") orelse return error.MissingAttribute).asBool() orelse return error.InvalidAttributeType) {
         try ops.addInPlace(&output, input);
     }
@@ -342,6 +412,16 @@ pub fn runC3kProfile(
     input: *const Tensor,
 ) !C3kProfiledTensor {
     const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
+    return runC3kProfileInternal(allocator, model_graph, weights_blob, module, input);
+}
+
+fn runC3kProfileInternal(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+    input: *const Tensor,
+) !C3kProfiledTensor {
     if (!std.mem.eql(u8, module.kind, "C3k")) return error.InvalidModuleKind;
 
     var profile = C3kProfile{};
@@ -442,11 +522,11 @@ fn runC3k2Node(
         defer if (!right_is_view) right.deinit();
 
         var child_out = if (std.mem.eql(u8, child.kind, "Bottleneck"))
-            try runBottleneck(allocator, model_graph, weights_blob, child.path, &right)
+            try runBottleneckNode(allocator, model_graph, weights_blob, child, &right)
         else if (std.mem.eql(u8, child.kind, "C3k"))
-            try runC3k(allocator, model_graph, weights_blob, child.path, &right)
+            try runC3kNode(allocator, model_graph, weights_blob, child, &right)
         else
-            try runModule(allocator, model_graph, weights_blob, child.path, &right);
+            try runModuleNode(allocator, model_graph, weights_blob, child, &right);
         defer child_out.deinit();
 
         var concat = try Tensor.init(
@@ -468,21 +548,27 @@ fn runC3k2Node(
     defer allocator.free(parts);
 
     var initialized_parts: usize = 0;
+    const first_part_is_view = stem.shape[0] == 1;
     errdefer {
-        for (parts[0..initialized_parts]) |*part| part.deinit();
+        const deinit_start: usize = if (first_part_is_view) 1 else 0;
+        for (parts[deinit_start..initialized_parts]) |*part| part.deinit();
     }
 
-    parts[0] = try utils.sliceChannels(allocator, &stem, chunk_channels, chunk_channels);
+    parts[0] = if (first_part_is_view)
+        try utils.sliceChannelsViewBatch1(&stem, chunk_channels, chunk_channels)
+    else
+        try utils.sliceChannels(allocator, &stem, chunk_channels, chunk_channels);
     initialized_parts += 1;
 
     var current_index: usize = 0;
     for (module_list.children) |child| {
-        parts[initialized_parts] = try runModule(allocator, model_graph, weights_blob, child.path, &parts[current_index]);
+        parts[initialized_parts] = try runModuleNode(allocator, model_graph, weights_blob, &child, &parts[current_index]);
         current_index = initialized_parts;
         initialized_parts += 1;
     }
     defer {
-        for (parts[0..initialized_parts]) |*part| part.deinit();
+        const deinit_start: usize = if (first_part_is_view) 1 else 0;
+        for (parts[deinit_start..initialized_parts]) |*part| part.deinit();
     }
 
     var concat_channels: usize = chunk_channels;
@@ -514,6 +600,16 @@ pub fn runC3k2Profile(
     input: *const Tensor,
 ) !ProfiledTensor {
     const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
+    return runC3k2ProfileInternal(allocator, model_graph, weights_blob, module, input);
+}
+
+fn runC3k2ProfileInternal(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+    input: *const Tensor,
+) !ProfiledTensor {
     if (!std.mem.eql(u8, module.kind, "C3k2")) return error.InvalidModuleKind;
 
     const chunk_channels: usize = @intCast(
@@ -542,12 +638,12 @@ pub fn runC3k2Profile(
 
         timer.reset();
         var child_out = if (std.mem.eql(u8, child.kind, "Bottleneck")) blk: {
-            const profiled = try runBottleneckProfile(allocator, model_graph, weights_blob, child.path, &right);
+            const profiled = try runBottleneckProfileInternal(allocator, model_graph, weights_blob, child, &right);
             profile.child_bottleneck = profiled.bottleneck_profile;
             break :blk profiled.output;
         }
         else if (std.mem.eql(u8, child.kind, "C3k")) blk: {
-            const profiled = try runC3kProfile(allocator, model_graph, weights_blob, child.path, &right);
+            const profiled = try runC3kProfileInternal(allocator, model_graph, weights_blob, child, &right);
             profile.child_c3k = profiled.c3k_profile;
             break :blk profiled.output;
         } else
@@ -580,11 +676,16 @@ pub fn runC3k2Profile(
     defer allocator.free(parts);
 
     var initialized_parts: usize = 0;
+    const first_part_is_view = stem.shape[0] == 1;
     errdefer {
-        for (parts[0..initialized_parts]) |*part| part.deinit();
+        const deinit_start: usize = if (first_part_is_view) 1 else 0;
+        for (parts[deinit_start..initialized_parts]) |*part| part.deinit();
     }
 
-    parts[0] = try utils.sliceChannels(allocator, &stem, chunk_channels, chunk_channels);
+    parts[0] = if (first_part_is_view)
+        try utils.sliceChannelsViewBatch1(&stem, chunk_channels, chunk_channels)
+    else
+        try utils.sliceChannels(allocator, &stem, chunk_channels, chunk_channels);
     initialized_parts += 1;
 
     var current_index: usize = 0;
@@ -597,7 +698,8 @@ pub fn runC3k2Profile(
     }
     profile.child_ns = timer.read();
     defer {
-        for (parts[0..initialized_parts]) |*part| part.deinit();
+        const deinit_start: usize = if (first_part_is_view) 1 else 0;
+        for (parts[deinit_start..initialized_parts]) |*part| part.deinit();
     }
 
     var concat_channels: usize = chunk_channels;
@@ -667,7 +769,7 @@ fn runModuleNode(
         return runBottleneckNode(allocator, model_graph, weights_blob, module, input);
     }
     if (std.mem.eql(u8, module.kind, "SPPF")) {
-        return runSPPF(allocator, model_graph, weights_blob, module.path, input);
+        return runSPPFInternal(allocator, model_graph, weights_blob, module, input);
     }
     if (std.mem.eql(u8, module.kind, "C3k")) {
         return runC3kNode(allocator, model_graph, weights_blob, module, input);

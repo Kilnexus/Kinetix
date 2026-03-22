@@ -37,6 +37,16 @@ pub fn runUpsampleModule(
     input: *const Tensor,
 ) !Tensor {
     const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
+    return runUpsampleNode(allocator, model_graph, module, input);
+}
+
+fn runUpsampleNode(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    module: *const graph.ModuleNode,
+    input: *const Tensor,
+) !Tensor {
+    _ = model_graph;
     if (!std.mem.eql(u8, module.kind, "Upsample")) return error.InvalidModuleKind;
 
     const scale_value = (module.getAttr("scale_factor") orelse return error.MissingAttribute).asFloat() orelse return error.InvalidAttributeType;
@@ -145,11 +155,12 @@ pub fn runGraphWithAllocators(
         const source = resolveInput(node.from[0], node_index, input, outputs) orelse return error.ModuleNotFound;
         var module_path_buffer: [256]u8 = undefined;
         const module_path = try modulePathForNode(&module_path_buffer, node.path);
+        const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
 
         const output = if (std.mem.eql(u8, node.kind, "Upsample"))
-            try runUpsampleModule(tensor_allocator, model_graph, module_path, source)
+            try runUpsampleNode(tensor_allocator, model_graph, module, source)
         else
-            try blocks.runModule(tensor_allocator, model_graph, weights_blob, module_path, source);
+            try blocks.runModuleNodeDirect(tensor_allocator, model_graph, weights_blob, module, source);
         outputs[node_index] = output;
         releaseInputs(node.from, node_index, use_counts, outputs);
     }
@@ -241,9 +252,10 @@ pub fn profileGraph(
             const source = resolveInput(node.from[0], node_index, input, outputs) orelse return error.ModuleNotFound;
             var module_path_buffer: [256]u8 = undefined;
             const module_path = try modulePathForNode(&module_path_buffer, node.path);
+            const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
 
             if (std.mem.eql(u8, node.kind, "Upsample")) {
-                const output = try runUpsampleModule(tensor_allocator, model_graph, module_path, source);
+                const output = try runUpsampleNode(tensor_allocator, model_graph, module, source);
                 outputs[node_index] = output;
                 profile_nodes[node_index] = .{
                     .path = node.path,
@@ -251,7 +263,7 @@ pub fn profileGraph(
                     .elapsed_ns = timer.read(),
                 };
             } else if (std.mem.eql(u8, node.kind, "C3k2")) {
-                const profiled = try blocks.runC3k2Profile(tensor_allocator, model_graph, weights_blob, module_path, source);
+                const profiled = try blocks.runC3k2ProfileNode(tensor_allocator, model_graph, weights_blob, module, source);
                 outputs[node_index] = profiled.output;
                 profile_nodes[node_index] = .{
                     .path = node.path,
@@ -260,7 +272,7 @@ pub fn profileGraph(
                     .c3k2_profile = profiled.c3k2_profile,
                 };
             } else if (std.mem.eql(u8, node.kind, "SPPF")) {
-                const profiled = try blocks.runSPPFProfile(tensor_allocator, model_graph, weights_blob, module_path, source);
+                const profiled = try blocks.runSPPFProfileNode(tensor_allocator, model_graph, weights_blob, module, source);
                 outputs[node_index] = profiled.output;
                 profile_nodes[node_index] = .{
                     .path = node.path,
@@ -269,7 +281,7 @@ pub fn profileGraph(
                     .sppf_profile = profiled.sppf_profile,
                 };
             } else {
-                const output = try blocks.runModule(tensor_allocator, model_graph, weights_blob, module_path, source);
+                const output = try blocks.runModuleNodeDirect(tensor_allocator, model_graph, weights_blob, module, source);
                 outputs[node_index] = output;
                 profile_nodes[node_index] = .{
                     .path = node.path,
