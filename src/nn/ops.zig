@@ -12,6 +12,7 @@ pub const Conv2DOptions = types.Conv2DOptions;
 pub const siluInPlace = activation.siluInPlace;
 pub const sigmoidInPlace = activation.sigmoidInPlace;
 pub const add = activation.add;
+pub const addInPlace = activation.addInPlace;
 pub const upsampleNearest = layout.upsampleNearest;
 pub const concatChannels = layout.concatChannels;
 pub const copyChannelRange = layout.copyChannelRange;

@@ -137,9 +137,8 @@ pub fn runBottleneckProfile(
     const has_add = (module.getAttr("add") orelse return error.MissingAttribute).asBool() orelse return error.InvalidAttributeType;
     profile.has_add = has_add;
     if (has_add) {
-        if (!output.sameShape(input)) return ops.OpError.ShapeMismatch;
         timer.reset();
-        for (output.data, input.data) |*dst, src| dst.* += src;
+        try ops.addInPlace(&output, input);
         profile.add_ns = timer.read();
     }
     return .{ .output = output, .bottleneck_profile = profile };
@@ -155,19 +154,12 @@ pub fn runSPPF(
     const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
     if (!std.mem.eql(u8, module.kind, "SPPF")) return error.InvalidModuleKind;
 
-    var cv1_buffer: [256]u8 = undefined;
-    const cv1_path = try utils.childModulePath(&cv1_buffer, module_path, "cv1");
-    var cv2_buffer: [256]u8 = undefined;
-    const cv2_path = try utils.childModulePath(&cv2_buffer, module_path, "cv2");
-    var pool_path_buffer: [256]u8 = undefined;
-    const pool_path = try utils.childModulePath(&pool_path_buffer, module_path, "m");
-
-    const pool = model_graph.findModule(pool_path) orelse return error.ModuleNotFound;
+    const pool = &module.children[2];
     const stride = try spec.getNodePair(pool, "stride");
     const padding = try spec.getNodePair(pool, "padding");
     const kernel = .{ padding[0] * 2 + 1, padding[1] * 2 + 1 };
 
-    var base = try runConvModule(allocator, model_graph, weights_blob, cv1_path, input);
+    var base = try runConvNode(allocator, model_graph, weights_blob, &module.children[0], input);
     defer base.deinit();
 
     var pool1 = try Tensor.init(allocator, base.shape[0], base.shape[1], base.shape[2], base.shape[3]);
@@ -194,7 +186,7 @@ pub fn runSPPF(
     const inputs = [_]*const Tensor{ &base, &pool1, &pool2, &pool3 };
     try ops.concatChannels(&inputs, &concat);
 
-    return try runConvModule(allocator, model_graph, weights_blob, cv2_path, &concat);
+    return try runConvNode(allocator, model_graph, weights_blob, &module.children[1], &concat);
 }
 
 pub fn runSPPFProfile(
@@ -207,14 +199,7 @@ pub fn runSPPFProfile(
     const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
     if (!std.mem.eql(u8, module.kind, "SPPF")) return error.InvalidModuleKind;
 
-    var cv1_buffer: [256]u8 = undefined;
-    const cv1_path = try utils.childModulePath(&cv1_buffer, module_path, "cv1");
-    var cv2_buffer: [256]u8 = undefined;
-    const cv2_path = try utils.childModulePath(&cv2_buffer, module_path, "cv2");
-    var pool_path_buffer: [256]u8 = undefined;
-    const pool_path = try utils.childModulePath(&pool_path_buffer, module_path, "m");
-
-    const pool = model_graph.findModule(pool_path) orelse return error.ModuleNotFound;
+    const pool = &module.children[2];
     const stride = try spec.getNodePair(pool, "stride");
     const padding = try spec.getNodePair(pool, "padding");
     const kernel = .{ padding[0] * 2 + 1, padding[1] * 2 + 1 };
@@ -222,7 +207,7 @@ pub fn runSPPFProfile(
     var profile = SPPFProfile{};
     var timer = try std.time.Timer.start();
 
-    var base = try runConvModule(allocator, model_graph, weights_blob, cv1_path, input);
+    var base = try runConvNode(allocator, model_graph, weights_blob, &module.children[0], input);
     profile.cv1_ns = timer.read();
     defer base.deinit();
 
@@ -259,7 +244,7 @@ pub fn runSPPFProfile(
     profile.concat_ns = timer.read();
 
     timer.reset();
-    const output = try runConvModule(allocator, model_graph, weights_blob, cv2_path, &concat);
+    const output = try runConvNode(allocator, model_graph, weights_blob, &module.children[1], &concat);
     profile.cv2_ns = timer.read();
     return .{ .output = output, .sppf_profile = profile };
 }
@@ -289,8 +274,7 @@ fn runBottleneckNode(
 
     var output = try runConvModule(allocator, model_graph, weights_blob, module.children[1].path, &hidden);
     if ((module.getAttr("add") orelse return error.MissingAttribute).asBool() orelse return error.InvalidAttributeType) {
-        if (!output.sameShape(input)) return ops.OpError.ShapeMismatch;
-        for (output.data, input.data) |*dst, src| dst.* += src;
+        try ops.addInPlace(&output, input);
     }
     return output;
 }
@@ -360,34 +344,25 @@ pub fn runC3kProfile(
     const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
     if (!std.mem.eql(u8, module.kind, "C3k")) return error.InvalidModuleKind;
 
-    var cv1_buffer: [256]u8 = undefined;
-    const cv1_path = try utils.childModulePath(&cv1_buffer, module_path, "cv1");
-    var cv2_buffer: [256]u8 = undefined;
-    const cv2_path = try utils.childModulePath(&cv2_buffer, module_path, "cv2");
-    var cv3_buffer: [256]u8 = undefined;
-    const cv3_path = try utils.childModulePath(&cv3_buffer, module_path, "cv3");
-    var seq_buffer: [256]u8 = undefined;
-    const seq_path = try utils.childModulePath(&seq_buffer, module_path, "m");
-
     var profile = C3kProfile{};
     var timer = try std.time.Timer.start();
 
-    var left = try runConvModule(allocator, model_graph, weights_blob, cv1_path, input);
+    var left = try runConvNode(allocator, model_graph, weights_blob, &module.children[0], input);
     profile.cv1_ns = timer.read();
     defer left.deinit();
 
-    const seq_node = model_graph.findModule(seq_path) orelse return error.ModuleNotFound;
+    const seq_node = &module.children[3];
     if (seq_node.children.len == 2 and
         std.mem.eql(u8, seq_node.children[0].kind, "Bottleneck") and
         std.mem.eql(u8, seq_node.children[1].kind, "Bottleneck"))
     {
         profile.seq_kind = "Bottleneckx2";
         timer.reset();
-        const next0 = try runBottleneck(allocator, model_graph, weights_blob, seq_node.children[0].path, &left);
+        const next0 = try runBottleneckNode(allocator, model_graph, weights_blob, &seq_node.children[0], &left);
         left.deinit();
         left = next0;
 
-        const next1 = try runBottleneck(allocator, model_graph, weights_blob, seq_node.children[1].path, &left);
+        const next1 = try runBottleneckNode(allocator, model_graph, weights_blob, &seq_node.children[1], &left);
         left.deinit();
         left = next1;
         profile.seq_ns = timer.read();
@@ -395,7 +370,7 @@ pub fn runC3kProfile(
         profile.seq_kind = seq_node.kind;
         timer.reset();
         for (seq_node.children) |child| {
-            const next = try runModule(allocator, model_graph, weights_blob, child.path, &left);
+            const next = try runModuleNode(allocator, model_graph, weights_blob, &child, &left);
             left.deinit();
             left = next;
         }
@@ -403,7 +378,7 @@ pub fn runC3kProfile(
     }
 
     timer.reset();
-    var right = try runConvModule(allocator, model_graph, weights_blob, cv2_path, input);
+    var right = try runConvNode(allocator, model_graph, weights_blob, &module.children[1], input);
     profile.cv2_ns = timer.read();
     defer right.deinit();
 
@@ -422,7 +397,7 @@ pub fn runC3kProfile(
     profile.concat_ns = timer.read();
 
     timer.reset();
-    const output = try runConvModule(allocator, model_graph, weights_blob, cv3_path, &concat);
+    const output = try runConvNode(allocator, model_graph, weights_blob, &module.children[2], &concat);
     profile.cv3_ns = timer.read();
     return .{ .output = output, .c3k_profile = profile };
 }
@@ -545,23 +520,16 @@ pub fn runC3k2Profile(
         (module.getAttr("c") orelse return error.MissingAttribute).asInteger() orelse return error.InvalidAttributeType,
     );
 
-    var cv1_buffer: [256]u8 = undefined;
-    const cv1_path = try utils.childModulePath(&cv1_buffer, module_path, "cv1");
-    var cv2_buffer: [256]u8 = undefined;
-    const cv2_path = try utils.childModulePath(&cv2_buffer, module_path, "cv2");
-    var list_buffer: [256]u8 = undefined;
-    const list_path = try utils.childModulePath(&list_buffer, module_path, "m");
-
     var profile = C3k2Profile{};
     var timer = try std.time.Timer.start();
 
-    var stem = try runConvModule(allocator, model_graph, weights_blob, cv1_path, input);
+    var stem = try runConvNode(allocator, model_graph, weights_blob, &module.children[0], input);
     profile.cv1_ns = timer.read();
     defer stem.deinit();
 
     if (stem.shape[1] != chunk_channels * 2) return ops.OpError.ShapeMismatch;
 
-    const module_list = model_graph.findModule(list_path) orelse return error.ModuleNotFound;
+    const module_list = &module.children[2];
     if (module_list.children.len == 1) {
         const child = &module_list.children[0];
         profile.child_kind = child.kind;
@@ -603,7 +571,7 @@ pub fn runC3k2Profile(
         profile.concat_ns = timer.read();
 
         timer.reset();
-        const output = try runConvModule(allocator, model_graph, weights_blob, cv2_path, &concat);
+        const output = try runConvNode(allocator, model_graph, weights_blob, &module.children[1], &concat);
         profile.cv2_ns = timer.read();
         return .{ .output = output, .c3k2_profile = profile };
     }
@@ -623,7 +591,7 @@ pub fn runC3k2Profile(
     profile.child_kind = "ModuleList";
     timer.reset();
     for (module_list.children) |child| {
-        parts[initialized_parts] = try runModule(allocator, model_graph, weights_blob, child.path, &parts[current_index]);
+        parts[initialized_parts] = try runModuleNode(allocator, model_graph, weights_blob, &child, &parts[current_index]);
         current_index = initialized_parts;
         initialized_parts += 1;
     }
@@ -654,7 +622,7 @@ pub fn runC3k2Profile(
     profile.concat_ns = timer.read();
 
     timer.reset();
-    const output = try runConvModule(allocator, model_graph, weights_blob, cv2_path, &concat);
+    const output = try runConvNode(allocator, model_graph, weights_blob, &module.children[1], &concat);
     profile.cv2_ns = timer.read();
     return .{ .output = output, .c3k2_profile = profile };
 }
