@@ -16,6 +16,7 @@ pub const addInPlace = activation.addInPlace;
 pub const upsampleNearest = layout.upsampleNearest;
 pub const concatChannels = layout.concatChannels;
 pub const copyChannelRange = layout.copyChannelRange;
+pub const copyTensorBlock = layout.copyTensorBlock;
 pub const maxPool2d = pooling.maxPool2d;
 pub const matmul = linalg.matmul;
 pub const softmaxRows = linalg.softmaxRows;

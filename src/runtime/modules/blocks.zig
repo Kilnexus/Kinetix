@@ -538,9 +538,8 @@ fn runC3k2Node(
         );
         defer concat.deinit();
 
-        try ops.copyChannelRange(&stem, 0, chunk_channels, &concat, 0);
-        try ops.copyChannelRange(&right, 0, right.shape[1], &concat, chunk_channels);
-        try ops.copyChannelRange(&child_out, 0, child_out.shape[1], &concat, chunk_channels + right.shape[1]);
+        try ops.copyTensorBlock(&stem, &concat, 0);
+        try ops.copyTensorBlock(&child_out, &concat, stem.shape[1]);
         return try runConvNode(allocator, model_graph, weights_blob, &module.children[1], &concat);
     }
 
@@ -583,10 +582,10 @@ fn runC3k2Node(
     );
     defer concat.deinit();
 
-    try ops.copyChannelRange(&stem, 0, chunk_channels, &concat, 0);
-    var channel_offset = chunk_channels;
-    for (parts[0..initialized_parts]) |*part| {
-        try ops.copyChannelRange(part, 0, part.shape[1], &concat, channel_offset);
+    try ops.copyTensorBlock(&stem, &concat, 0);
+    var channel_offset = stem.shape[1];
+    for (parts[1..initialized_parts]) |*part| {
+        try ops.copyTensorBlock(part, &concat, channel_offset);
         channel_offset += part.shape[1];
     }
     return try runConvNode(allocator, model_graph, weights_blob, &module.children[1], &concat);
@@ -661,9 +660,8 @@ fn runC3k2ProfileInternal(
         );
         defer concat.deinit();
 
-        try ops.copyChannelRange(&stem, 0, chunk_channels, &concat, 0);
-        try ops.copyChannelRange(&right, 0, right.shape[1], &concat, chunk_channels);
-        try ops.copyChannelRange(&child_out, 0, child_out.shape[1], &concat, chunk_channels + right.shape[1]);
+        try ops.copyTensorBlock(&stem, &concat, 0);
+        try ops.copyTensorBlock(&child_out, &concat, stem.shape[1]);
         profile.concat_ns = timer.read();
 
         timer.reset();
@@ -715,10 +713,10 @@ fn runC3k2ProfileInternal(
     );
     defer concat.deinit();
 
-    try ops.copyChannelRange(&stem, 0, chunk_channels, &concat, 0);
-    var channel_offset = chunk_channels;
-    for (parts[0..initialized_parts]) |*part| {
-        try ops.copyChannelRange(part, 0, part.shape[1], &concat, channel_offset);
+    try ops.copyTensorBlock(&stem, &concat, 0);
+    var channel_offset = stem.shape[1];
+    for (parts[1..initialized_parts]) |*part| {
+        try ops.copyTensorBlock(part, &concat, channel_offset);
         channel_offset += part.shape[1];
     }
     profile.concat_ns = timer.read();

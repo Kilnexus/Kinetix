@@ -144,6 +144,7 @@ pub const Graph = struct {
     strides: []f32,
     tensors: []TensorMeta,
     execution_nodes: []ExecutionNode,
+    execution_modules: []?*const ModuleNode,
     module_tree: ModuleNode,
     module_index: std.StringHashMapUnmanaged(*const ModuleNode),
     tensor_index: std.StringHashMapUnmanaged(*const TensorMeta),
@@ -161,6 +162,7 @@ pub const Graph = struct {
             self.allocator.free(node.from);
         }
         self.allocator.free(self.execution_nodes);
+        self.allocator.free(self.execution_modules);
         self.module_tree.deinit(self.allocator);
         self.* = undefined;
     }
@@ -278,6 +280,7 @@ fn parseGraph(allocator: std.mem.Allocator, contents: []const u8) !Graph {
         .strides = strides,
         .tensors = tensors,
         .execution_nodes = execution_nodes,
+        .execution_modules = try allocator.alloc(?*const ModuleNode, execution_nodes.len),
         .module_tree = module_tree,
         .module_index = .{},
         .tensor_index = .{},
@@ -381,6 +384,10 @@ fn indexGraph(model_graph: *Graph) !void {
     const module_count = countModules(&model_graph.module_tree);
     try model_graph.module_index.ensureTotalCapacity(model_graph.allocator, @intCast(module_count));
     indexModuleNode(&model_graph.module_index, &model_graph.module_tree);
+
+    for (model_graph.execution_nodes, 0..) |*node, index| {
+        model_graph.execution_modules[index] = executionModuleForPath(model_graph, node.path);
+    }
 }
 
 fn countModules(node: *const ModuleNode) usize {
@@ -392,6 +399,14 @@ fn countModules(node: *const ModuleNode) usize {
 fn indexModuleNode(index: *std.StringHashMapUnmanaged(*const ModuleNode), node: *const ModuleNode) void {
     index.putAssumeCapacity(node.path, node);
     for (node.children) |*child| indexModuleNode(index, child);
+}
+
+fn executionModuleForPath(model_graph: *const Graph, path: []const u8) ?*const ModuleNode {
+    if (!std.mem.startsWith(u8, path, "model.")) return null;
+
+    var buffer: [256]u8 = undefined;
+    const module_path = std.fmt.bufPrint(&buffer, "model.model.{s}", .{path["model.".len..]}) catch return null;
+    return model_graph.findModule(module_path);
 }
 
 test "parseGraph exposes module tree and attrs" {

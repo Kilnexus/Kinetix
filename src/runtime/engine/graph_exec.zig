@@ -153,9 +153,7 @@ pub fn runGraphWithAllocators(
         }
 
         const source = resolveInput(node.from[0], node_index, input, outputs) orelse return error.ModuleNotFound;
-        var module_path_buffer: [256]u8 = undefined;
-        const module_path = try modulePathForNode(&module_path_buffer, node.path);
-        const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
+        const module = model_graph.execution_modules[node_index] orelse return error.ModuleNotFound;
 
         const output = if (std.mem.eql(u8, node.kind, "Upsample"))
             try runUpsampleNode(tensor_allocator, model_graph, module, source)
@@ -250,9 +248,7 @@ pub fn profileGraph(
             releaseInputs(node.from, node_index, use_counts, outputs);
         } else {
             const source = resolveInput(node.from[0], node_index, input, outputs) orelse return error.ModuleNotFound;
-            var module_path_buffer: [256]u8 = undefined;
-            const module_path = try modulePathForNode(&module_path_buffer, node.path);
-            const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
+            const module = model_graph.execution_modules[node_index] orelse return error.ModuleNotFound;
 
             if (std.mem.eql(u8, node.kind, "Upsample")) {
                 const output = try runUpsampleNode(tensor_allocator, model_graph, module, source);

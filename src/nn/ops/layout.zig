@@ -101,6 +101,29 @@ pub fn copyChannelRange(
     }
 }
 
+pub fn copyTensorBlock(
+    input: *const Tensor,
+    output: *Tensor,
+    output_channel_start: usize,
+) OpError!void {
+    if (input.shape[0] != output.shape[0] or input.shape[2] != output.shape[2] or input.shape[3] != output.shape[3]) {
+        return OpError.ShapeMismatch;
+    }
+    if (output_channel_start + input.shape[1] > output.shape[1]) {
+        return OpError.InvalidOutputShape;
+    }
+
+    const plane = input.shape[2] * input.shape[3];
+    const block_len = input.shape[1] * plane;
+    for (0..input.shape[0]) |n| {
+        const input_batch_base = n * block_len;
+        const output_batch_base = n * output.shape[1] * plane + output_channel_start * plane;
+        const src = input.data[input_batch_base..][0..block_len];
+        const dst = output.data[output_batch_base..][0..block_len];
+        @memcpy(dst, src);
+    }
+}
+
 test "concat channels preserves order" {
     const testing = @import("std").testing;
 
