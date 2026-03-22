@@ -12,6 +12,17 @@ pub fn resolveConvSpec(model_graph: *const graph.Graph, module_path: []const u8)
 }
 
 pub fn resolveConvSpecNode(model_graph: *const graph.Graph, module: *const graph.ModuleNode) RuntimeError!ConvSpec {
+    if (module.cached_conv.valid) {
+        return .{
+            .weight = module.cached_conv.weight orelse return error.TensorNotFound,
+            .bias = module.cached_conv.bias,
+            .stride = module.cached_conv.stride,
+            .padding = module.cached_conv.padding,
+            .groups = module.cached_conv.groups,
+            .activation = if (module.cached_conv.apply_silu) .silu else .identity,
+        };
+    }
+
     const module_path = module.path;
 
     const is_wrapped_conv =

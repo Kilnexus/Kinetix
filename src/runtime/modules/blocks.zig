@@ -368,6 +368,7 @@ fn runC3kNode(
     {
         const next0 = try runBottleneckNode(allocator, model_graph, weights_blob, &seq_node.children[0], &left);
         left.deinit();
+
         left = next0;
 
         const next1 = try runBottleneckNode(allocator, model_graph, weights_blob, &seq_node.children[1], &left);
