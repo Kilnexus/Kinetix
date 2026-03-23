@@ -18,7 +18,6 @@ pub fn runC3kNode(
     module_runner: types.ModuleRunnerFn,
 ) !Tensor {
     if (!std.mem.eql(u8, module.kind, "C3k")) return error.InvalidModuleKind;
-
     var left = try conv.runConvNode(allocator, model_graph, weights_blob, &module.children[0], input);
     defer left.deinit();
 
@@ -72,7 +71,6 @@ pub fn runC3kProfileNode(
     module_runner: types.ModuleRunnerFn,
 ) !C3kProfiledTensor {
     if (!std.mem.eql(u8, module.kind, "C3k")) return error.InvalidModuleKind;
-
     var profile = types.C3kProfile{};
     var timer = try std.time.Timer.start();
 
