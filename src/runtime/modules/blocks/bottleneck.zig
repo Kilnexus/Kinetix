@@ -30,7 +30,7 @@ pub fn runBottleneckNode(
     return runBottleneckNodeUnchecked(allocator, model_graph, weights_blob, module, input);
 }
 
-pub fn runBottleneckNodeUnchecked(
+pub inline fn runBottleneckNodeUnchecked(
     allocator: std.mem.Allocator,
     model_graph: *const graph.Graph,
     weights_blob: *const weights_mod.WeightsBlob,
@@ -49,7 +49,7 @@ pub fn runBottleneckNodeUnchecked(
     return output;
 }
 
-pub fn runBottleneckPairNodesUnchecked(
+pub inline fn runBottleneckPairNodesUnchecked(
     allocator: std.mem.Allocator,
     model_graph: *const graph.Graph,
     weights_blob: *const weights_mod.WeightsBlob,
