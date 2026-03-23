@@ -437,7 +437,7 @@ fn runDetectFastDepthwise3x3Batch1Worker(task: DetectFastDepthwiseTask) void {
     runDetectFastDepthwise3x3Batch1Into(task.input, task.plan, task.output, task.channel_start, task.channel_end);
 }
 
-fn detectFast3x3PointPair(
+inline fn detectFast3x3PointPair(
     input: *const Tensor,
     weights: *const Tensor,
     bias0: f32,
@@ -492,7 +492,7 @@ fn detectFast3x3PointPair(
     return .{ .a = acc0, .b = acc1 };
 }
 
-fn detectFast3x3Point(
+inline fn detectFast3x3Point(
     input: *const Tensor,
     weights: *const Tensor,
     bias_value: f32,
@@ -538,6 +538,6 @@ fn detectFast3x3Point(
     return acc;
 }
 
-fn silu(x: f32) f32 {
+inline fn silu(x: f32) f32 {
     return x / (1.0 + @exp(-x));
 }

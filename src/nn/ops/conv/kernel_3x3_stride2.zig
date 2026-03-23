@@ -182,7 +182,7 @@ pub fn conv2d3x3Pad1Stride2Range(
     }
 }
 
-fn conv2d3x3Pad1Stride2Point(
+inline fn conv2d3x3Pad1Stride2Point(
     input: *const common.Tensor,
     weights: *const common.Tensor,
     bias_value: f32,
