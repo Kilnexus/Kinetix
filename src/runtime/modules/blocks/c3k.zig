@@ -27,11 +27,14 @@ pub fn runC3kNode(
         std.mem.eql(u8, seq_node.children[0].kind, "Bottleneck") and
         std.mem.eql(u8, seq_node.children[1].kind, "Bottleneck"))
     {
-        const next0 = try bottleneck.runBottleneckNode(allocator, model_graph, weights_blob, &seq_node.children[0], &left);
-        left.deinit();
-        left = next0;
-
-        const next1 = try bottleneck.runBottleneckNode(allocator, model_graph, weights_blob, &seq_node.children[1], &left);
+        const next1 = try bottleneck.runBottleneckPairNodesUnchecked(
+            allocator,
+            model_graph,
+            weights_blob,
+            &seq_node.children[0],
+            &seq_node.children[1],
+            &left,
+        );
         left.deinit();
         left = next1;
     } else {
@@ -84,11 +87,14 @@ pub fn runC3kProfileNode(
     {
         profile.seq_kind = "Bottleneckx2";
         timer.reset();
-        const next0 = try bottleneck.runBottleneckNode(allocator, model_graph, weights_blob, &seq_node.children[0], &left);
-        left.deinit();
-        left = next0;
-
-        const next1 = try bottleneck.runBottleneckNode(allocator, model_graph, weights_blob, &seq_node.children[1], &left);
+        const next1 = try bottleneck.runBottleneckPairNodesUnchecked(
+            allocator,
+            model_graph,
+            weights_blob,
+            &seq_node.children[0],
+            &seq_node.children[1],
+            &left,
+        );
         left.deinit();
         left = next1;
         profile.seq_ns = timer.read();

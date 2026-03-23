@@ -41,7 +41,7 @@ pub fn runC3k2Node(
         defer if (!right_is_view) right.deinit();
 
         var child_out = if (std.mem.eql(u8, child.kind, "Bottleneck"))
-            try bottleneck.runBottleneckNode(allocator, model_graph, weights_blob, child, &right)
+            try bottleneck.runBottleneckNodeUnchecked(allocator, model_graph, weights_blob, child, &right)
         else if (std.mem.eql(u8, child.kind, "C3k"))
             try c3k.runC3kNode(allocator, model_graph, weights_blob, child, &right, module_runner)
         else
@@ -155,7 +155,7 @@ pub fn runC3k2ProfileNode(
 
         timer.reset();
         var child_out = if (std.mem.eql(u8, child.kind, "Bottleneck")) blk: {
-            const profiled = try bottleneck.runBottleneckProfileNode(allocator, model_graph, weights_blob, child, &right);
+            const profiled = try bottleneck.runBottleneckProfileNodeUnchecked(allocator, model_graph, weights_blob, child, &right);
             profile.child_bottleneck = profiled.bottleneck_profile;
             break :blk profiled.output;
         } else if (std.mem.eql(u8, child.kind, "C3k")) blk: {

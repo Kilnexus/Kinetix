@@ -27,7 +27,16 @@ pub fn runBottleneckNode(
     input: *const Tensor,
 ) !Tensor {
     if (!std.mem.eql(u8, module.kind, "Bottleneck")) return error.InvalidModuleKind;
+    return runBottleneckNodeUnchecked(allocator, model_graph, weights_blob, module, input);
+}
 
+pub fn runBottleneckNodeUnchecked(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+    input: *const Tensor,
+) !Tensor {
     var hidden = try conv.runConvNode(allocator, model_graph, weights_blob, &module.children[0], input);
     defer hidden.deinit();
 
@@ -38,6 +47,21 @@ pub fn runBottleneckNode(
         ops.addInPlaceUnchecked(&output, input);
     }
     return output;
+}
+
+pub fn runBottleneckPairNodesUnchecked(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    first: *const graph.ModuleNode,
+    second: *const graph.ModuleNode,
+    input: *const Tensor,
+) !Tensor {
+    var current = try runBottleneckNodeUnchecked(allocator, model_graph, weights_blob, first, input);
+    errdefer current.deinit();
+    const next = try runBottleneckNodeUnchecked(allocator, model_graph, weights_blob, second, &current);
+    current.deinit();
+    return next;
 }
 
 pub fn runBottleneckProfile(
@@ -59,7 +83,16 @@ pub fn runBottleneckProfileNode(
     input: *const Tensor,
 ) !BottleneckProfiledTensor {
     if (!std.mem.eql(u8, module.kind, "Bottleneck")) return error.InvalidModuleKind;
+    return runBottleneckProfileNodeUnchecked(allocator, model_graph, weights_blob, module, input);
+}
 
+pub fn runBottleneckProfileNodeUnchecked(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+    input: *const Tensor,
+) !BottleneckProfiledTensor {
     var profile = types.BottleneckProfile{};
     var timer = try std.time.Timer.start();
 
