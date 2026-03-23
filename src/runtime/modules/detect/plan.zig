@@ -19,17 +19,21 @@ pub fn buildDetectBranchPlans(
         plans[index] = if (matchesDetectCv2Branch(node))
             .{ .cv2 = .{
                 .conv0 = try buildConvPlan(model_graph, weights_blob, node.children[0].path),
+                .conv0_fast = cv2PlanSupportsFast(&node.children[0]),
                 .conv1 = try buildConvPlan(model_graph, weights_blob, node.children[1].path),
+                .conv1_fast = cv2PlanSupportsFast(&node.children[1]),
                 .head = try buildConvPlan(model_graph, weights_blob, node.children[2].path),
             } }
         else if (matchesDetectCv3Branch(node))
             .{ .cv3 = .{
                 .stage0 = .{
                     .depthwise = try buildConvPlan(model_graph, weights_blob, node.children[0].children[0].path),
+                    .depthwise_fast = cv3DepthwisePlanSupportsFast(&node.children[0].children[0]),
                     .pointwise = try buildConvPlan(model_graph, weights_blob, node.children[0].children[1].path),
                 },
                 .stage1 = .{
                     .depthwise = try buildConvPlan(model_graph, weights_blob, node.children[1].children[0].path),
+                    .depthwise_fast = cv3DepthwisePlanSupportsFast(&node.children[1].children[0]),
                     .pointwise = try buildConvPlan(model_graph, weights_blob, node.children[1].children[1].path),
                 },
                 .head = try buildConvPlan(model_graph, weights_blob, node.children[2].path),
@@ -62,6 +66,36 @@ fn convPlanFromSpec(
         .groups = conv_spec.groups,
         .activation = conv_spec.activation,
     };
+}
+
+fn cv2PlanSupportsFast(module: *const graph.ModuleNode) bool {
+    const cached = module.cached_conv;
+    return cached.valid and
+        cached.weight != null and
+        cached.weight.?.shape[0] == 64 and
+        cached.weight.?.shape[2] == 3 and
+        cached.weight.?.shape[3] == 3 and
+        cached.stride[0] == 1 and
+        cached.stride[1] == 1 and
+        cached.padding[0] == 1 and
+        cached.padding[1] == 1 and
+        cached.groups == 1 and
+        cached.apply_silu;
+}
+
+fn cv3DepthwisePlanSupportsFast(module: *const graph.ModuleNode) bool {
+    const cached = module.cached_conv;
+    return cached.valid and
+        cached.weight != null and
+        cached.weight.?.shape[2] == 3 and
+        cached.weight.?.shape[3] == 3 and
+        cached.stride[0] == 1 and
+        cached.stride[1] == 1 and
+        cached.padding[0] == 1 and
+        cached.padding[1] == 1 and
+        cached.apply_silu and
+        cached.groups == cached.weight.?.shape[0] and
+        cached.weight.?.shape[1] == 1;
 }
 
 pub fn resolveDetectBranch(

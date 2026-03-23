@@ -78,6 +78,8 @@ const DetectPairAcc = struct {
     b: f32,
 };
 
+const max_detect_fast_interior_width = 128;
+
 fn chooseDetectFastConvThreadCount(spatial: usize) usize {
     if (spatial >= 128) return 2;
     return 1;
@@ -157,6 +159,11 @@ fn runDetectFast3x3Conv64Batch1Into(
     const output_plane = out_height * out_width;
     const interior_h_end = if (out_height > 1) out_height - 1 else 0;
     const interior_w_end = if (out_width > 1) out_width - 1 else 0;
+    const interior_count = if (interior_w_end > 1) interior_w_end - 1 else 0;
+    const use_row_accumulators = interior_count > 0 and interior_count <= max_detect_fast_interior_width;
+    const weight_data = plan.weight.data;
+    var acc0_buf: [max_detect_fast_interior_width]f32 = undefined;
+    var acc1_buf: [max_detect_fast_interior_width]f32 = undefined;
 
     var oc: usize = oc_start;
 
@@ -187,39 +194,90 @@ fn runDetectFast3x3Conv64Batch1Into(
                 output.data[out1_row] = silu(acc.b);
             }
 
-            for (1..interior_w_end) |ox| {
-                var acc0: f32 = bias0;
-                var acc1: f32 = bias1;
-                const row0 = (oy - 1) * in_width + (ox - 1);
-                const row1 = row0 + in_width;
-                const row2 = row1 + in_width;
+            if (use_row_accumulators) {
+                @memset(acc0_buf[0..interior_count], bias0);
+                @memset(acc1_buf[0..interior_count], bias1);
+                const row0_base = (oy - 1) * in_width;
+                const row1_base = row0_base + in_width;
+                const row2_base = row1_base + in_width;
 
                 for (0..in_channels) |ic| {
                     const input_channel = input.data[ic * input_plane ..][0..input_plane];
                     const ic_weight0 = weight0_base + ic * 9;
                     const ic_weight1 = weight1_base + ic * 9;
+                    const w0: @Vector(8, f32) = weight_data[ic_weight0..][0..8].*;
+                    const w1: @Vector(8, f32) = weight_data[ic_weight1..][0..8].*;
 
-                    const v00 = input_channel[row0];
-                    const v01 = input_channel[row0 + 1];
-                    const v02 = input_channel[row0 + 2];
-                    const v10 = input_channel[row1];
-                    const v11 = input_channel[row1 + 1];
-                    const v12 = input_channel[row1 + 2];
-                    const v20 = input_channel[row2];
-                    const v21 = input_channel[row2 + 1];
-                    const v22 = input_channel[row2 + 2];
-                    const src8: @Vector(8, f32) = .{ v00, v01, v02, v10, v11, v12, v20, v21 };
-                    const w0: @Vector(8, f32) = plan.weight.data[ic_weight0..][0..8].*;
-                    const w1: @Vector(8, f32) = plan.weight.data[ic_weight1..][0..8].*;
+                    var v00 = input_channel[row0_base];
+                    var v01 = input_channel[row0_base + 1];
+                    var v02 = input_channel[row0_base + 2];
+                    var v10 = input_channel[row1_base];
+                    var v11 = input_channel[row1_base + 1];
+                    var v12 = input_channel[row1_base + 2];
+                    var v20 = input_channel[row2_base];
+                    var v21 = input_channel[row2_base + 1];
+                    var v22 = input_channel[row2_base + 2];
 
-                    acc0 += @reduce(.Add, src8 * w0);
-                    acc0 += v22 * plan.weight.data[ic_weight0 + 8];
-                    acc1 += @reduce(.Add, src8 * w1);
-                    acc1 += v22 * plan.weight.data[ic_weight1 + 8];
+                    for (0..interior_count) |ix| {
+                        const src8: @Vector(8, f32) = .{ v00, v01, v02, v10, v11, v12, v20, v21 };
+                        acc0_buf[ix] += @reduce(.Add, src8 * w0) + v22 * weight_data[ic_weight0 + 8];
+                        acc1_buf[ix] += @reduce(.Add, src8 * w1) + v22 * weight_data[ic_weight1 + 8];
+
+                        if (ix + 1 < interior_count) {
+                            const next_col = ix + 3;
+                            v00 = v01;
+                            v01 = v02;
+                            v02 = input_channel[row0_base + next_col];
+                            v10 = v11;
+                            v11 = v12;
+                            v12 = input_channel[row1_base + next_col];
+                            v20 = v21;
+                            v21 = v22;
+                            v22 = input_channel[row2_base + next_col];
+                        }
+                    }
                 }
 
-                output.data[out0_row + ox] = silu(acc0);
-                output.data[out1_row + ox] = silu(acc1);
+                for (0..interior_count) |ix| {
+                    const ox = ix + 1;
+                    output.data[out0_row + ox] = silu(acc0_buf[ix]);
+                    output.data[out1_row + ox] = silu(acc1_buf[ix]);
+                }
+            } else {
+                for (1..interior_w_end) |ox| {
+                    var acc0: f32 = bias0;
+                    var acc1: f32 = bias1;
+                    const row0 = (oy - 1) * in_width + (ox - 1);
+                    const row1 = row0 + in_width;
+                    const row2 = row1 + in_width;
+
+                    for (0..in_channels) |ic| {
+                        const input_channel = input.data[ic * input_plane ..][0..input_plane];
+                        const ic_weight0 = weight0_base + ic * 9;
+                        const ic_weight1 = weight1_base + ic * 9;
+
+                        const v00 = input_channel[row0];
+                        const v01 = input_channel[row0 + 1];
+                        const v02 = input_channel[row0 + 2];
+                        const v10 = input_channel[row1];
+                        const v11 = input_channel[row1 + 1];
+                        const v12 = input_channel[row1 + 2];
+                        const v20 = input_channel[row2];
+                        const v21 = input_channel[row2 + 1];
+                        const v22 = input_channel[row2 + 2];
+                        const src8: @Vector(8, f32) = .{ v00, v01, v02, v10, v11, v12, v20, v21 };
+                        const w0: @Vector(8, f32) = weight_data[ic_weight0..][0..8].*;
+                        const w1: @Vector(8, f32) = weight_data[ic_weight1..][0..8].*;
+
+                        acc0 += @reduce(.Add, src8 * w0);
+                        acc0 += v22 * weight_data[ic_weight0 + 8];
+                        acc1 += @reduce(.Add, src8 * w1);
+                        acc1 += v22 * weight_data[ic_weight1 + 8];
+                    }
+
+                    output.data[out0_row + ox] = silu(acc0);
+                    output.data[out1_row + ox] = silu(acc1);
+                }
             }
 
             for (interior_w_end..out_width) |ox| {
@@ -246,30 +304,75 @@ fn runDetectFast3x3Conv64Batch1Into(
 
             output.data[out_row] = silu(detectFast3x3Point(input, &plan.weight, bias_value, weight_base, oy, 0));
 
-            for (1..interior_w_end) |ox| {
-                var acc: f32 = bias_value;
-                const row0 = (oy - 1) * in_width + (ox - 1);
-                const row1 = row0 + in_width;
-                const row2 = row1 + in_width;
+            if (use_row_accumulators) {
+                @memset(acc0_buf[0..interior_count], bias_value);
+                const row0_base = (oy - 1) * in_width;
+                const row1_base = row0_base + in_width;
+                const row2_base = row1_base + in_width;
 
                 for (0..in_channels) |ic| {
                     const input_channel = input.data[ic * input_plane ..][0..input_plane];
                     const ic_weight = weight_base + ic * 9;
-                    const v00 = input_channel[row0];
-                    const v01 = input_channel[row0 + 1];
-                    const v02 = input_channel[row0 + 2];
-                    const v10 = input_channel[row1];
-                    const v11 = input_channel[row1 + 1];
-                    const v12 = input_channel[row1 + 2];
-                    const v20 = input_channel[row2];
-                    const v21 = input_channel[row2 + 1];
-                    const src8: @Vector(8, f32) = .{ v00, v01, v02, v10, v11, v12, v20, v21 };
-                    const w: @Vector(8, f32) = plan.weight.data[ic_weight..][0..8].*;
-                    acc += @reduce(.Add, src8 * w);
-                    acc += input_channel[row2 + 2] * plan.weight.data[ic_weight + 8];
+                    const w: @Vector(8, f32) = weight_data[ic_weight..][0..8].*;
+
+                    var v00 = input_channel[row0_base];
+                    var v01 = input_channel[row0_base + 1];
+                    var v02 = input_channel[row0_base + 2];
+                    var v10 = input_channel[row1_base];
+                    var v11 = input_channel[row1_base + 1];
+                    var v12 = input_channel[row1_base + 2];
+                    var v20 = input_channel[row2_base];
+                    var v21 = input_channel[row2_base + 1];
+                    var v22 = input_channel[row2_base + 2];
+
+                    for (0..interior_count) |ix| {
+                        const src8: @Vector(8, f32) = .{ v00, v01, v02, v10, v11, v12, v20, v21 };
+                        acc0_buf[ix] += @reduce(.Add, src8 * w) + v22 * weight_data[ic_weight + 8];
+
+                        if (ix + 1 < interior_count) {
+                            const next_col = ix + 3;
+                            v00 = v01;
+                            v01 = v02;
+                            v02 = input_channel[row0_base + next_col];
+                            v10 = v11;
+                            v11 = v12;
+                            v12 = input_channel[row1_base + next_col];
+                            v20 = v21;
+                            v21 = v22;
+                            v22 = input_channel[row2_base + next_col];
+                        }
+                    }
                 }
 
-                output.data[out_row + ox] = silu(acc);
+                for (0..interior_count) |ix| {
+                    output.data[out_row + ix + 1] = silu(acc0_buf[ix]);
+                }
+            } else {
+                for (1..interior_w_end) |ox| {
+                    var acc: f32 = bias_value;
+                    const row0 = (oy - 1) * in_width + (ox - 1);
+                    const row1 = row0 + in_width;
+                    const row2 = row1 + in_width;
+
+                    for (0..in_channels) |ic| {
+                        const input_channel = input.data[ic * input_plane ..][0..input_plane];
+                        const ic_weight = weight_base + ic * 9;
+                        const v00 = input_channel[row0];
+                        const v01 = input_channel[row0 + 1];
+                        const v02 = input_channel[row0 + 2];
+                        const v10 = input_channel[row1];
+                        const v11 = input_channel[row1 + 1];
+                        const v12 = input_channel[row1 + 2];
+                        const v20 = input_channel[row2];
+                        const v21 = input_channel[row2 + 1];
+                        const src8: @Vector(8, f32) = .{ v00, v01, v02, v10, v11, v12, v20, v21 };
+                        const w: @Vector(8, f32) = weight_data[ic_weight..][0..8].*;
+                        acc += @reduce(.Add, src8 * w);
+                        acc += input_channel[row2 + 2] * weight_data[ic_weight + 8];
+                    }
+
+                    output.data[out_row + ox] = silu(acc);
+                }
             }
 
             for (interior_w_end..out_width) |ox| {

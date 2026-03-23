@@ -12,12 +12,12 @@ pub fn runDetectCv2BranchPlanned(
     plan: *const Cv2BranchPlan,
     input: *const Tensor,
 ) !Tensor {
-    var hidden0 = if (exec_fast.canUseFastDetectCv2Conv(input, &plan.conv0))
+    var hidden0 = if (plan.conv0_fast)
         try exec_fast.runDetectFast3x3Conv64Batch1(allocator, input, &plan.conv0)
     else
         try exec_common.runConvPlan(allocator, &plan.conv0, input);
     defer hidden0.deinit();
-    var hidden1 = if (exec_fast.canUseFastDetectCv2Conv(&hidden0, &plan.conv1))
+    var hidden1 = if (plan.conv1_fast)
         try exec_fast.runDetectFast3x3Conv64Batch1(allocator, &hidden0, &plan.conv1)
     else
         try exec_common.runConvPlan(allocator, &plan.conv1, &hidden0);
@@ -32,7 +32,7 @@ pub fn runDetectCv2BranchPlannedProfile(
     profile: *DetectBranchProfile,
 ) !Tensor {
     var timer = try std.time.Timer.start();
-    var hidden0 = if (exec_fast.canUseFastDetectCv2Conv(input, &plan.conv0))
+    var hidden0 = if (plan.conv0_fast)
         try exec_fast.runDetectFast3x3Conv64Batch1(allocator, input, &plan.conv0)
     else
         try exec_common.runConvPlan(allocator, &plan.conv0, input);
@@ -40,7 +40,7 @@ pub fn runDetectCv2BranchPlannedProfile(
     defer hidden0.deinit();
 
     timer.reset();
-    var hidden1 = if (exec_fast.canUseFastDetectCv2Conv(&hidden0, &plan.conv1))
+    var hidden1 = if (plan.conv1_fast)
         try exec_fast.runDetectFast3x3Conv64Batch1(allocator, &hidden0, &plan.conv1)
     else
         try exec_common.runConvPlan(allocator, &plan.conv1, &hidden0);

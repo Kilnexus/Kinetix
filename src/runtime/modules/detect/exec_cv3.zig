@@ -13,7 +13,7 @@ fn runDetectCv3StagePlanned(
     plan: *const Cv3StagePlan,
     input: *const Tensor,
 ) !Tensor {
-    var hidden = if (exec_fast.canUseFastDetectCv3DepthwiseConv(input, &plan.depthwise))
+    var hidden = if (plan.depthwise_fast)
         try exec_fast.runDetectFastDepthwise3x3Batch1(allocator, input, &plan.depthwise)
     else
         try exec_common.runConvPlan(allocator, &plan.depthwise, input);
@@ -40,7 +40,7 @@ pub fn runDetectCv3BranchPlannedProfile(
     profile: *DetectBranchProfile,
 ) !Tensor {
     var timer = try std.time.Timer.start();
-    var hidden0 = if (exec_fast.canUseFastDetectCv3DepthwiseConv(input, &plan.stage0.depthwise))
+    var hidden0 = if (plan.stage0.depthwise_fast)
         try exec_fast.runDetectFastDepthwise3x3Batch1(allocator, input, &plan.stage0.depthwise)
     else
         try exec_common.runConvPlan(allocator, &plan.stage0.depthwise, input);
@@ -53,7 +53,7 @@ pub fn runDetectCv3BranchPlannedProfile(
     defer hidden1.deinit();
 
     timer.reset();
-    var hidden2 = if (exec_fast.canUseFastDetectCv3DepthwiseConv(&hidden1, &plan.stage1.depthwise))
+    var hidden2 = if (plan.stage1.depthwise_fast)
         try exec_fast.runDetectFastDepthwise3x3Batch1(allocator, &hidden1, &plan.stage1.depthwise)
     else
         try exec_common.runConvPlan(allocator, &plan.stage1.depthwise, &hidden1);

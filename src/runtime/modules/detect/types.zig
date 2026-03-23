@@ -85,12 +85,15 @@ pub const ConvPlan = struct {
 
 pub const Cv2BranchPlan = struct {
     conv0: ConvPlan,
+    conv0_fast: bool = false,
     conv1: ConvPlan,
+    conv1_fast: bool = false,
     head: ConvPlan,
 };
 
 pub const Cv3StagePlan = struct {
     depthwise: ConvPlan,
+    depthwise_fast: bool = false,
     pointwise: ConvPlan,
 };
 
