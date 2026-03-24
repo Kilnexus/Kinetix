@@ -41,6 +41,29 @@ pub fn runDetect(
     return profiled.output;
 }
 
+pub fn runDetectNode(
+    output_allocator: std.mem.Allocator,
+    tensor_allocator: std.mem.Allocator,
+    scratch_allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+    feature_inputs: []const *const Tensor,
+    options: DetectOptions,
+) !DetectOutput {
+    const profiled = try runDetectProfileNode(
+        output_allocator,
+        tensor_allocator,
+        scratch_allocator,
+        model_graph,
+        weights_blob,
+        module,
+        feature_inputs,
+        options,
+    );
+    return profiled.output;
+}
+
 pub fn runDetectProfile(
     output_allocator: std.mem.Allocator,
     tensor_allocator: std.mem.Allocator,
@@ -52,6 +75,29 @@ pub fn runDetectProfile(
     options: DetectOptions,
 ) !ProfiledDetectOutput {
     const module = model_graph.findModule(module_path) orelse return error.ModuleNotFound;
+    if (!std.mem.eql(u8, module.kind, "Detect")) return error.InvalidModuleKind;
+    return runDetectProfileNode(
+        output_allocator,
+        tensor_allocator,
+        scratch_allocator,
+        model_graph,
+        weights_blob,
+        module,
+        feature_inputs,
+        options,
+    );
+}
+
+pub fn runDetectProfileNode(
+    output_allocator: std.mem.Allocator,
+    tensor_allocator: std.mem.Allocator,
+    scratch_allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+    feature_inputs: []const *const Tensor,
+    options: DetectOptions,
+) !ProfiledDetectOutput {
     if (!std.mem.eql(u8, module.kind, "Detect")) return error.InvalidModuleKind;
 
     const nl = module.cached_attrs.nl orelse @as(usize, @intCast(
@@ -67,8 +113,8 @@ pub fn runDetectProfile(
     if (feature_inputs.len != nl or model_graph.strides.len != nl) return error.InvalidAttributeType;
     if (nl > max_detect_branch_levels) return error.InvalidAttributeType;
 
-    const reg_branch = plan.resolveDetectBranch(model_graph, module_path, "cv2", "one2one_cv2") orelse return error.ModuleNotFound;
-    const cls_branch = plan.resolveDetectBranch(model_graph, module_path, "cv3", "one2one_cv3") orelse return error.ModuleNotFound;
+    const reg_branch = plan.resolveDetectBranchNode(module, "cv2", "one2one_cv2") orelse return error.ModuleNotFound;
+    const cls_branch = plan.resolveDetectBranchNode(module, "cv3", "one2one_cv3") orelse return error.ModuleNotFound;
     var reg_plan_storage: [max_detect_branch_levels]BranchPlan = undefined;
     var cls_plan_storage: [max_detect_branch_levels]BranchPlan = undefined;
     const reg_plans = reg_plan_storage[0..nl];
@@ -76,9 +122,9 @@ pub fn runDetectProfile(
     try plan.buildDetectBranchPlans(reg_plans, model_graph, weights_blob, reg_branch);
     try plan.buildDetectBranchPlans(cls_plans, model_graph, weights_blob, cls_branch);
     const dfl_weights = if (reg_max > 1) blk: {
-        var dfl_conv_buffer: [256]u8 = undefined;
-        const dfl_conv_path = try utils.childModulePath(&dfl_conv_buffer, module_path, "dfl.conv");
-        const dfl_spec = try spec.resolveConvSpec(model_graph, dfl_conv_path);
+        const dfl_module = plan.resolveDetectBranchNode(module, "dfl", "dfl") orelse return error.ModuleNotFound;
+        const dfl_conv = plan.resolveDetectBranchNode(dfl_module, "conv", "conv") orelse return error.ModuleNotFound;
+        const dfl_spec = try spec.resolveConvSpecNode(model_graph, dfl_conv);
         break :blk weights_blob.slice(dfl_spec.weight);
     } else null;
     const score_logit_threshold = postprocess.sigmoidThresholdToLogit(options.score_threshold);

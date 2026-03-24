@@ -120,14 +120,14 @@ pub fn runGraphWithAllocators(
             for (node.from, 0..) |source, source_index| {
                 feature_ptrs[source_index] = resolveInput(source, node_index, input, outputs) orelse return error.ModuleNotFound;
             }
-            var module_path_buffer: [256]u8 = undefined;
-            detect_output = try detect.runDetect(
+            const module = model_graph.execution_modules[node_index] orelse return error.ModuleNotFound;
+            detect_output = try detect.runDetectNode(
                 allocator,
                 tensor_allocator,
                 scratch,
                 model_graph,
                 weights_blob,
-                try modulePathForNode(&module_path_buffer, node.path),
+                module,
                 feature_ptrs,
                 detect_options,
             );
@@ -217,14 +217,14 @@ pub fn profileGraph(
             for (node.from, 0..) |source, source_index| {
                 feature_ptrs[source_index] = resolveInput(source, node_index, input, outputs) orelse return error.ModuleNotFound;
             }
-            var module_path_buffer: [256]u8 = undefined;
-            var profiled_detect = try detect.runDetectProfile(
+            const module = model_graph.execution_modules[node_index] orelse return error.ModuleNotFound;
+            var profiled_detect = try detect.runDetectProfileNode(
                 allocator,
                 tensor_allocator,
                 scratch,
                 model_graph,
                 weights_blob,
-                try modulePathForNode(&module_path_buffer, node.path),
+                module,
                 feature_ptrs,
                 detect_options,
             );

@@ -115,6 +115,20 @@ pub fn resolveDetectBranch(
     return null;
 }
 
+pub fn resolveDetectBranchNode(
+    module: *const graph.ModuleNode,
+    primary: []const u8,
+    fallback: []const u8,
+) ?*const graph.ModuleNode {
+    for (module.children) |*child| {
+        if (isDirectChildNamed(module.path, child.path, primary)) return child;
+    }
+    for (module.children) |*child| {
+        if (isDirectChildNamed(module.path, child.path, fallback)) return child;
+    }
+    return null;
+}
+
 pub fn matchesDetectCv2Branch(node: *const graph.ModuleNode) bool {
     return std.mem.eql(u8, node.kind, "Sequential") and
         node.children.len == 3 and
@@ -136,4 +150,15 @@ pub fn matchesDetectCv3Branch(node: *const graph.ModuleNode) bool {
         matchesDetectCv3Stage(&node.children[0]) and
         matchesDetectCv3Stage(&node.children[1]) and
         std.mem.eql(u8, node.children[2].kind, "Conv2d");
+}
+
+fn isDirectChildNamed(
+    parent_path: []const u8,
+    child_path: []const u8,
+    name: []const u8,
+) bool {
+    if (child_path.len != parent_path.len + 1 + name.len) return false;
+    if (!std.mem.startsWith(u8, child_path, parent_path)) return false;
+    if (child_path[parent_path.len] != '.') return false;
+    return std.mem.eql(u8, child_path[parent_path.len + 1 ..], name);
 }

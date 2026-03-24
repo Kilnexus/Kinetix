@@ -37,6 +37,28 @@ pub fn runDetect(
     );
 }
 
+pub fn runDetectNode(
+    output_allocator: std.mem.Allocator,
+    tensor_allocator: std.mem.Allocator,
+    scratch_allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+    feature_inputs: []const *const Tensor,
+    options: DetectOptions,
+) !DetectOutput {
+    return pipeline.runDetectNode(
+        output_allocator,
+        tensor_allocator,
+        scratch_allocator,
+        model_graph,
+        weights_blob,
+        module,
+        feature_inputs,
+        options,
+    );
+}
+
 pub fn runDetectProfile(
     output_allocator: std.mem.Allocator,
     tensor_allocator: std.mem.Allocator,
@@ -54,6 +76,28 @@ pub fn runDetectProfile(
         model_graph,
         weights_blob,
         module_path,
+        feature_inputs,
+        options,
+    );
+}
+
+pub fn runDetectProfileNode(
+    output_allocator: std.mem.Allocator,
+    tensor_allocator: std.mem.Allocator,
+    scratch_allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+    feature_inputs: []const *const Tensor,
+    options: DetectOptions,
+) !ProfiledDetectOutput {
+    return pipeline.runDetectProfileNode(
+        output_allocator,
+        tensor_allocator,
+        scratch_allocator,
+        model_graph,
+        weights_blob,
+        module,
         feature_inputs,
         options,
     );
