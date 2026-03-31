@@ -16,7 +16,16 @@ const DetectProfile = detect_types.DetectProfile;
 const DetectBranchProfile = detect_types.DetectBranchProfile;
 const ProfiledDetectOutput = detect_types.ProfiledDetectOutput;
 const BranchPlan = detect_types.BranchPlan;
+const CachedDetectPlan = detect_types.CachedDetectPlan;
 const max_detect_branch_levels = detect_types.max_detect_branch_levels;
+
+const DetectCacheKey = struct {
+    module_ptr: usize,
+    weights_ptr: usize,
+};
+
+var detect_plan_cache_mutex: std.Thread.Mutex = .{};
+var detect_plan_cache: std.AutoHashMapUnmanaged(DetectCacheKey, CachedDetectPlan) = .empty;
 
 pub fn runDetect(
     output_allocator: std.mem.Allocator,
@@ -100,39 +109,24 @@ pub fn runDetectProfileNode(
 ) !ProfiledDetectOutput {
     if (!std.mem.eql(u8, module.kind, "Detect")) return error.InvalidModuleKind;
 
-    const nl = module.cached_attrs.nl orelse @as(usize, @intCast(
-        (module.getAttr("nl") orelse return error.MissingAttribute).asInteger() orelse return error.InvalidAttributeType,
-    ));
-    const nc = module.cached_attrs.nc orelse @as(usize, @intCast(
-        (module.getAttr("nc") orelse return error.MissingAttribute).asInteger() orelse return error.InvalidAttributeType,
-    ));
-    const reg_max = module.cached_attrs.reg_max orelse @as(usize, @intCast(
-        (module.getAttr("reg_max") orelse return error.MissingAttribute).asInteger() orelse return error.InvalidAttributeType,
-    ));
+    const cached = try getCachedDetectPlan(model_graph, weights_blob, module);
+    const nl = cached.nl;
+    const nc = cached.nc;
+    const reg_max = cached.reg_max;
 
     if (feature_inputs.len != nl or model_graph.strides.len != nl) return error.InvalidAttributeType;
     if (nl > max_detect_branch_levels) return error.InvalidAttributeType;
-
-    const reg_branch = plan.resolveDetectBranchNode(module, "cv2", "one2one_cv2") orelse return error.ModuleNotFound;
-    const cls_branch = plan.resolveDetectBranchNode(module, "cv3", "one2one_cv3") orelse return error.ModuleNotFound;
-    var reg_plan_storage: [max_detect_branch_levels]BranchPlan = undefined;
-    var cls_plan_storage: [max_detect_branch_levels]BranchPlan = undefined;
-    const reg_plans = reg_plan_storage[0..nl];
-    const cls_plans = cls_plan_storage[0..nl];
-    try plan.buildDetectBranchPlans(reg_plans, model_graph, weights_blob, reg_branch);
-    try plan.buildDetectBranchPlans(cls_plans, model_graph, weights_blob, cls_branch);
-    const dfl_weights = if (reg_max > 1) blk: {
-        const dfl_module = plan.resolveDetectBranchNode(module, "dfl", "dfl") orelse return error.ModuleNotFound;
-        const dfl_conv = plan.resolveDetectBranchNode(dfl_module, "conv", "conv") orelse return error.ModuleNotFound;
-        const dfl_spec = try spec.resolveConvSpecNode(model_graph, dfl_conv);
-        break :blk weights_blob.slice(dfl_spec.weight);
-    } else null;
     const score_logit_threshold = postprocess.sigmoidThresholdToLogit(options.score_threshold);
     var profile = DetectProfile{};
     profile.level_count = nl;
+    const reg_plans = cached.reg_plans[0..nl];
+    const cls_plans = cached.cls_plans[0..nl];
+    const dfl_weights = cached.dfl_weights;
 
-    var candidates: std.ArrayListUnmanaged(Detection) = .empty;
-    errdefer candidates.deinit(scratch_allocator);
+    const max_candidates = maxCandidateCount(feature_inputs);
+    const candidates = try scratch_allocator.alloc(Detection, max_candidates);
+    defer scratch_allocator.free(candidates);
+    var candidate_count: usize = 0;
 
     for (feature_inputs, 0..) |feature, level| {
         var reg_profile = DetectBranchProfile{};
@@ -163,15 +157,8 @@ pub fn runDetectProfileNode(
             for (0..reg.shape[2]) |y| {
                 for (0..reg.shape[3]) |x| {
                     const spatial_index = y * reg.shape[3] + x;
-                    var best_logit: f32 = -std.math.inf(f32);
-                    var best_class: usize = 0;
-                    for (0..nc) |class_idx| {
-                        const logit = cls.data[cls_batch_base + class_idx * cls_plane + spatial_index];
-                        if (logit > best_logit) {
-                            best_logit = logit;
-                            best_class = class_idx;
-                        }
-                    }
+                    const best = bestClassForSpatial(cls.data, cls_batch_base, cls_plane, nc, spatial_index);
+                    const best_logit = best.logit;
                     if (best_logit < score_logit_threshold) continue;
                     const best_score = postprocess.sigmoid(best_logit);
 
@@ -183,14 +170,15 @@ pub fn runDetectProfileNode(
                     const right = postprocess.dflExpectation(&reg, dfl_weights, reg_max, reg_batch_base, reg_plane, spatial_index, 2);
                     const bottom = postprocess.dflExpectation(&reg, dfl_weights, reg_max, reg_batch_base, reg_plane, spatial_index, 3);
 
-                    try candidates.append(scratch_allocator, .{
+                    candidates[candidate_count] = .{
                         .x1 = anchor_x - left * stride,
                         .y1 = anchor_y - top * stride,
                         .x2 = anchor_x + right * stride,
                         .y2 = anchor_y + bottom * stride,
                         .score = best_score,
-                        .class_id = best_class,
-                    });
+                        .class_id = best.class_id,
+                    };
+                    candidate_count += 1;
                 }
             }
         }
@@ -198,12 +186,10 @@ pub fn runDetectProfileNode(
         profile.decode_ns += profile.levels[level].decode_ns;
     }
 
-    const candidate_count = candidates.items.len;
     profile.candidate_count = candidate_count;
     var nms_timer = try std.time.Timer.start();
-    const selected = try postprocess.nms(scratch_allocator, output_allocator, candidates.items, options);
+    const selected = try postprocess.nms(scratch_allocator, output_allocator, candidates[0..candidate_count], options);
     profile.nms_ns = nms_timer.read();
-    candidates.deinit(scratch_allocator);
     profile.kept_count = selected.len;
 
     return .{
@@ -214,4 +200,119 @@ pub fn runDetectProfileNode(
         },
         .profile = profile,
     };
+}
+
+fn getCachedDetectPlan(
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+) !CachedDetectPlan {
+    const key = DetectCacheKey{
+        .module_ptr = @intFromPtr(module),
+        .weights_ptr = @intFromPtr(weights_blob.data.ptr),
+    };
+
+    detect_plan_cache_mutex.lock();
+    defer detect_plan_cache_mutex.unlock();
+
+    if (detect_plan_cache.get(key)) |cached| return cached;
+
+    const cached = try buildCachedDetectPlan(model_graph, weights_blob, module);
+    try detect_plan_cache.put(std.heap.page_allocator, key, cached);
+    return cached;
+}
+
+fn buildCachedDetectPlan(
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+) !CachedDetectPlan {
+    const nl = module.cached_attrs.nl orelse @as(usize, @intCast(
+        (module.getAttr("nl") orelse return error.MissingAttribute).asInteger() orelse return error.InvalidAttributeType,
+    ));
+    const nc = module.cached_attrs.nc orelse @as(usize, @intCast(
+        (module.getAttr("nc") orelse return error.MissingAttribute).asInteger() orelse return error.InvalidAttributeType,
+    ));
+    const reg_max = module.cached_attrs.reg_max orelse @as(usize, @intCast(
+        (module.getAttr("reg_max") orelse return error.MissingAttribute).asInteger() orelse return error.InvalidAttributeType,
+    ));
+    if (nl > max_detect_branch_levels) return error.InvalidAttributeType;
+
+    const reg_branch = plan.resolveDetectBranchNode(module, "cv2", "one2one_cv2") orelse return error.ModuleNotFound;
+    const cls_branch = plan.resolveDetectBranchNode(module, "cv3", "one2one_cv3") orelse return error.ModuleNotFound;
+    var cached = CachedDetectPlan{
+        .nl = nl,
+        .nc = nc,
+        .reg_max = reg_max,
+        .dfl_weights = null,
+        .reg_plans = undefined,
+        .cls_plans = undefined,
+    };
+    try plan.buildDetectBranchPlans(cached.reg_plans[0..nl], model_graph, weights_blob, reg_branch);
+    try plan.buildDetectBranchPlans(cached.cls_plans[0..nl], model_graph, weights_blob, cls_branch);
+    if (reg_max > 1) {
+        const dfl_module = plan.resolveDetectBranchNode(module, "dfl", "dfl") orelse return error.ModuleNotFound;
+        const dfl_conv = plan.resolveDetectBranchNode(dfl_module, "conv", "conv") orelse return error.ModuleNotFound;
+        const dfl_spec = try spec.resolveConvSpecNode(model_graph, dfl_conv);
+        cached.dfl_weights = weights_blob.slice(dfl_spec.weight);
+    }
+    return cached;
+}
+
+fn maxCandidateCount(feature_inputs: []const *const Tensor) usize {
+    var total: usize = 0;
+    for (feature_inputs) |feature| {
+        total += feature.shape[0] * feature.shape[2] * feature.shape[3];
+    }
+    return total;
+}
+
+const BestClass = struct {
+    logit: f32,
+    class_id: usize,
+};
+
+fn bestClassForSpatial(
+    cls_data: []const f32,
+    cls_batch_base: usize,
+    cls_plane: usize,
+    nc: usize,
+    spatial_index: usize,
+) BestClass {
+    var best_logit: f32 = -std.math.inf(f32);
+    var best_class: usize = 0;
+    var class_idx: usize = 0;
+
+    while (class_idx + 3 < nc) : (class_idx += 4) {
+        const logit0 = cls_data[cls_batch_base + class_idx * cls_plane + spatial_index];
+        if (logit0 > best_logit) {
+            best_logit = logit0;
+            best_class = class_idx;
+        }
+        const logit1 = cls_data[cls_batch_base + (class_idx + 1) * cls_plane + spatial_index];
+        if (logit1 > best_logit) {
+            best_logit = logit1;
+            best_class = class_idx + 1;
+        }
+        const logit2 = cls_data[cls_batch_base + (class_idx + 2) * cls_plane + spatial_index];
+        if (logit2 > best_logit) {
+            best_logit = logit2;
+            best_class = class_idx + 2;
+        }
+        const logit3 = cls_data[cls_batch_base + (class_idx + 3) * cls_plane + spatial_index];
+        if (logit3 > best_logit) {
+            best_logit = logit3;
+            best_class = class_idx + 3;
+        }
+    }
+
+    while (class_idx < nc) : (class_idx += 1) {
+        const logit = cls_data[cls_batch_base + class_idx * cls_plane + spatial_index];
+        if (logit > best_logit) {
+            best_logit = logit;
+            best_class = class_idx;
+        }
+    }
+
+    return .{ .logit = best_logit, .class_id = best_class };
 }

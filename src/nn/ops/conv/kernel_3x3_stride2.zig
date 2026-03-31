@@ -1,6 +1,7 @@
 const std = @import("std");
 const common = @import("common.zig");
 const tasks = @import("tasks.zig");
+const thread_pool = @import("../../thread_pool.zig");
 
 pub fn conv2d3x3Pad1Stride2Parallel(
     input: *const common.Tensor,
@@ -10,6 +11,33 @@ pub fn conv2d3x3Pad1Stride2Parallel(
     options: common.Conv2DOptions,
     thread_count: usize,
 ) common.OpError!void {
+    if (thread_pool.get()) |pool| {
+        const out_channels = weights.shape[0];
+        var wg: std.Thread.WaitGroup = .{};
+        for (0..thread_count) |thread_index| {
+            const oc_start = (out_channels * thread_index) / thread_count;
+            const oc_end = (out_channels * (thread_index + 1)) / thread_count;
+            if (oc_start == oc_end) continue;
+
+            const task = tasks.Conv2DTask{
+                .input = input,
+                .weights = weights,
+                .bias = bias,
+                .output = output,
+                .options = options,
+                .oc_start = oc_start,
+                .oc_end = oc_end,
+            };
+            if (thread_index + 1 == thread_count) {
+                conv2d3x3Pad1Stride2Worker(task);
+            } else {
+                pool.spawnWg(&wg, conv2d3x3Pad1Stride2Worker, .{task});
+            }
+        }
+        wg.wait();
+        return;
+    }
+
     var threads: [common.max_supported_conv_threads - 1]std.Thread = undefined;
     var spawned: usize = 0;
     const out_channels = weights.shape[0];

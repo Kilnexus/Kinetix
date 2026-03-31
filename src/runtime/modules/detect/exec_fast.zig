@@ -1,5 +1,6 @@
 const std = @import("std");
 const detect_types = @import("types.zig");
+const thread_pool = @import("../../thread_pool.zig");
 
 const Tensor = detect_types.Tensor;
 const ConvPlan = detect_types.ConvPlan;
@@ -98,6 +99,30 @@ fn runDetectFast3x3Conv64Batch1Parallel(
 ) !Tensor {
     var output = try Tensor.init(allocator, 1, 64, input.shape[2], input.shape[3]);
     errdefer output.deinit();
+
+    if (thread_pool.get()) |pool| {
+        var wg: std.Thread.WaitGroup = .{};
+        for (0..thread_count) |thread_index| {
+            const oc_start = (64 * thread_index) / thread_count;
+            const oc_end = (64 * (thread_index + 1)) / thread_count;
+            if (oc_start == oc_end) continue;
+
+            const task = DetectFastConvTask{
+                .input = input,
+                .plan = plan,
+                .output = &output,
+                .oc_start = oc_start,
+                .oc_end = oc_end,
+            };
+            if (thread_index + 1 == thread_count) {
+                runDetectFast3x3Conv64Batch1Worker(task);
+            } else {
+                pool.spawnWg(&wg, runDetectFast3x3Conv64Batch1Worker, .{task});
+            }
+        }
+        wg.wait();
+        return output;
+    }
 
     var threads: [max_detect_fast_threads - 1]std.Thread = undefined;
     var spawned: usize = 0;
@@ -394,6 +419,31 @@ fn runDetectFastDepthwise3x3Batch1Parallel(
 ) !Tensor {
     var output = try Tensor.init(allocator, 1, input.shape[1], input.shape[2], input.shape[3]);
     errdefer output.deinit();
+
+    if (thread_pool.get()) |pool| {
+        const channels = input.shape[1];
+        var wg: std.Thread.WaitGroup = .{};
+        for (0..thread_count) |thread_index| {
+            const c_start = (channels * thread_index) / thread_count;
+            const c_end = (channels * (thread_index + 1)) / thread_count;
+            if (c_start == c_end) continue;
+
+            const task = DetectFastDepthwiseTask{
+                .input = input,
+                .plan = plan,
+                .output = &output,
+                .channel_start = c_start,
+                .channel_end = c_end,
+            };
+            if (thread_index + 1 == thread_count) {
+                runDetectFastDepthwise3x3Batch1Worker(task);
+            } else {
+                pool.spawnWg(&wg, runDetectFastDepthwise3x3Batch1Worker, .{task});
+            }
+        }
+        wg.wait();
+        return output;
+    }
 
     var threads: [max_detect_fast_threads - 1]std.Thread = undefined;
     var spawned: usize = 0;

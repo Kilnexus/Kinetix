@@ -108,3 +108,12 @@ pub const BranchPlan = union(enum) {
     cv3: Cv3BranchPlan,
     generic: *const graph.ModuleNode,
 };
+
+pub const CachedDetectPlan = struct {
+    nl: usize,
+    nc: usize,
+    reg_max: usize,
+    dfl_weights: ?[]const f32,
+    reg_plans: [max_detect_branch_levels]BranchPlan,
+    cls_plans: [max_detect_branch_levels]BranchPlan,
+};
