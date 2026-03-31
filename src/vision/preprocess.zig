@@ -1,5 +1,5 @@
 const std = @import("std");
-const imaging = @import("imaging");
+const imaging = @import("pixio");
 const runtime = @import("runtime");
 const image = @import("image.zig");
 

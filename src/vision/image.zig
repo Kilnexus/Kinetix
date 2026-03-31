@@ -1,5 +1,5 @@
 const std = @import("std");
-const imaging = @import("imaging");
+const imaging = @import("pixio");
 pub const ImageError = anyerror;
 
 pub const ImageU8 = imaging.ImageU8;

@@ -26,8 +26,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     weights_mod.addImport("graph", graph_mod);
-    const imaging_mod = b.createModule(.{
-        .root_source_file = b.path("src/imaging/imaging.zig"),
+    const pixio_mod = b.createModule(.{
+        .root_source_file = b.path("../pixio/src/pixio.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -46,7 +46,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    vision_mod.addImport("imaging", imaging_mod);
+    vision_mod.addImport("pixio", pixio_mod);
     vision_mod.addImport("runtime", runtime_mod);
 
     const exe = b.addExecutable(.{
@@ -58,7 +58,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
     exe.root_module.addImport("graph", graph_mod);
-    exe.root_module.addImport("imaging", imaging_mod);
+    exe.root_module.addImport("pixio", pixio_mod);
+    exe.root_module.addImport("imaging", pixio_mod);
     exe.root_module.addImport("runtime", runtime_mod);
     exe.root_module.addImport("vision", vision_mod);
     exe.root_module.addImport("weights", weights_mod);
@@ -82,7 +83,8 @@ pub fn build(b: *std.Build) void {
     unit_tests.root_module.addImport("tensor", tensor_mod);
     unit_tests.root_module.addImport("ops", ops_mod);
     unit_tests.root_module.addImport("weights", weights_mod);
-    unit_tests.root_module.addImport("imaging", imaging_mod);
+    unit_tests.root_module.addImport("pixio", pixio_mod);
+    unit_tests.root_module.addImport("imaging", pixio_mod);
     unit_tests.root_module.addImport("runtime", runtime_mod);
     unit_tests.root_module.addImport("vision", vision_mod);
 
