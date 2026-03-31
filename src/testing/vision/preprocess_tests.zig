@@ -1,5 +1,5 @@
 const std = @import("std");
-const imaging = @import("imaging");
+const imaging = @import("Pixio");
 const runtime = @import("runtime");
 const preprocess = @import("vision");
 

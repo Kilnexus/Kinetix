@@ -1,5 +1,5 @@
 const std = @import("std");
-const imaging = @import("imaging");
+const imaging = @import("Pixio");
 const helpers = @import("helpers.zig");
 
 test "decodeVp8lSingleGroupArgbAtBitPos decodes literal-only pixels" {

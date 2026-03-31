@@ -1,5 +1,5 @@
 const std = @import("std");
-const imaging = @import("imaging");
+const imaging = @import("Pixio");
 const helpers = @import("helpers.zig");
 
 const writeBit = helpers.writeBit;

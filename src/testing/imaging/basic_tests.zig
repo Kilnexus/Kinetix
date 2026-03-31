@@ -1,5 +1,5 @@
 const std = @import("std");
-const imaging = @import("imaging");
+const imaging = @import("Pixio");
 
 test "resizeBilinear preserves shape metadata" {
     const testing = std.testing;
