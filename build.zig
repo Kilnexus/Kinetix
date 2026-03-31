@@ -30,7 +30,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    const pixio_mod = pixio_dep.module("pixio");
+    const pixio_mod = pixio_dep.module("Pixio");
 
     const runtime_mod = b.createModule(.{
         .root_source_file = b.path("src/runtime/runtime.zig"),
