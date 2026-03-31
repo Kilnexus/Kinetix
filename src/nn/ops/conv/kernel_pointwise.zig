@@ -20,8 +20,52 @@ const PackedPointwiseWeights = struct {
 
 var pointwise_pack_cache_mutex: std.Thread.Mutex = .{};
 var pointwise_pack_cache: std.AutoHashMapUnmanaged(PointwisePackKey, PackedPointwiseWeights) = .{};
-threadlocal var pointwise_pack_tl_key: ?PointwisePackKey = null;
-threadlocal var pointwise_pack_tl_value: ?PackedPointwiseWeights = null;
+const pointwise_pack_tl_capacity = 16;
+threadlocal var pointwise_pack_tl_len: usize = 0;
+threadlocal var pointwise_pack_tl_next: usize = 0;
+threadlocal var pointwise_pack_tl_keys: [pointwise_pack_tl_capacity]PointwisePackKey = undefined;
+threadlocal var pointwise_pack_tl_values: [pointwise_pack_tl_capacity]PackedPointwiseWeights = undefined;
+
+fn pointwisePackKeyEqual(lhs: PointwisePackKey, rhs: PointwisePackKey) bool {
+    return lhs.ptr == rhs.ptr and
+        lhs.out_channels == rhs.out_channels and
+        lhs.in_per_group == rhs.in_per_group and
+        lhs.groups == rhs.groups;
+}
+
+fn getThreadLocalPackedPointwiseWeights(key: PointwisePackKey) ?PackedPointwiseWeights {
+    for (0..pointwise_pack_tl_len) |index| {
+        if (pointwisePackKeyEqual(pointwise_pack_tl_keys[index], key)) {
+            return pointwise_pack_tl_values[index];
+        }
+    }
+    return null;
+}
+
+fn putThreadLocalPackedPointwiseWeights(
+    key: PointwisePackKey,
+    pack_weights: PackedPointwiseWeights,
+) void {
+    for (0..pointwise_pack_tl_len) |index| {
+        if (pointwisePackKeyEqual(pointwise_pack_tl_keys[index], key)) {
+            pointwise_pack_tl_values[index] = pack_weights;
+            return;
+        }
+    }
+
+    if (pointwise_pack_tl_len < pointwise_pack_tl_capacity) {
+        const index = pointwise_pack_tl_len;
+        pointwise_pack_tl_keys[index] = key;
+        pointwise_pack_tl_values[index] = pack_weights;
+        pointwise_pack_tl_len += 1;
+        return;
+    }
+
+    const replace_index = pointwise_pack_tl_next;
+    pointwise_pack_tl_keys[replace_index] = key;
+    pointwise_pack_tl_values[replace_index] = pack_weights;
+    pointwise_pack_tl_next = (pointwise_pack_tl_next + 1) % pointwise_pack_tl_capacity;
+}
 
 fn getPackedPointwiseWeights(
     weights: *const common.Tensor,
@@ -40,22 +84,13 @@ fn getPackedPointwiseWeights(
         .groups = groups,
     };
 
-    if (pointwise_pack_tl_key) |tl_key| {
-        if (tl_key.ptr == key.ptr and
-            tl_key.out_channels == key.out_channels and
-            tl_key.in_per_group == key.in_per_group and
-            tl_key.groups == key.groups)
-        {
-            return pointwise_pack_tl_value;
-        }
-    }
+    if (getThreadLocalPackedPointwiseWeights(key)) |cached| return cached;
 
     pointwise_pack_cache_mutex.lock();
     defer pointwise_pack_cache_mutex.unlock();
 
     if (pointwise_pack_cache.get(key)) |cached| {
-        pointwise_pack_tl_key = key;
-        pointwise_pack_tl_value = cached;
+        putThreadLocalPackedPointwiseWeights(key, cached);
         return cached;
     }
 
@@ -65,8 +100,7 @@ fn getPackedPointwiseWeights(
         return null;
     };
     const cached = pointwise_pack_cache.get(key).?;
-    pointwise_pack_tl_key = key;
-    pointwise_pack_tl_value = cached;
+    putThreadLocalPackedPointwiseWeights(key, cached);
     return cached;
 }
 
