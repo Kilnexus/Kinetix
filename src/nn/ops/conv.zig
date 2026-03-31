@@ -55,6 +55,16 @@ pub fn conv2d(
     return kernel_general.conv2dGeneralRange(input, weights, bias, output, options, 0, out_channels);
 }
 
+pub fn conv2dPointwiseConcat(
+    inputs: []const *const Tensor,
+    weights: *const Tensor,
+    bias: ?[]const f32,
+    output: *Tensor,
+    apply_silu: bool,
+) OpError!void {
+    return kernel_pointwise.conv2dPointwiseConcat(inputs, weights, bias, output, apply_silu);
+}
+
 test "conv2d 1x1 sums channels" {
     const testing = std.testing;
 
@@ -131,5 +141,42 @@ test "conv2d 3x3 stride2 fast path matches general path" {
 
     for (fast.data, general.data) |actual, expected| {
         try testing.expectApproxEqAbs(expected, actual, 1e-5);
+    }
+}
+
+test "pointwise concat fast path matches materialized concat" {
+    const testing = std.testing;
+
+    var lhs = try Tensor.init(testing.allocator, 1, 2, 2, 2);
+    defer lhs.deinit();
+    for (lhs.data, 0..) |*value, index| value.* = @as(f32, @floatFromInt(index + 1)) * 0.25;
+
+    var rhs = try Tensor.init(testing.allocator, 1, 3, 2, 2);
+    defer rhs.deinit();
+    for (rhs.data, 0..) |*value, index| value.* = (@as(f32, @floatFromInt(index + 2)) - 3.0) * 0.2;
+
+    var weights = try Tensor.init(testing.allocator, 4, 5, 1, 1);
+    defer weights.deinit();
+    for (weights.data, 0..) |*value, index| {
+        value.* = (@as(f32, @floatFromInt((index % 7) + 1)) - 4.0) * 0.1;
+    }
+
+    const bias_values = [_]f32{ 0.1, -0.2, 0.3, -0.4 };
+
+    var materialized = try Tensor.init(testing.allocator, 1, 5, 2, 2);
+    defer materialized.deinit();
+    const inputs = [_]*const Tensor{ &lhs, &rhs };
+    try @import("layout.zig").concatChannels(&inputs, &materialized);
+
+    var expected = try Tensor.init(testing.allocator, 1, 4, 2, 2);
+    defer expected.deinit();
+    try conv2d(&materialized, &weights, &bias_values, &expected, .{});
+
+    var actual = try Tensor.init(testing.allocator, 1, 4, 2, 2);
+    defer actual.deinit();
+    try conv2dPointwiseConcat(&inputs, &weights, &bias_values, &actual, false);
+
+    for (actual.data, expected.data) |lhs_value, rhs_value| {
+        try testing.expectApproxEqAbs(rhs_value, lhs_value, 1e-6);
     }
 }

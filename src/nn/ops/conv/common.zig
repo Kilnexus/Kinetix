@@ -14,8 +14,16 @@ pub inline fn siluValue(x: f32) f32 {
     return x / (1.0 + @exp(-x));
 }
 
+pub inline fn siluVector(x: F32xN) F32xN {
+    return x / (@as(F32xN, @splat(1.0)) + @exp(-x));
+}
+
 pub inline fn maybeApplySilu(x: f32, apply_silu: bool) f32 {
     return if (apply_silu) siluValue(x) else x;
+}
+
+pub inline fn maybeApplySiluVector(x: F32xN, apply_silu: bool) F32xN {
+    return if (apply_silu) siluVector(x) else x;
 }
 
 pub inline fn loadF32xN(slice: []const f32, index: usize) F32xN {

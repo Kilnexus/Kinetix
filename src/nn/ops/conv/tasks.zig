@@ -20,3 +20,14 @@ pub const Conv2DPointwiseTask = struct {
     oc_end: usize,
     apply_silu: bool,
 };
+
+pub const Conv2DPointwiseConcatTask = struct {
+    inputs: []const *const common.Tensor,
+    input_channel_offsets: []const usize,
+    weights: *const common.Tensor,
+    bias: ?[]const f32,
+    output: *common.Tensor,
+    oc_start: usize,
+    oc_end: usize,
+    apply_silu: bool,
+};

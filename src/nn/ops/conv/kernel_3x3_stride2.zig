@@ -63,6 +63,7 @@ pub fn conv2d3x3Pad1Stride2Range(
     const output_plane = expected_h * expected_w;
     const interior_h_end = @min(expected_h, in_height / 2);
     const interior_w_end = @min(expected_w, in_width / 2);
+    const can_vectorize_width = interior_w_end > common.simd_lane_count;
 
     for (0..batch) |n| {
         const input_batch_base = n * in_channels * input_plane;
@@ -79,54 +80,96 @@ pub fn conv2d3x3Pad1Stride2Range(
             for (0..expected_h) |oy| {
                 const output0_row_base = output0_channel_base + oy * expected_w;
                 const output1_row_base = output1_channel_base + oy * expected_w;
-                if (oy == 0 or oy >= interior_h_end) {
+                const interior_row = oy > 0 and oy < interior_h_end;
+
+                if (!interior_row or !can_vectorize_width) {
                     for (0..expected_w) |ox| {
-                        output.data[output0_row_base + ox] = common.maybeApplySilu(conv2d3x3Pad1Stride2Point(input, weights, bias0, input_batch_base, weights0_channel_base, oy, ox), options.apply_silu);
-                        output.data[output1_row_base + ox] = common.maybeApplySilu(conv2d3x3Pad1Stride2Point(input, weights, bias1, input_batch_base, weights1_channel_base, oy, ox), options.apply_silu);
+                        const point = conv2d3x3Pad1Stride2PointPair(
+                            input,
+                            weights,
+                            input_batch_base,
+                            weights0_channel_base,
+                            weights1_channel_base,
+                            oy,
+                            ox,
+                            bias0,
+                            bias1,
+                        );
+                        output.data[output0_row_base + ox] = common.maybeApplySilu(point[0], options.apply_silu);
+                        output.data[output1_row_base + ox] = common.maybeApplySilu(point[1], options.apply_silu);
                     }
                     continue;
                 }
 
-                output.data[output0_row_base] = common.maybeApplySilu(conv2d3x3Pad1Stride2Point(input, weights, bias0, input_batch_base, weights0_channel_base, oy, 0), options.apply_silu);
-                output.data[output1_row_base] = common.maybeApplySilu(conv2d3x3Pad1Stride2Point(input, weights, bias1, input_batch_base, weights1_channel_base, oy, 0), options.apply_silu);
+                const first = conv2d3x3Pad1Stride2PointPair(
+                    input,
+                    weights,
+                    input_batch_base,
+                    weights0_channel_base,
+                    weights1_channel_base,
+                    oy,
+                    0,
+                    bias0,
+                    bias1,
+                );
+                output.data[output0_row_base] = common.maybeApplySilu(first[0], options.apply_silu);
+                output.data[output1_row_base] = common.maybeApplySilu(first[1], options.apply_silu);
 
-                for (1..interior_w_end) |ox| {
-                    const output0_index = output0_row_base + ox;
-                    const output1_index = output1_row_base + ox;
-                    var acc0: f32 = bias0;
-                    var acc1: f32 = bias1;
-                    const row0 = (oy * 2 - 1) * in_width + (ox * 2 - 1);
-                    const row1 = row0 + in_width;
-                    const row2 = row1 + in_width;
-
-                    for (0..in_channels) |ic| {
-                        const input_channel = input.data[input_batch_base + ic * input_plane ..][0..input_plane];
-                        const weight0_base = weights0_channel_base + ic * 9;
-                        const weight1_base = weights1_channel_base + ic * 9;
-                        const v00 = input_channel[row0];
-                        const v01 = input_channel[row0 + 1];
-                        const v02 = input_channel[row0 + 2];
-                        const v10 = input_channel[row1];
-                        const v11 = input_channel[row1 + 1];
-                        const v12 = input_channel[row1 + 2];
-                        const v20 = input_channel[row2];
-                        const v21 = input_channel[row2 + 1];
-                        const v22 = input_channel[row2 + 2];
-                        const src8: common.F32xN = .{ v00, v01, v02, v10, v11, v12, v20, v21 };
-
-                        acc0 += common.dotF32xN(src8, common.loadF32xN(weights.data, weight0_base));
-                        acc0 += v22 * weights.data[weight0_base + 8];
-                        acc1 += common.dotF32xN(src8, common.loadF32xN(weights.data, weight1_base));
-                        acc1 += v22 * weights.data[weight1_base + 8];
-                    }
-
-                    output.data[output0_index] = common.maybeApplySilu(acc0, options.apply_silu);
-                    output.data[output1_index] = common.maybeApplySilu(acc1, options.apply_silu);
+                var ox: usize = 1;
+                while (ox + common.simd_lane_count <= interior_w_end) : (ox += common.simd_lane_count) {
+                    const acc = conv2d3x3Pad1Stride2InteriorVecPair(
+                        input,
+                        weights,
+                        input_batch_base,
+                        weights0_channel_base,
+                        weights1_channel_base,
+                        oy,
+                        ox,
+                        bias0,
+                        bias1,
+                    );
+                    common.storeF32xN(
+                        output.data[output0_row_base..][0..expected_w],
+                        ox,
+                        common.maybeApplySiluVector(acc[0], options.apply_silu),
+                    );
+                    common.storeF32xN(
+                        output.data[output1_row_base..][0..expected_w],
+                        ox,
+                        common.maybeApplySiluVector(acc[1], options.apply_silu),
+                    );
                 }
 
-                for (interior_w_end..expected_w) |ox| {
-                    output.data[output0_row_base + ox] = common.maybeApplySilu(conv2d3x3Pad1Stride2Point(input, weights, bias0, input_batch_base, weights0_channel_base, oy, ox), options.apply_silu);
-                    output.data[output1_row_base + ox] = common.maybeApplySilu(conv2d3x3Pad1Stride2Point(input, weights, bias1, input_batch_base, weights1_channel_base, oy, ox), options.apply_silu);
+                while (ox < interior_w_end) : (ox += 1) {
+                    const point = conv2d3x3Pad1Stride2PointPair(
+                        input,
+                        weights,
+                        input_batch_base,
+                        weights0_channel_base,
+                        weights1_channel_base,
+                        oy,
+                        ox,
+                        bias0,
+                        bias1,
+                    );
+                    output.data[output0_row_base + ox] = common.maybeApplySilu(point[0], options.apply_silu);
+                    output.data[output1_row_base + ox] = common.maybeApplySilu(point[1], options.apply_silu);
+                }
+
+                for (interior_w_end..expected_w) |tail_ox| {
+                    const point = conv2d3x3Pad1Stride2PointPair(
+                        input,
+                        weights,
+                        input_batch_base,
+                        weights0_channel_base,
+                        weights1_channel_base,
+                        oy,
+                        tail_ox,
+                        bias0,
+                        bias1,
+                    );
+                    output.data[output0_row_base + tail_ox] = common.maybeApplySilu(point[0], options.apply_silu);
+                    output.data[output1_row_base + tail_ox] = common.maybeApplySilu(point[1], options.apply_silu);
                 }
             }
         }
@@ -138,48 +181,213 @@ pub fn conv2d3x3Pad1Stride2Range(
 
             for (0..expected_h) |oy| {
                 const output_row_base = output_channel_base + oy * expected_w;
-                if (oy == 0 or oy >= interior_h_end) {
+                const interior_row = oy > 0 and oy < interior_h_end;
+
+                if (!interior_row or !can_vectorize_width) {
                     for (0..expected_w) |ox| {
-                        output.data[output_row_base + ox] = common.maybeApplySilu(conv2d3x3Pad1Stride2Point(input, weights, bias_value, input_batch_base, weights_channel_base, oy, ox), options.apply_silu);
+                        output.data[output_row_base + ox] = common.maybeApplySilu(
+                            conv2d3x3Pad1Stride2Point(
+                                input,
+                                weights,
+                                bias_value,
+                                input_batch_base,
+                                weights_channel_base,
+                                oy,
+                                ox,
+                            ),
+                            options.apply_silu,
+                        );
                     }
                     continue;
                 }
 
-                output.data[output_row_base] = common.maybeApplySilu(conv2d3x3Pad1Stride2Point(input, weights, bias_value, input_batch_base, weights_channel_base, oy, 0), options.apply_silu);
+                output.data[output_row_base] = common.maybeApplySilu(
+                    conv2d3x3Pad1Stride2Point(
+                        input,
+                        weights,
+                        bias_value,
+                        input_batch_base,
+                        weights_channel_base,
+                        oy,
+                        0,
+                    ),
+                    options.apply_silu,
+                );
 
-                for (1..interior_w_end) |ox| {
-                    const output_index = output_row_base + ox;
-                    var acc: f32 = bias_value;
-                    const row0 = (oy * 2 - 1) * in_width + (ox * 2 - 1);
-                    const row1 = row0 + in_width;
-                    const row2 = row1 + in_width;
-
-                    for (0..in_channels) |ic| {
-                        const input_channel = input.data[input_batch_base + ic * input_plane ..][0..input_plane];
-                        const weight_base = weights_channel_base + ic * 9;
-                        const v00 = input_channel[row0];
-                        const v01 = input_channel[row0 + 1];
-                        const v02 = input_channel[row0 + 2];
-                        const v10 = input_channel[row1];
-                        const v11 = input_channel[row1 + 1];
-                        const v12 = input_channel[row1 + 2];
-                        const v20 = input_channel[row2];
-                        const v21 = input_channel[row2 + 1];
-                        const v22 = input_channel[row2 + 2];
-                        const src8: common.F32xN = .{ v00, v01, v02, v10, v11, v12, v20, v21 };
-                        acc += common.dotF32xN(src8, common.loadF32xN(weights.data, weight_base));
-                        acc += v22 * weights.data[weight_base + 8];
-                    }
-
-                    output.data[output_index] = common.maybeApplySilu(acc, options.apply_silu);
+                var ox: usize = 1;
+                while (ox + common.simd_lane_count <= interior_w_end) : (ox += common.simd_lane_count) {
+                    const acc = conv2d3x3Pad1Stride2InteriorVec(
+                        input,
+                        weights,
+                        input_batch_base,
+                        weights_channel_base,
+                        oy,
+                        ox,
+                        bias_value,
+                    );
+                    common.storeF32xN(
+                        output.data[output_row_base..][0..expected_w],
+                        ox,
+                        common.maybeApplySiluVector(acc, options.apply_silu),
+                    );
                 }
 
-                for (interior_w_end..expected_w) |ox| {
-                    output.data[output_row_base + ox] = common.maybeApplySilu(conv2d3x3Pad1Stride2Point(input, weights, bias_value, input_batch_base, weights_channel_base, oy, ox), options.apply_silu);
+                while (ox < interior_w_end) : (ox += 1) {
+                    output.data[output_row_base + ox] = common.maybeApplySilu(
+                        conv2d3x3Pad1Stride2Point(
+                            input,
+                            weights,
+                            bias_value,
+                            input_batch_base,
+                            weights_channel_base,
+                            oy,
+                            ox,
+                        ),
+                        options.apply_silu,
+                    );
+                }
+
+                for (interior_w_end..expected_w) |tail_ox| {
+                    output.data[output_row_base + tail_ox] = common.maybeApplySilu(
+                        conv2d3x3Pad1Stride2Point(
+                            input,
+                            weights,
+                            bias_value,
+                            input_batch_base,
+                            weights_channel_base,
+                            oy,
+                            tail_ox,
+                        ),
+                        options.apply_silu,
+                    );
                 }
             }
         }
     }
+}
+
+inline fn conv2d3x3Pad1Stride2InteriorVecPair(
+    input: *const common.Tensor,
+    weights: *const common.Tensor,
+    input_batch_base: usize,
+    weights0_channel_base: usize,
+    weights1_channel_base: usize,
+    oy: usize,
+    ox: usize,
+    bias0: f32,
+    bias1: f32,
+) [2]common.F32xN {
+    const in_channels = input.shape[1];
+    const in_width = input.shape[3];
+    const input_plane = input.shape[2] * input.shape[3];
+    const row0 = (oy * 2 - 1) * in_width + (ox * 2 - 1);
+    const row1 = row0 + in_width;
+    const row2 = row1 + in_width;
+
+    var acc0 = @as(common.F32xN, @splat(bias0));
+    var acc1 = @as(common.F32xN, @splat(bias1));
+
+    for (0..in_channels) |ic| {
+        const input_channel = input.data[input_batch_base + ic * input_plane ..][0..input_plane];
+        const weight0_base = weights0_channel_base + ic * 9;
+        const weight1_base = weights1_channel_base + ic * 9;
+        const r00 = loadStride2F32xN(input_channel, row0);
+        const r01 = loadStride2F32xN(input_channel, row0 + 1);
+        const r02 = loadStride2F32xN(input_channel, row0 + 2);
+        const r10 = loadStride2F32xN(input_channel, row1);
+        const r11 = loadStride2F32xN(input_channel, row1 + 1);
+        const r12 = loadStride2F32xN(input_channel, row1 + 2);
+        const r20 = loadStride2F32xN(input_channel, row2);
+        const r21 = loadStride2F32xN(input_channel, row2 + 1);
+        const r22 = loadStride2F32xN(input_channel, row2 + 2);
+
+        acc0 += r00 * @as(common.F32xN, @splat(weights.data[weight0_base + 0]));
+        acc0 += r01 * @as(common.F32xN, @splat(weights.data[weight0_base + 1]));
+        acc0 += r02 * @as(common.F32xN, @splat(weights.data[weight0_base + 2]));
+        acc0 += r10 * @as(common.F32xN, @splat(weights.data[weight0_base + 3]));
+        acc0 += r11 * @as(common.F32xN, @splat(weights.data[weight0_base + 4]));
+        acc0 += r12 * @as(common.F32xN, @splat(weights.data[weight0_base + 5]));
+        acc0 += r20 * @as(common.F32xN, @splat(weights.data[weight0_base + 6]));
+        acc0 += r21 * @as(common.F32xN, @splat(weights.data[weight0_base + 7]));
+        acc0 += r22 * @as(common.F32xN, @splat(weights.data[weight0_base + 8]));
+
+        acc1 += r00 * @as(common.F32xN, @splat(weights.data[weight1_base + 0]));
+        acc1 += r01 * @as(common.F32xN, @splat(weights.data[weight1_base + 1]));
+        acc1 += r02 * @as(common.F32xN, @splat(weights.data[weight1_base + 2]));
+        acc1 += r10 * @as(common.F32xN, @splat(weights.data[weight1_base + 3]));
+        acc1 += r11 * @as(common.F32xN, @splat(weights.data[weight1_base + 4]));
+        acc1 += r12 * @as(common.F32xN, @splat(weights.data[weight1_base + 5]));
+        acc1 += r20 * @as(common.F32xN, @splat(weights.data[weight1_base + 6]));
+        acc1 += r21 * @as(common.F32xN, @splat(weights.data[weight1_base + 7]));
+        acc1 += r22 * @as(common.F32xN, @splat(weights.data[weight1_base + 8]));
+    }
+
+    return .{ acc0, acc1 };
+}
+
+inline fn conv2d3x3Pad1Stride2InteriorVec(
+    input: *const common.Tensor,
+    weights: *const common.Tensor,
+    input_batch_base: usize,
+    weights_channel_base: usize,
+    oy: usize,
+    ox: usize,
+    bias_value: f32,
+) common.F32xN {
+    const in_channels = input.shape[1];
+    const in_width = input.shape[3];
+    const input_plane = input.shape[2] * input.shape[3];
+    const row0 = (oy * 2 - 1) * in_width + (ox * 2 - 1);
+    const row1 = row0 + in_width;
+    const row2 = row1 + in_width;
+
+    var acc = @as(common.F32xN, @splat(bias_value));
+
+    for (0..in_channels) |ic| {
+        const input_channel = input.data[input_batch_base + ic * input_plane ..][0..input_plane];
+        const weight_base = weights_channel_base + ic * 9;
+        acc += loadStride2F32xN(input_channel, row0) * @as(common.F32xN, @splat(weights.data[weight_base + 0]));
+        acc += loadStride2F32xN(input_channel, row0 + 1) * @as(common.F32xN, @splat(weights.data[weight_base + 1]));
+        acc += loadStride2F32xN(input_channel, row0 + 2) * @as(common.F32xN, @splat(weights.data[weight_base + 2]));
+        acc += loadStride2F32xN(input_channel, row1) * @as(common.F32xN, @splat(weights.data[weight_base + 3]));
+        acc += loadStride2F32xN(input_channel, row1 + 1) * @as(common.F32xN, @splat(weights.data[weight_base + 4]));
+        acc += loadStride2F32xN(input_channel, row1 + 2) * @as(common.F32xN, @splat(weights.data[weight_base + 5]));
+        acc += loadStride2F32xN(input_channel, row2) * @as(common.F32xN, @splat(weights.data[weight_base + 6]));
+        acc += loadStride2F32xN(input_channel, row2 + 1) * @as(common.F32xN, @splat(weights.data[weight_base + 7]));
+        acc += loadStride2F32xN(input_channel, row2 + 2) * @as(common.F32xN, @splat(weights.data[weight_base + 8]));
+    }
+
+    return acc;
+}
+
+inline fn loadStride2F32xN(slice: []const f32, start: usize) common.F32xN {
+    return .{
+        slice[start + 0],
+        slice[start + 2],
+        slice[start + 4],
+        slice[start + 6],
+        slice[start + 8],
+        slice[start + 10],
+        slice[start + 12],
+        slice[start + 14],
+    };
+}
+
+inline fn conv2d3x3Pad1Stride2PointPair(
+    input: *const common.Tensor,
+    weights: *const common.Tensor,
+    input_batch_base: usize,
+    weights0_channel_base: usize,
+    weights1_channel_base: usize,
+    oy: usize,
+    ox: usize,
+    bias0: f32,
+    bias1: f32,
+) [2]f32 {
+    return .{
+        conv2d3x3Pad1Stride2Point(input, weights, bias0, input_batch_base, weights0_channel_base, oy, ox),
+        conv2d3x3Pad1Stride2Point(input, weights, bias1, input_batch_base, weights1_channel_base, oy, ox),
+    };
 }
 
 inline fn conv2d3x3Pad1Stride2Point(

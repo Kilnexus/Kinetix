@@ -49,3 +49,60 @@ pub fn runConvNode(
     }
     return output;
 }
+
+pub fn runConvNodeFromConcatInputs(
+    allocator: std.mem.Allocator,
+    model_graph: *const graph.Graph,
+    weights_blob: *const weights_mod.WeightsBlob,
+    module: *const graph.ModuleNode,
+    inputs: []const *const Tensor,
+) !Tensor {
+    if (inputs.len == 0) return ops.OpError.ShapeMismatch;
+
+    const batch = inputs[0].shape[0];
+    const height = inputs[0].shape[2];
+    const width = inputs[0].shape[3];
+    var total_channels: usize = 0;
+    for (inputs) |input| {
+        if (input.shape[0] != batch or input.shape[2] != height or input.shape[3] != width) {
+            return ops.OpError.ShapeMismatch;
+        }
+        total_channels += input.shape[1];
+    }
+
+    const conv_spec = try spec.resolveConvSpecNode(model_graph, module);
+    const is_pointwise_concat_fast_path =
+        conv_spec.weight.shape[1] == total_channels and
+        conv_spec.weight.shape[2] == 1 and
+        conv_spec.weight.shape[3] == 1 and
+        conv_spec.stride[0] == 1 and
+        conv_spec.stride[1] == 1 and
+        conv_spec.padding[0] == 0 and
+        conv_spec.padding[1] == 0 and
+        conv_spec.groups == 1;
+
+    if (!is_pointwise_concat_fast_path) {
+        var concat = try Tensor.init(allocator, batch, total_channels, height, width);
+        defer concat.deinit();
+        try ops.concatChannels(inputs, &concat);
+        return runConvNode(allocator, model_graph, weights_blob, module, &concat);
+    }
+
+    var output = try Tensor.init(allocator, batch, conv_spec.weight.shape[0], height, width);
+    errdefer output.deinit();
+
+    var weight_tensor = utils.tensorView(conv_spec.weight, weights_blob.slice(conv_spec.weight));
+    const bias_values = if (conv_spec.bias) |bias_meta| weights_blob.slice(bias_meta) else null;
+
+    try ops.conv2dPointwiseConcat(
+        inputs,
+        &weight_tensor,
+        bias_values,
+        &output,
+        conv_spec.activation == .silu,
+    );
+    if (conv_spec.activation != .silu) {
+        utils.applyActivation(&output, conv_spec.activation);
+    }
+    return output;
+}

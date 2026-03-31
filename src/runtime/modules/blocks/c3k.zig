@@ -47,19 +47,8 @@ pub fn runC3kNode(
     var right = try conv.runConvNode(allocator, model_graph, weights_blob, &module.children[1], input);
     defer right.deinit();
 
-    var concat = try Tensor.init(
-        allocator,
-        left.shape[0],
-        left.shape[1] + right.shape[1],
-        left.shape[2],
-        left.shape[3],
-    );
-    defer concat.deinit();
-
     const inputs = [_]*const Tensor{ &left, &right };
-    try ops.concatChannels(&inputs, &concat);
-
-    return try conv.runConvNode(allocator, model_graph, weights_blob, &module.children[2], &concat);
+    return try conv.runConvNodeFromConcatInputs(allocator, model_graph, weights_blob, &module.children[2], &inputs);
 }
 
 pub fn runC3kProfileNode(
@@ -112,22 +101,11 @@ pub fn runC3kProfileNode(
     profile.cv2_ns = timer.read();
     defer right.deinit();
 
-    timer.reset();
-    var concat = try Tensor.init(
-        allocator,
-        left.shape[0],
-        left.shape[1] + right.shape[1],
-        left.shape[2],
-        left.shape[3],
-    );
-    defer concat.deinit();
-
     const inputs = [_]*const Tensor{ &left, &right };
-    try ops.concatChannels(&inputs, &concat);
-    profile.concat_ns = timer.read();
+    profile.concat_ns = 0;
 
     timer.reset();
-    const output = try conv.runConvNode(allocator, model_graph, weights_blob, &module.children[2], &concat);
+    const output = try conv.runConvNodeFromConcatInputs(allocator, model_graph, weights_blob, &module.children[2], &inputs);
     profile.cv3_ns = timer.read();
     return .{ .output = output, .c3k_profile = profile };
 }

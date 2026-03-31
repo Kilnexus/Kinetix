@@ -22,6 +22,7 @@ pub const maxPool2d = pooling.maxPool2d;
 pub const matmul = linalg.matmul;
 pub const softmaxRows = linalg.softmaxRows;
 pub const conv2d = conv.conv2d;
+pub const conv2dPointwiseConcat = conv.conv2dPointwiseConcat;
 
 test {
     _ = @import("ops/activation.zig");

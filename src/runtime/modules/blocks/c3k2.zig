@@ -48,18 +48,8 @@ pub fn runC3k2Node(
             try module_runner(allocator, model_graph, weights_blob, child, &right);
         defer child_out.deinit();
 
-        var concat = try Tensor.init(
-            allocator,
-            stem.shape[0],
-            chunk_channels + right.shape[1] + child_out.shape[1],
-            stem.shape[2],
-            stem.shape[3],
-        );
-        defer concat.deinit();
-
-        try ops.copyTensorBlock(&stem, &concat, 0);
-        try ops.copyTensorBlock(&child_out, &concat, stem.shape[1]);
-        return try conv.runConvNode(allocator, model_graph, weights_blob, &module.children[1], &concat);
+        const inputs = [_]*const Tensor{ &stem, &child_out };
+        return try conv.runConvNodeFromConcatInputs(allocator, model_graph, weights_blob, &module.children[1], &inputs);
     }
 
     var parts_stack: [c3k2_stack_part_limit]Tensor = undefined;
@@ -98,25 +88,22 @@ pub fn runC3k2Node(
         for (parts[deinit_start..initialized_parts]) |*part| part.deinit();
     }
 
-    var concat_channels: usize = chunk_channels;
-    for (parts[0..initialized_parts]) |*part| concat_channels += part.shape[1];
+    var concat_input_ptrs_stack: [c3k2_stack_part_limit]*const Tensor = undefined;
+    var concat_input_ptrs_heap: []*const Tensor = &.{};
+    const concat_input_count = 1 + module_list.children.len;
+    var concat_inputs: []*const Tensor = if (concat_input_count <= concat_input_ptrs_stack.len)
+        concat_input_ptrs_stack[0..concat_input_count]
+    else blk: {
+        concat_input_ptrs_heap = try allocator.alloc(*const Tensor, concat_input_count);
+        break :blk concat_input_ptrs_heap;
+    };
+    defer if (concat_input_ptrs_heap.len > 0) allocator.free(concat_input_ptrs_heap);
 
-    var concat = try Tensor.init(
-        allocator,
-        stem.shape[0],
-        concat_channels,
-        stem.shape[2],
-        stem.shape[3],
-    );
-    defer concat.deinit();
-
-    try ops.copyTensorBlock(&stem, &concat, 0);
-    var channel_offset = stem.shape[1];
-    for (parts[1..initialized_parts]) |*part| {
-        try ops.copyTensorBlock(part, &concat, channel_offset);
-        channel_offset += part.shape[1];
+    concat_inputs[0] = &stem;
+    for (parts[1..initialized_parts], 1..) |*part, index| {
+        concat_inputs[index] = part;
     }
-    return try conv.runConvNode(allocator, model_graph, weights_blob, &module.children[1], &concat);
+    return try conv.runConvNodeFromConcatInputs(allocator, model_graph, weights_blob, &module.children[1], concat_inputs);
 }
 
 pub fn runC3k2ProfileNode(
@@ -167,23 +154,11 @@ pub fn runC3k2ProfileNode(
         profile.child_ns = timer.read();
         defer child_out.deinit();
 
-        timer.reset();
-        var concat = try Tensor.init(
-            allocator,
-            stem.shape[0],
-            chunk_channels + right.shape[1] + child_out.shape[1],
-            stem.shape[2],
-            stem.shape[3],
-        );
-        defer concat.deinit();
+        const inputs = [_]*const Tensor{ &stem, &child_out };
+        profile.concat_ns = 0;
 
         timer.reset();
-        try ops.copyTensorBlock(&stem, &concat, 0);
-        try ops.copyTensorBlock(&child_out, &concat, stem.shape[1]);
-        profile.concat_ns = timer.read();
-
-        timer.reset();
-        const output = try conv.runConvNode(allocator, model_graph, weights_blob, &module.children[1], &concat);
+        const output = try conv.runConvNodeFromConcatInputs(allocator, model_graph, weights_blob, &module.children[1], &inputs);
         profile.cv2_ns = timer.read();
         return .{ .output = output, .c3k2_profile = profile };
     }
@@ -227,30 +202,25 @@ pub fn runC3k2ProfileNode(
         for (parts[deinit_start..initialized_parts]) |*part| part.deinit();
     }
 
-    var concat_channels: usize = chunk_channels;
-    for (parts[0..initialized_parts]) |*part| concat_channels += part.shape[1];
+    var concat_input_ptrs_stack: [c3k2_stack_part_limit]*const Tensor = undefined;
+    var concat_input_ptrs_heap: []*const Tensor = &.{};
+    const concat_input_count = 1 + module_list.children.len;
+    var concat_inputs: []*const Tensor = if (concat_input_count <= concat_input_ptrs_stack.len)
+        concat_input_ptrs_stack[0..concat_input_count]
+    else blk: {
+        concat_input_ptrs_heap = try allocator.alloc(*const Tensor, concat_input_count);
+        break :blk concat_input_ptrs_heap;
+    };
+    defer if (concat_input_ptrs_heap.len > 0) allocator.free(concat_input_ptrs_heap);
 
-    timer.reset();
-    var concat = try Tensor.init(
-        allocator,
-        stem.shape[0],
-        concat_channels,
-        stem.shape[2],
-        stem.shape[3],
-    );
-    defer concat.deinit();
-
-    timer.reset();
-    try ops.copyTensorBlock(&stem, &concat, 0);
-    var channel_offset = stem.shape[1];
-    for (parts[1..initialized_parts]) |*part| {
-        try ops.copyTensorBlock(part, &concat, channel_offset);
-        channel_offset += part.shape[1];
+    concat_inputs[0] = &stem;
+    for (parts[1..initialized_parts], 1..) |*part, index| {
+        concat_inputs[index] = part;
     }
-    profile.concat_ns = timer.read();
+    profile.concat_ns = 0;
 
     timer.reset();
-    const output = try conv.runConvNode(allocator, model_graph, weights_blob, &module.children[1], &concat);
+    const output = try conv.runConvNodeFromConcatInputs(allocator, model_graph, weights_blob, &module.children[1], concat_inputs);
     profile.cv2_ns = timer.read();
     return .{ .output = output, .c3k2_profile = profile };
 }
