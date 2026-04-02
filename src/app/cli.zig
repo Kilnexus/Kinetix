@@ -2,10 +2,12 @@ const std = @import("std");
 const cli_args = @import("cli/args.zig");
 const cli_chat = @import("cli/chat.zig");
 const cli_generate = @import("cli/generate.zig");
+const cli_embed_text = @import("cli/embed_text.zig");
 const cli_fill_mask = @import("cli/fill_mask.zig");
 const cli_inspect = @import("cli/inspect.zig");
 const cli_tools = @import("cli/tools.zig");
 const cli_usage = @import("cli/usage.zig");
+const bert_mlm = @import("../model/runtime/bert_mlm.zig");
 
 const default_model_dir = cli_args.default_model_dir;
 const default_bert_model_dir = "models/bert-base-uncased";
@@ -276,6 +278,43 @@ pub fn run(allocator: std.mem.Allocator) !void {
         return error.InvalidCommand;
     }
 
+    if (std.mem.eql(u8, command, "embed-text")) {
+        var model_dir: []const u8 = default_bert_model_dir;
+        var text: []const u8 = undefined;
+        var mode: bert_mlm.EmbeddingMode = .mean;
+        var count: usize = 16;
+
+        var index: usize = 2;
+        if (args.len > index + 1 and looksLikePath(args[index])) {
+            model_dir = args[index];
+            index += 1;
+        }
+        if (args.len <= index) {
+            try printUsage();
+            return error.InvalidCommand;
+        }
+        text = args[index];
+        index += 1;
+
+        if (args.len > index) {
+            if (parseEmbeddingMode(args[index])) |parsed_mode| {
+                mode = parsed_mode;
+                index += 1;
+            } else |_| {}
+        }
+        if (args.len > index) {
+            count = try std.fmt.parseInt(usize, args[index], 10);
+            index += 1;
+        }
+        if (args.len != index) {
+            try printUsage();
+            return error.InvalidCommand;
+        }
+
+        try cli_embed_text.embedText(allocator, model_dir, text, mode, count);
+        return;
+    }
+
     if (std.mem.eql(u8, command, "generate")) {
         var invocation = try cli_args.parseGenerateInvocation(allocator, args);
         defer invocation.deinit(allocator);
@@ -315,4 +354,16 @@ pub fn run(allocator: std.mem.Allocator) !void {
 
 fn printUsage() !void {
     try cli_usage.printUsage();
+}
+
+fn looksLikePath(arg: []const u8) bool {
+    return std.mem.indexOfScalar(u8, arg, '\\') != null or
+        std.mem.indexOfScalar(u8, arg, '/') != null or
+        std.mem.startsWith(u8, arg, ".");
+}
+
+fn parseEmbeddingMode(text: []const u8) !bert_mlm.EmbeddingMode {
+    if (std.mem.eql(u8, text, "cls")) return .cls;
+    if (std.mem.eql(u8, text, "mean")) return .mean;
+    return error.InvalidEmbeddingMode;
 }

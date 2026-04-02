@@ -28,6 +28,27 @@ pub const FillMaskResult = struct {
     }
 };
 
+pub const EmbeddingMode = enum {
+    cls,
+    mean,
+
+    pub fn name(self: EmbeddingMode) []const u8 {
+        return switch (self) {
+            .cls => "cls",
+            .mean => "mean",
+        };
+    }
+};
+
+pub const EncodedSequence = struct {
+    hidden: []f32,
+    seq_len: usize,
+
+    pub fn deinit(self: *EncodedSequence, allocator: std.mem.Allocator) void {
+        allocator.free(self.hidden);
+    }
+};
+
 const LayerWeights = struct {
     query_weight_name: []u8,
     key_weight_name: []u8,
@@ -207,67 +228,18 @@ pub const Runtime = struct {
         }
         if (mask_count != 1) return error.InvalidMaskCount;
 
-        const seq_len = encoded.len + 2;
-        if (seq_len > self.cfg.max_position_embeddings) return error.SequenceTooLong;
-
-        const input_ids = try self.allocator.alloc(usize, seq_len);
+        const input_ids = try self.wrapEncodedWithSpecialTokensAlloc(encoded);
         defer self.allocator.free(input_ids);
-        input_ids[0] = self.cls_token_id;
-        for (encoded, 0..) |token_id, idx| {
-            input_ids[idx + 1] = token_id;
-        }
-        input_ids[seq_len - 1] = self.sep_token_id;
         const mask_position = mask_index + 1;
+        var encoded_sequence = try self.runEncoder(input_ids);
+        defer encoded_sequence.deinit(self.allocator);
 
-        const hidden_bytes = seq_len * self.cfg.hidden_size;
-        const hidden_a = try self.allocator.alloc(f32, hidden_bytes);
-        defer self.allocator.free(hidden_a);
-        const hidden_b = try self.allocator.alloc(f32, hidden_bytes);
-        defer self.allocator.free(hidden_b);
-        const projected_q = try self.allocator.alloc(f32, hidden_bytes);
-        defer self.allocator.free(projected_q);
-        const projected_k = try self.allocator.alloc(f32, hidden_bytes);
-        defer self.allocator.free(projected_k);
-        const projected_v = try self.allocator.alloc(f32, hidden_bytes);
-        defer self.allocator.free(projected_v);
-        const attention_context = try self.allocator.alloc(f32, hidden_bytes);
-        defer self.allocator.free(attention_context);
-        const position_embedding = try self.allocator.alloc(f32, self.cfg.hidden_size);
-        defer self.allocator.free(position_embedding);
         const token_hidden = try self.allocator.alloc(f32, self.cfg.hidden_size);
         defer self.allocator.free(token_hidden);
-        const normed_hidden = try self.allocator.alloc(f32, self.cfg.hidden_size);
-        defer self.allocator.free(normed_hidden);
-        const intermediate = try self.allocator.alloc(f32, self.cfg.intermediate_size);
-        defer self.allocator.free(intermediate);
-        const scores = try self.allocator.alloc(f32, seq_len);
-        defer self.allocator.free(scores);
         const logits = try self.allocator.alloc(f32, self.cfg.vocab_size);
         defer self.allocator.free(logits);
 
-        try self.embedInputs(input_ids, hidden_a, position_embedding);
-
-        var hidden_in = hidden_a;
-        var hidden_out = hidden_b;
-        for (self.layers) |*layer| {
-            try self.forwardLayer(
-                layer,
-                seq_len,
-                hidden_in,
-                hidden_out,
-                projected_q,
-                projected_k,
-                projected_v,
-                attention_context,
-                token_hidden,
-                normed_hidden,
-                intermediate,
-                scores,
-            );
-            std.mem.swap([]f32, &hidden_in, &hidden_out);
-        }
-
-        const masked_hidden = hidden_in[mask_position * self.cfg.hidden_size ..][0..self.cfg.hidden_size];
+        const masked_hidden = encoded_sequence.hidden[mask_position * self.cfg.hidden_size ..][0..self.cfg.hidden_size];
         try self.store.matmulVecByName(token_hidden, mlm_transform_weight_name, masked_hidden);
         addBiasInPlace(token_hidden, self.mlm_transform_bias);
         cpu.geluInPlace(token_hidden);
@@ -295,6 +267,109 @@ pub const Runtime = struct {
         return .{
             .mask_position = mask_position,
             .predictions = predictions,
+        };
+    }
+
+    pub fn embedText(self: *Runtime, text: []const u8, mode: EmbeddingMode) ![]f32 {
+        const encoded = try self.tokenizer.encodeAlloc(self.allocator, text);
+        defer self.allocator.free(encoded);
+
+        const input_ids = try self.wrapEncodedWithSpecialTokensAlloc(encoded);
+        defer self.allocator.free(input_ids);
+
+        var encoded_sequence = try self.runEncoder(input_ids);
+        defer encoded_sequence.deinit(self.allocator);
+
+        const embedding = try self.allocator.alloc(f32, self.cfg.hidden_size);
+
+        switch (mode) {
+            .cls => {
+                @memcpy(embedding, encoded_sequence.hidden[0..self.cfg.hidden_size]);
+            },
+            .mean => {
+                @memset(embedding, 0.0);
+                const start: usize = if (encoded_sequence.seq_len > 2) 1 else 0;
+                const end: usize = if (encoded_sequence.seq_len > 2) encoded_sequence.seq_len - 1 else encoded_sequence.seq_len;
+                const token_count = @max(@as(usize, 1), end - start);
+
+                for (start..end) |position| {
+                    const hidden_slice = encoded_sequence.hidden[position * self.cfg.hidden_size ..][0..self.cfg.hidden_size];
+                    for (embedding, hidden_slice) |*out, value| {
+                        out.* += value;
+                    }
+                }
+                const scale = 1.0 / @as(f32, @floatFromInt(token_count));
+                for (embedding) |*value| value.* *= scale;
+            },
+        }
+
+        return embedding;
+    }
+
+    fn wrapEncodedWithSpecialTokensAlloc(self: *Runtime, encoded: []const u32) ![]usize {
+        const seq_len = encoded.len + 2;
+        if (seq_len > self.cfg.max_position_embeddings) return error.SequenceTooLong;
+
+        const input_ids = try self.allocator.alloc(usize, seq_len);
+        input_ids[0] = self.cls_token_id;
+        for (encoded, 0..) |token_id, idx| {
+            input_ids[idx + 1] = token_id;
+        }
+        input_ids[seq_len - 1] = self.sep_token_id;
+        return input_ids;
+    }
+
+    fn runEncoder(self: *Runtime, input_ids: []const usize) !EncodedSequence {
+        const seq_len = input_ids.len;
+        const hidden_bytes = seq_len * self.cfg.hidden_size;
+        const hidden_a = try self.allocator.alloc(f32, hidden_bytes);
+        defer self.allocator.free(hidden_a);
+        const hidden_b = try self.allocator.alloc(f32, hidden_bytes);
+        defer self.allocator.free(hidden_b);
+        const projected_q = try self.allocator.alloc(f32, hidden_bytes);
+        defer self.allocator.free(projected_q);
+        const projected_k = try self.allocator.alloc(f32, hidden_bytes);
+        defer self.allocator.free(projected_k);
+        const projected_v = try self.allocator.alloc(f32, hidden_bytes);
+        defer self.allocator.free(projected_v);
+        const attention_context = try self.allocator.alloc(f32, hidden_bytes);
+        defer self.allocator.free(attention_context);
+        const position_embedding = try self.allocator.alloc(f32, self.cfg.hidden_size);
+        defer self.allocator.free(position_embedding);
+        const token_hidden = try self.allocator.alloc(f32, self.cfg.hidden_size);
+        defer self.allocator.free(token_hidden);
+        const normed_hidden = try self.allocator.alloc(f32, self.cfg.hidden_size);
+        defer self.allocator.free(normed_hidden);
+        const intermediate = try self.allocator.alloc(f32, self.cfg.intermediate_size);
+        defer self.allocator.free(intermediate);
+        const scores = try self.allocator.alloc(f32, seq_len);
+        defer self.allocator.free(scores);
+
+        try self.embedInputs(input_ids, hidden_a, position_embedding);
+
+        var hidden_in = hidden_a;
+        var hidden_out = hidden_b;
+        for (self.layers) |*layer| {
+            try self.forwardLayer(
+                layer,
+                seq_len,
+                hidden_in,
+                hidden_out,
+                projected_q,
+                projected_k,
+                projected_v,
+                attention_context,
+                token_hidden,
+                normed_hidden,
+                intermediate,
+                scores,
+            );
+            std.mem.swap([]f32, &hidden_in, &hidden_out);
+        }
+
+        return .{
+            .hidden = try self.allocator.dupe(f32, hidden_in),
+            .seq_len = seq_len,
         };
     }
 
