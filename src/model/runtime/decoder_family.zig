@@ -10,6 +10,7 @@ const generic_block = @import("../layers/rmsnorm_gqa_swiglu_block.zig");
 const logits_util = @import("../layers/logits.zig");
 const weights_layout = @import("../layers/weights_layout.zig");
 const qwen3_family = @import("../families/qwen3/family.zig");
+const bert_family = @import("../families/bert/family.zig");
 
 pub const Architecture = decoder_types.Architecture;
 pub const ThinkingMode = chat_types.ThinkingMode;
@@ -25,6 +26,7 @@ pub const ParsedConfig = decoder_types.ParsedConfig;
 
 pub const Tokenizer = union(Architecture) {
     qwen3: qwen3_family.TokenizerImpl,
+    bert: bert_family.TokenizerImpl,
 
     pub fn loadFromModelDir(
         backing_allocator: std.mem.Allocator,
@@ -261,6 +263,19 @@ fn entryForArchitecture(architecture: Architecture) Entry {
             .render_single_user_prompt_alloc = qwen3_family.renderSingleUserPromptAlloc,
             .assistant_history_content = qwen3_family.assistantHistoryContent,
         },
+        .bert => .{
+            .model_type = bert_family.model_type,
+            .load_config_from_file = bert_family.loadParsedConfig,
+            .layer_layout = bert_family.layer_layout,
+            .eos_token_ids = bert_family.eos_token_ids,
+            .default_stop_sequences = bert_family.default_stop_sequences,
+            .common_weights = bert_family.common_weights,
+            .layer_tensor_name_alloc = bert_family.layerTensorNameAlloc,
+            .load_tokenizer = loadBertTokenizerFromModelDir,
+            .render_messages_prompt_alloc = bert_family.renderMessagesPromptAlloc,
+            .render_single_user_prompt_alloc = bert_family.renderSingleUserPromptAlloc,
+            .assistant_history_content = bert_family.assistantHistoryContent,
+        },
     };
 }
 
@@ -302,9 +317,26 @@ fn loadQwen3TokenizerFromModelDir(
     };
 }
 
+fn loadBertTokenizerFromModelDir(
+    backing_allocator: std.mem.Allocator,
+    model_dir: []const u8,
+) !Tokenizer {
+    return .{
+        .bert = try bert_family.loadTokenizerFromModelDir(backing_allocator, model_dir),
+    };
+}
+
+pub fn supportsGeneration(architecture: Architecture) bool {
+    return switch (architecture) {
+        .qwen3 => true,
+        .bert => false,
+    };
+}
+
 test "family detects qwen3 model type" {
     const testing = std.testing;
     try testing.expectEqual(Architecture.qwen3, detectArchitecture("qwen3").?);
+    try testing.expectEqual(Architecture.bert, detectArchitecture("bert").?);
     try testing.expect(detectArchitecture("unknown-model") == null);
 }
 
@@ -331,6 +363,17 @@ test "family tokenizer loads qwen3 and roundtrips prompt text" {
     const text = try tokenizer.decodeAlloc(testing.allocator, ids);
     defer testing.allocator.free(text);
     try testing.expectEqualStrings("<|im_start|>user\nHello<|im_end|>\n", text);
+}
+
+test "family tokenizer loads bert and wordpiece-encodes lowercase text" {
+    const testing = std.testing;
+
+    var tokenizer = try loadTokenizerFromModelDir(testing.allocator, .bert, "models/bert-base-uncased");
+    defer tokenizer.deinit();
+
+    const ids = try tokenizer.encodeAlloc(testing.allocator, "Hello world!");
+    defer testing.allocator.free(ids);
+    try testing.expectEqualSlices(u32, &[_]u32{ 7592, 2088, 999 }, ids);
 }
 
 test "family exposes qwen3 weight naming policy" {

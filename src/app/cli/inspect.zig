@@ -162,6 +162,7 @@ pub fn probeBlock(
     var parsed_config = try decoder_family.loadConfigFromFile(allocator, config_path);
     defer parsed_config.deinit();
     const cfg = parsed_config.value;
+    if (!decoder_family.supportsGeneration(cfg.architecture)) return error.UnsupportedArchitectureForDecoderRuntime;
 
     if (input_index >= cfg.hidden_size) return error.InputIndexOutOfBounds;
 
@@ -214,6 +215,7 @@ pub fn probeModel(
     var parsed_config = try decoder_family.loadConfigFromFile(allocator, config_path);
     defer parsed_config.deinit();
     const cfg = parsed_config.value;
+    if (!decoder_family.supportsGeneration(cfg.architecture)) return error.UnsupportedArchitectureForDecoderRuntime;
 
     const weights_path = try std.fs.path.join(allocator, &.{ model_dir, "model.safetensors" });
     defer allocator.free(weights_path);
@@ -258,6 +260,7 @@ pub fn generateTokenIds(
     var parsed_config = try decoder_family.loadConfigFromFile(allocator, config_path);
     defer parsed_config.deinit();
     const cfg = parsed_config.value;
+    if (!decoder_family.supportsGeneration(cfg.architecture)) return error.UnsupportedArchitectureForGeneration;
 
     const weights_path = try std.fs.path.join(allocator, &.{ model_dir, "model.safetensors" });
     defer allocator.free(weights_path);

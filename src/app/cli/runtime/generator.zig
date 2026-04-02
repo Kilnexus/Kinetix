@@ -22,6 +22,9 @@ pub const GeneratorRuntime = struct {
         defer allocator.free(config_path);
         var parsed_config = try decoder_family.loadConfigFromFile(allocator, config_path);
         defer parsed_config.deinit();
+        if (!decoder_family.supportsGeneration(parsed_config.value.architecture)) {
+            return error.UnsupportedArchitectureForGeneration;
+        }
 
         var tokenizer = try decoder_family.loadTokenizerFromModelDir(
             allocator,

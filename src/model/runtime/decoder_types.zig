@@ -2,10 +2,12 @@ const std = @import("std");
 
 pub const Architecture = enum {
     qwen3,
+    bert,
 
     pub fn name(self: Architecture) []const u8 {
         return switch (self) {
             .qwen3 => "qwen3",
+            .bert => "bert",
         };
     }
 };
