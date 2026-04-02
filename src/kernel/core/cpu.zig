@@ -47,6 +47,33 @@ pub fn rmsNorm(
     applyRmsNormScaled(output, input, weight, inv_rms);
 }
 
+pub fn layerNorm(
+    output: []f32,
+    input: []const f32,
+    weight: []const f32,
+    bias: []const f32,
+    eps: f32,
+) !void {
+    if (output.len != input.len or input.len != weight.len or weight.len != bias.len) return error.SizeMismatch;
+    if (input.len == 0) return error.SizeMismatch;
+
+    var mean: f32 = 0.0;
+    for (input) |value| mean += value;
+    mean /= @as(f32, @floatFromInt(input.len));
+
+    var variance: f32 = 0.0;
+    for (input) |value| {
+        const centered = value - mean;
+        variance += centered * centered;
+    }
+    variance /= @as(f32, @floatFromInt(input.len));
+
+    const inv_std = 1.0 / @sqrt(variance + eps);
+    for (output, input, weight, bias) |*out, x, w, b| {
+        out.* = ((x - mean) * inv_std) * w + b;
+    }
+}
+
 pub fn rmsNormRepeated(
     output: []f32,
     input: []const f32,
@@ -129,6 +156,18 @@ fn rmsNormScalarReference(
 
 pub fn silu(x: f32) f32 {
     return x / (1.0 + std.math.exp(-x));
+}
+
+pub fn gelu(x: f32) f32 {
+    const c = @sqrt(2.0 / std.math.pi);
+    const inner = c * (x + 0.044715 * x * x * x);
+    return 0.5 * x * (1.0 + std.math.tanh(inner));
+}
+
+pub fn geluInPlace(values: []f32) void {
+    for (values) |*value| {
+        value.* = gelu(value.*);
+    }
 }
 
 pub fn swiglu(output: []f32, gate: []const f32, up: []const f32) !void {
@@ -230,6 +269,21 @@ test "wide rmsNorm matches scalar reference" {
     }
 }
 
+test "layerNorm matches manual calculation" {
+    const testing = std.testing;
+
+    const input = [_]f32{ 1.0, 2.0, 3.0 };
+    const weight = [_]f32{ 1.0, 1.5, 0.5 };
+    const bias = [_]f32{ 0.0, 0.25, -0.25 };
+    var output = [_]f32{ 0.0, 0.0, 0.0 };
+
+    try layerNorm(&output, &input, &weight, &bias, 0.0);
+
+    try testing.expectApproxEqAbs(@as(f32, -1.2247448), output[0], 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 0.25), output[1], 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 0.3623724), output[2], 1e-5);
+}
+
 test "swiglu applies silu gate then multiplies up branch" {
     const testing = std.testing;
 
@@ -269,6 +323,17 @@ test "wide swiglu matches scalar reference" {
             try testing.expectApproxEqAbs(want, got, 1e-6);
         }
     }
+}
+
+test "geluInPlace matches known values" {
+    const testing = std.testing;
+
+    var values = [_]f32{ -1.0, 0.0, 1.0 };
+    geluInPlace(&values);
+
+    try testing.expectApproxEqAbs(@as(f32, -0.158808), values[0], 1e-6);
+    try testing.expectApproxEqAbs(@as(f32, 0.0), values[1], 1e-6);
+    try testing.expectApproxEqAbs(@as(f32, 0.841192), values[2], 1e-6);
 }
 
 test "rmsNormRepeated applies same norm weight to multiple slices" {

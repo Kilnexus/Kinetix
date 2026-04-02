@@ -2,11 +2,13 @@ const std = @import("std");
 const cli_args = @import("cli/args.zig");
 const cli_chat = @import("cli/chat.zig");
 const cli_generate = @import("cli/generate.zig");
+const cli_fill_mask = @import("cli/fill_mask.zig");
 const cli_inspect = @import("cli/inspect.zig");
 const cli_tools = @import("cli/tools.zig");
 const cli_usage = @import("cli/usage.zig");
 
 const default_model_dir = cli_args.default_model_dir;
+const default_bert_model_dir = "models/bert-base-uncased";
 
 pub fn run(allocator: std.mem.Allocator) !void {
     const args = try std.process.argsAlloc(allocator);
@@ -245,6 +247,29 @@ pub fn run(allocator: std.mem.Allocator) !void {
         }
         if (args.len >= 4) {
             try cli_tools.decodeIds(allocator, args[2], args[3]);
+            return;
+        }
+        try printUsage();
+        return error.InvalidCommand;
+    }
+
+    if (std.mem.eql(u8, command, "fill-mask")) {
+        if (args.len == 3) {
+            try cli_fill_mask.fillMaskText(allocator, default_bert_model_dir, args[2], 5);
+            return;
+        }
+        if (args.len == 4) {
+            if (std.fmt.parseInt(usize, args[3], 10)) |top_k| {
+                try cli_fill_mask.fillMaskText(allocator, default_bert_model_dir, args[2], top_k);
+                return;
+            } else |_| {
+                try cli_fill_mask.fillMaskText(allocator, args[2], args[3], 5);
+                return;
+            }
+        }
+        if (args.len >= 5) {
+            const top_k = try std.fmt.parseInt(usize, args[4], 10);
+            try cli_fill_mask.fillMaskText(allocator, args[2], args[3], top_k);
             return;
         }
         try printUsage();

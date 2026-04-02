@@ -39,7 +39,7 @@ const bert_inspect_sample_tensors = [_][]const u8{
     "bert.encoder.layer.0.attention.self.query.weight",
     "bert.encoder.layer.0.attention.self.key.weight",
     "bert.encoder.layer.0.intermediate.dense.weight",
-    "cls.predictions.decoder.weight",
+    "cls.predictions.transform.dense.weight",
 };
 
 pub const Tokenizer = union(Architecture) {

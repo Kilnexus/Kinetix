@@ -64,13 +64,24 @@ pub const Tokenizer = struct {
         var ids = std.ArrayListUnmanaged(u32).empty;
         defer ids.deinit(allocator);
 
-        var basic = std.ArrayListUnmanaged([]const u8).empty;
-        defer basic.deinit(allocator);
-        try self.basicTokenize(allocator, text, &basic);
+        var index: usize = 0;
+        while (index < text.len) {
+            if (self.matchSpecialToken(text[index..])) |special_token| {
+                try ids.append(allocator, self.vocab.get(special_token) orelse return error.UnknownTokenId);
+                index += special_token.len;
+                continue;
+            }
 
-        for (basic.items) |token| {
-            defer allocator.free(token);
-            try self.wordpieceTokenize(allocator, token, &ids);
+            const next_special = self.findNextSpecialTokenStart(text[index..]) orelse text.len - index;
+            var basic = std.ArrayListUnmanaged([]const u8).empty;
+            defer basic.deinit(allocator);
+            try self.basicTokenize(allocator, text[index .. index + next_special], &basic);
+
+            for (basic.items) |token| {
+                defer allocator.free(token);
+                try self.wordpieceTokenize(allocator, token, &ids);
+            }
+            index += next_special;
         }
 
         return ids.toOwnedSlice(allocator);
@@ -97,6 +108,15 @@ pub const Tokenizer = struct {
         }
 
         return output.toOwnedSlice(allocator);
+    }
+
+    pub fn tokenForId(self: *const Tokenizer, id: u32) ?[]const u8 {
+        if (id >= self.id_to_token.len) return null;
+        return self.id_to_token[id];
+    }
+
+    pub fn idForToken(self: *const Tokenizer, token: []const u8) ?u32 {
+        return self.vocab.get(token);
     }
 
     fn basicTokenize(
@@ -171,6 +191,38 @@ pub const Tokenizer = struct {
         }
     }
 
+    fn matchSpecialToken(self: *const Tokenizer, text: []const u8) ?[]const u8 {
+        const special_tokens = [_][]const u8{
+            self.mask_token,
+            self.cls_token,
+            self.sep_token,
+            self.pad_token,
+            self.unk_token,
+        };
+        for (special_tokens) |token| {
+            if (std.mem.startsWith(u8, text, token)) return token;
+        }
+        return null;
+    }
+
+    fn findNextSpecialTokenStart(self: *const Tokenizer, text: []const u8) ?usize {
+        var best: ?usize = null;
+        const special_tokens = [_][]const u8{
+            self.mask_token,
+            self.cls_token,
+            self.sep_token,
+            self.pad_token,
+            self.unk_token,
+        };
+
+        for (special_tokens) |token| {
+            if (std.mem.indexOf(u8, text, token)) |idx| {
+                if (best == null or idx < best.?) best = idx;
+            }
+        }
+        return best;
+    }
+
 };
 
 fn loadTokenizerConfig(allocator: std.mem.Allocator, path: []const u8) !TokenizerConfig {
@@ -219,6 +271,12 @@ test "wordpiece tokenizer encodes and decodes bert-base samples" {
         const ids = try tokenizer.encodeAlloc(testing.allocator, "Tokenizer");
         defer testing.allocator.free(ids);
         try testing.expectEqualSlices(u32, &[_]u32{ 19204, 17629 }, ids);
+    }
+
+    {
+        const ids = try tokenizer.encodeAlloc(testing.allocator, "Hello [MASK] world");
+        defer testing.allocator.free(ids);
+        try testing.expectEqualSlices(u32, &[_]u32{ 7592, 103, 2088 }, ids);
     }
 
     const text = try tokenizer.decodeAlloc(testing.allocator, &[_]u32{ 101, 7592, 2088, 999, 102 });

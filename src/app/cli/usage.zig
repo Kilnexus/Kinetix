@@ -32,6 +32,8 @@ pub fn printUsage() !void {
         \\  zinfer tokenize [model_dir] <text>
         \\  zinfer decode-ids <ids_csv>
         \\  zinfer decode-ids [model_dir] <ids_csv>
+        \\  zinfer fill-mask <text> [top_k]
+        \\  zinfer fill-mask [model_dir] <text> [top_k]
         \\  zinfer generate <text> [max_new_tokens] [think|no-think] [flags...]
         \\  zinfer generate [model_dir] <text> <max_new_tokens> [think|no-think] [flags...]
         \\  zinfer generate-chat <messages_json_path> [max_new_tokens] [think|no-think] [flags...]
