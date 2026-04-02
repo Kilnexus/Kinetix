@@ -34,6 +34,11 @@ pub fn inspectConfig(allocator: std.mem.Allocator, model_dir: []const u8) !void 
 }
 
 pub fn inspectWeights(allocator: std.mem.Allocator, model_dir: []const u8) !void {
+    const config_path = try std.fs.path.join(allocator, &.{ model_dir, "config.json" });
+    defer allocator.free(config_path);
+    var parsed_config = try decoder_family.loadConfigFromFile(allocator, config_path);
+    defer parsed_config.deinit();
+
     const weights_path = try std.fs.path.join(allocator, &.{ model_dir, "model.safetensors" });
     defer allocator.free(weights_path);
 
@@ -55,14 +60,7 @@ pub fn inspectWeights(allocator: std.mem.Allocator, model_dir: []const u8) !void
         }
     }
 
-    const sample_names = [_][]const u8{
-        "model.embed_tokens.weight",
-        "model.layers.0.self_attn.q_proj.weight",
-        "model.layers.0.self_attn.k_proj.weight",
-        "model.layers.0.mlp.gate_proj.weight",
-        "model.norm.weight",
-        "lm_head.weight",
-    };
+    const sample_names = decoder_family.inspectSampleTensorNames(parsed_config.value.architecture);
 
     for (sample_names) |name| {
         if (parsed.getTensor(name)) |tensor| {

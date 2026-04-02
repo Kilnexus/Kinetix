@@ -24,6 +24,24 @@ pub const ModelCache = decoder_cache.ModelCache;
 pub const DecoderConfig = decoder_types.DecoderConfig;
 pub const ParsedConfig = decoder_types.ParsedConfig;
 
+const qwen3_inspect_sample_tensors = [_][]const u8{
+    "model.embed_tokens.weight",
+    "model.layers.0.self_attn.q_proj.weight",
+    "model.layers.0.self_attn.k_proj.weight",
+    "model.layers.0.mlp.gate_proj.weight",
+    "model.norm.weight",
+    "lm_head.weight",
+};
+
+const bert_inspect_sample_tensors = [_][]const u8{
+    "bert.embeddings.word_embeddings.weight",
+    "bert.embeddings.position_embeddings.weight",
+    "bert.encoder.layer.0.attention.self.query.weight",
+    "bert.encoder.layer.0.attention.self.key.weight",
+    "bert.encoder.layer.0.intermediate.dense.weight",
+    "cls.predictions.decoder.weight",
+};
+
 pub const Tokenizer = union(Architecture) {
     qwen3: qwen3_family.TokenizerImpl,
     bert: bert_family.TokenizerImpl,
@@ -246,6 +264,13 @@ pub fn assistantHistoryContent(
     content: []const u8,
 ) []const u8 {
     return entryForArchitecture(architecture).assistant_history_content(content);
+}
+
+pub fn inspectSampleTensorNames(architecture: Architecture) []const []const u8 {
+    return switch (architecture) {
+        .qwen3 => &qwen3_inspect_sample_tensors,
+        .bert => &bert_inspect_sample_tensors,
+    };
 }
 
 fn entryForArchitecture(architecture: Architecture) Entry {
