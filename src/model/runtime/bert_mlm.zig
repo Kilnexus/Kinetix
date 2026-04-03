@@ -596,30 +596,70 @@ pub const Runtime = struct {
     ) !void {
         const head_count = self.cfg.num_attention_heads;
         const head_dim = self.cfg.head_dim;
+        const hidden_size = self.cfg.hidden_size;
         const scale = 1.0 / @sqrt(@as(f32, @floatFromInt(head_dim)));
 
         for (start_query..end_query) |query_position| {
-            const out_slice = output[query_position * self.cfg.hidden_size ..][0..self.cfg.hidden_size];
+            const q_base = query_position * hidden_size;
+            const out_slice = output[q_base..][0..hidden_size];
             const score_slice = scores[query_position * seq_len ..][0..seq_len];
             @memset(out_slice, 0.0);
 
             for (0..head_count) |head_index| {
-                const query_head = projected_q[query_position * self.cfg.hidden_size + head_index * head_dim ..][0..head_dim];
+                const head_offset = head_index * head_dim;
+                const query_head = projected_q[q_base + head_offset ..][0..head_dim];
                 for (0..seq_len) |key_position| {
-                    const key_head = projected_k[key_position * self.cfg.hidden_size + head_index * head_dim ..][0..head_dim];
-                    score_slice[key_position] = (try cpu.dot(query_head, key_head)) * scale;
+                    const key_head = projected_k[key_position * hidden_size + head_offset ..][0..head_dim];
+                    score_slice[key_position] = dotHot(query_head, key_head) * scale;
                 }
                 try attention.softmaxInPlace(score_slice);
 
-                const out_head = out_slice[head_index * head_dim ..][0..head_dim];
+                const out_head = out_slice[head_offset..][0..head_dim];
                 for (0..seq_len) |key_position| {
-                    const value_head = projected_v[key_position * self.cfg.hidden_size + head_index * head_dim ..][0..head_dim];
-                    try cpu.axpyInPlace(out_head, score_slice[key_position], value_head);
+                    const value_head = projected_v[key_position * hidden_size + head_offset ..][0..head_dim];
+                    axpyHot(out_head, score_slice[key_position], value_head);
                 }
             }
         }
     }
 };
+
+fn dotHot(lhs: []const f32, rhs: []const f32) f32 {
+    std.debug.assert(lhs.len == rhs.len);
+
+    var acc0: @Vector(8, f32) = @splat(0.0);
+    var acc1: @Vector(8, f32) = @splat(0.0);
+    var index: usize = 0;
+    while (index + 16 <= lhs.len) : (index += 16) {
+        const lhs0: @Vector(8, f32) = lhs[index..][0..8].*;
+        const rhs0: @Vector(8, f32) = rhs[index..][0..8].*;
+        const lhs1: @Vector(8, f32) = lhs[index + 8 ..][0..8].*;
+        const rhs1: @Vector(8, f32) = rhs[index + 8 ..][0..8].*;
+        acc0 += lhs0 * rhs0;
+        acc1 += lhs1 * rhs1;
+    }
+
+    var sum = @reduce(.Add, acc0 + acc1);
+    while (index < lhs.len) : (index += 1) {
+        sum += lhs[index] * rhs[index];
+    }
+    return sum;
+}
+
+fn axpyHot(output: []f32, alpha: f32, input: []const f32) void {
+    std.debug.assert(output.len == input.len);
+
+    const alpha_vec: @Vector(8, f32) = @splat(alpha);
+    var index: usize = 0;
+    while (index + 8 <= output.len) : (index += 8) {
+        const out_vec: @Vector(8, f32) = output[index..][0..8].*;
+        const in_vec: @Vector(8, f32) = input[index..][0..8].*;
+        output[index..][0..8].* = out_vec + alpha_vec * in_vec;
+    }
+    while (index < output.len) : (index += 1) {
+        output[index] += alpha * input[index];
+    }
+}
 
 fn addBiasInPlace(values: []f32, bias: []const f32) void {
     std.debug.assert(values.len == bias.len);

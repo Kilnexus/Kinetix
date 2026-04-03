@@ -5,6 +5,7 @@ const cli_generate = @import("cli/generate.zig");
 const cli_embed_text = @import("cli/embed_text.zig");
 const cli_fill_mask = @import("cli/fill_mask.zig");
 const cli_inspect = @import("cli/inspect.zig");
+const cli_serve_bert = @import("cli/serve_bert.zig");
 const cli_tools = @import("cli/tools.zig");
 const cli_usage = @import("cli/usage.zig");
 const bert_mlm = @import("../model/runtime/bert_mlm.zig");
@@ -312,6 +313,32 @@ pub fn run(allocator: std.mem.Allocator) !void {
         }
 
         try cli_embed_text.embedText(allocator, model_dir, text, mode, count);
+        return;
+    }
+
+    if (std.mem.eql(u8, command, "serve-bert")) {
+        var model_dir: []const u8 = default_bert_model_dir;
+        var bind_host: []const u8 = "0.0.0.0";
+        var port: u16 = 8787;
+
+        if (args.len >= 3 and looksLikePath(args[2])) {
+            model_dir = args[2];
+            if (args.len >= 4) {
+                port = try std.fmt.parseInt(u16, args[3], 10);
+            }
+            if (args.len >= 5) {
+                bind_host = args[4];
+            }
+        } else {
+            if (args.len >= 3) {
+                port = try std.fmt.parseInt(u16, args[2], 10);
+            }
+            if (args.len >= 4) {
+                bind_host = args[3];
+            }
+        }
+
+        try cli_serve_bert.serve(allocator, model_dir, bind_host, port);
         return;
     }
 

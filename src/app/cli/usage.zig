@@ -36,6 +36,8 @@ pub fn printUsage() !void {
         \\  zinfer fill-mask [model_dir] <text> [top_k]
         \\  zinfer embed-text <text> [cls|mean] [count]
         \\  zinfer embed-text [model_dir] <text> [cls|mean] [count]
+        \\  zinfer serve-bert [port] [bind_host]
+        \\  zinfer serve-bert [model_dir] [port] [bind_host]
         \\  zinfer generate <text> [max_new_tokens] [think|no-think] [flags...]
         \\  zinfer generate [model_dir] <text> <max_new_tokens> [think|no-think] [flags...]
         \\  zinfer generate-chat <messages_json_path> [max_new_tokens] [think|no-think] [flags...]
