@@ -178,6 +178,14 @@ pub const Runtime = struct {
     mask_token_id: u32,
 
     pub fn init(allocator: std.mem.Allocator, model_dir: []const u8) !Runtime {
+        return initWithThreads(allocator, model_dir, null);
+    }
+
+    pub fn initWithThreads(
+        allocator: std.mem.Allocator,
+        model_dir: []const u8,
+        requested_thread_count: ?usize,
+    ) !Runtime {
         const config_path = try std.fs.path.join(allocator, &.{ model_dir, "config.json" });
         defer allocator.free(config_path);
 
@@ -191,7 +199,10 @@ pub const Runtime = struct {
         errdefer backend.deinit();
 
         const cfg = parsed_config.value;
-        const resolved_thread_count = @max(1, std.Thread.getCpuCount() catch 1);
+        const resolved_thread_count = if (requested_thread_count) |count|
+            @max(@as(usize, 1), count)
+        else
+            @max(@as(usize, 1), std.Thread.getCpuCount() catch 1);
         var parallel_pool = try parallel_rows.Pool.init(allocator, resolved_thread_count);
         errdefer parallel_pool.deinit();
         var workspace = try Workspace.init(allocator, cfg);

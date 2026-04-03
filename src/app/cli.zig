@@ -320,6 +320,7 @@ pub fn run(allocator: std.mem.Allocator) !void {
         var model_dir: []const u8 = default_bert_model_dir;
         var bind_host: []const u8 = "0.0.0.0";
         var port: u16 = 8787;
+        var runtime_count: usize = defaultServeRuntimeCount();
 
         if (args.len >= 3 and looksLikePath(args[2])) {
             model_dir = args[2];
@@ -329,6 +330,9 @@ pub fn run(allocator: std.mem.Allocator) !void {
             if (args.len >= 5) {
                 bind_host = args[4];
             }
+            if (args.len >= 6) {
+                runtime_count = try std.fmt.parseInt(usize, args[5], 10);
+            }
         } else {
             if (args.len >= 3) {
                 port = try std.fmt.parseInt(u16, args[2], 10);
@@ -336,9 +340,12 @@ pub fn run(allocator: std.mem.Allocator) !void {
             if (args.len >= 4) {
                 bind_host = args[3];
             }
+            if (args.len >= 5) {
+                runtime_count = try std.fmt.parseInt(usize, args[4], 10);
+            }
         }
 
-        try cli_serve_bert.serve(allocator, model_dir, bind_host, port);
+        try cli_serve_bert.serve(allocator, model_dir, bind_host, port, runtime_count);
         return;
     }
 
@@ -393,4 +400,9 @@ fn parseEmbeddingMode(text: []const u8) !bert_mlm.EmbeddingMode {
     if (std.mem.eql(u8, text, "cls")) return .cls;
     if (std.mem.eql(u8, text, "mean")) return .mean;
     return error.InvalidEmbeddingMode;
+}
+
+fn defaultServeRuntimeCount() usize {
+    const cpu_count = @max(@as(usize, 1), std.Thread.getCpuCount() catch 1);
+    return @max(@as(usize, 1), cpu_count / 8);
 }
