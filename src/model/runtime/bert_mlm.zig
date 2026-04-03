@@ -2,9 +2,10 @@ const std = @import("std");
 const cpu = @import("../../kernel/core/cpu.zig");
 const attention = @import("../../kernel/attention/basic.zig");
 const logits_util = @import("../layers/logits.zig");
-const tensor_store = @import("../../tensor/storage/store.zig");
 const bert_family = @import("../families/bert/family.zig");
 const decoder_types = @import("decoder_types.zig");
+const tensor_backend = @import("../../tensor/backends/backend.zig");
+const parallel_rows = @import("../../tensor/parallel/parallel_rows.zig");
 
 const word_embeddings_name = "bert.embeddings.word_embeddings.weight";
 const position_embeddings_name = "bert.embeddings.position_embeddings.weight";
@@ -40,22 +41,67 @@ pub const EmbeddingMode = enum {
     }
 };
 
-pub const EncodedSequence = struct {
+const EncoderOutput = struct {
     hidden: []f32,
     seq_len: usize,
+};
 
-    pub fn deinit(self: *EncodedSequence, allocator: std.mem.Allocator) void {
-        allocator.free(self.hidden);
+const Workspace = struct {
+    hidden_a: []f32,
+    hidden_b: []f32,
+    projected_q: []f32,
+    projected_k: []f32,
+    projected_v: []f32,
+    attention_context: []f32,
+    position_embedding: []f32,
+    token_hidden: []f32,
+    normed_hidden: []f32,
+    intermediate: []f32,
+    scores: []f32,
+    logits: []f32,
+    empty_scratch: [0]u8 = .{},
+
+    fn init(allocator: std.mem.Allocator, cfg: decoder_types.DecoderConfig) !Workspace {
+        const hidden_bytes = cfg.max_position_embeddings * cfg.hidden_size;
+        return .{
+            .hidden_a = try allocator.alloc(f32, hidden_bytes),
+            .hidden_b = try allocator.alloc(f32, hidden_bytes),
+            .projected_q = try allocator.alloc(f32, hidden_bytes),
+            .projected_k = try allocator.alloc(f32, hidden_bytes),
+            .projected_v = try allocator.alloc(f32, hidden_bytes),
+            .attention_context = try allocator.alloc(f32, hidden_bytes),
+            .position_embedding = try allocator.alloc(f32, cfg.hidden_size),
+            .token_hidden = try allocator.alloc(f32, cfg.hidden_size),
+            .normed_hidden = try allocator.alloc(f32, cfg.hidden_size),
+            .intermediate = try allocator.alloc(f32, cfg.intermediate_size),
+            .scores = try allocator.alloc(f32, cfg.max_position_embeddings * cfg.max_position_embeddings),
+            .logits = try allocator.alloc(f32, cfg.vocab_size),
+        };
+    }
+
+    fn deinit(self: *Workspace, allocator: std.mem.Allocator) void {
+        allocator.free(self.hidden_a);
+        allocator.free(self.hidden_b);
+        allocator.free(self.projected_q);
+        allocator.free(self.projected_k);
+        allocator.free(self.projected_v);
+        allocator.free(self.attention_context);
+        allocator.free(self.position_embedding);
+        allocator.free(self.token_hidden);
+        allocator.free(self.normed_hidden);
+        allocator.free(self.intermediate);
+        allocator.free(self.scores);
+        allocator.free(self.logits);
     }
 };
 
 const LayerWeights = struct {
-    query_weight_name: []u8,
-    key_weight_name: []u8,
-    value_weight_name: []u8,
-    attention_output_weight_name: []u8,
-    intermediate_weight_name: []u8,
-    output_weight_name: []u8,
+    query_tensor: tensor_backend.Backend.TensorHandle,
+    key_tensor: tensor_backend.Backend.TensorHandle,
+    value_tensor: tensor_backend.Backend.TensorHandle,
+    attention_output_tensor: tensor_backend.Backend.TensorHandle,
+    intermediate_tensor: tensor_backend.Backend.TensorHandle,
+    output_tensor: tensor_backend.Backend.TensorHandle,
     query_bias: []f32,
     key_bias: []f32,
     value_bias: []f32,
@@ -69,38 +115,32 @@ const LayerWeights = struct {
 
     fn init(
         allocator: std.mem.Allocator,
-        store: *const tensor_store.TensorStore,
+        backend: *const tensor_backend.Backend,
         layer_index: usize,
         hidden_size: usize,
         intermediate_size: usize,
     ) !LayerWeights {
         return .{
-            .query_weight_name = try std.fmt.allocPrint(allocator, "bert.encoder.layer.{d}.attention.self.query.weight", .{layer_index}),
-            .key_weight_name = try std.fmt.allocPrint(allocator, "bert.encoder.layer.{d}.attention.self.key.weight", .{layer_index}),
-            .value_weight_name = try std.fmt.allocPrint(allocator, "bert.encoder.layer.{d}.attention.self.value.weight", .{layer_index}),
-            .attention_output_weight_name = try std.fmt.allocPrint(allocator, "bert.encoder.layer.{d}.attention.output.dense.weight", .{layer_index}),
-            .intermediate_weight_name = try std.fmt.allocPrint(allocator, "bert.encoder.layer.{d}.intermediate.dense.weight", .{layer_index}),
-            .output_weight_name = try std.fmt.allocPrint(allocator, "bert.encoder.layer.{d}.output.dense.weight", .{layer_index}),
-            .query_bias = try loadVector(allocator, store, layer_index, "attention.self.query.bias", hidden_size),
-            .key_bias = try loadVector(allocator, store, layer_index, "attention.self.key.bias", hidden_size),
-            .value_bias = try loadVector(allocator, store, layer_index, "attention.self.value.bias", hidden_size),
-            .attention_output_bias = try loadVector(allocator, store, layer_index, "attention.output.dense.bias", hidden_size),
-            .attention_norm_weight = try loadVector(allocator, store, layer_index, "attention.output.LayerNorm.gamma", hidden_size),
-            .attention_norm_bias = try loadVector(allocator, store, layer_index, "attention.output.LayerNorm.beta", hidden_size),
-            .intermediate_bias = try loadVector(allocator, store, layer_index, "intermediate.dense.bias", intermediate_size),
-            .output_bias = try loadVector(allocator, store, layer_index, "output.dense.bias", hidden_size),
-            .output_norm_weight = try loadVector(allocator, store, layer_index, "output.LayerNorm.gamma", hidden_size),
-            .output_norm_bias = try loadVector(allocator, store, layer_index, "output.LayerNorm.beta", hidden_size),
+            .query_tensor = try resolveLayerTensor(allocator, backend, layer_index, "attention.self.query.weight"),
+            .key_tensor = try resolveLayerTensor(allocator, backend, layer_index, "attention.self.key.weight"),
+            .value_tensor = try resolveLayerTensor(allocator, backend, layer_index, "attention.self.value.weight"),
+            .attention_output_tensor = try resolveLayerTensor(allocator, backend, layer_index, "attention.output.dense.weight"),
+            .intermediate_tensor = try resolveLayerTensor(allocator, backend, layer_index, "intermediate.dense.weight"),
+            .output_tensor = try resolveLayerTensor(allocator, backend, layer_index, "output.dense.weight"),
+            .query_bias = try loadLayerVector(allocator, backend, layer_index, "attention.self.query.bias", hidden_size),
+            .key_bias = try loadLayerVector(allocator, backend, layer_index, "attention.self.key.bias", hidden_size),
+            .value_bias = try loadLayerVector(allocator, backend, layer_index, "attention.self.value.bias", hidden_size),
+            .attention_output_bias = try loadLayerVector(allocator, backend, layer_index, "attention.output.dense.bias", hidden_size),
+            .attention_norm_weight = try loadLayerVector(allocator, backend, layer_index, "attention.output.LayerNorm.gamma", hidden_size),
+            .attention_norm_bias = try loadLayerVector(allocator, backend, layer_index, "attention.output.LayerNorm.beta", hidden_size),
+            .intermediate_bias = try loadLayerVector(allocator, backend, layer_index, "intermediate.dense.bias", intermediate_size),
+            .output_bias = try loadLayerVector(allocator, backend, layer_index, "output.dense.bias", hidden_size),
+            .output_norm_weight = try loadLayerVector(allocator, backend, layer_index, "output.LayerNorm.gamma", hidden_size),
+            .output_norm_bias = try loadLayerVector(allocator, backend, layer_index, "output.LayerNorm.beta", hidden_size),
         };
     }
 
     fn deinit(self: *LayerWeights, allocator: std.mem.Allocator) void {
-        allocator.free(self.query_weight_name);
-        allocator.free(self.key_weight_name);
-        allocator.free(self.value_weight_name);
-        allocator.free(self.attention_output_weight_name);
-        allocator.free(self.intermediate_weight_name);
-        allocator.free(self.output_weight_name);
         allocator.free(self.query_bias);
         allocator.free(self.key_bias);
         allocator.free(self.value_bias);
@@ -118,7 +158,13 @@ pub const Runtime = struct {
     allocator: std.mem.Allocator,
     cfg: decoder_types.DecoderConfig,
     tokenizer: bert_family.TokenizerImpl,
-    store: tensor_store.TensorStore,
+    backend: tensor_backend.Backend,
+    parallel_pool: parallel_rows.Pool,
+    thread_count: usize,
+    workspace: Workspace,
+    word_embeddings_tensor: tensor_backend.Backend.TensorHandle,
+    position_embeddings_tensor: tensor_backend.Backend.TensorHandle,
+    mlm_transform_tensor: tensor_backend.Backend.TensorHandle,
     layers: []LayerWeights,
     embeddings_norm_weight: []f32,
     embeddings_norm_bias: []f32,
@@ -141,25 +187,33 @@ pub const Runtime = struct {
         var tokenizer = try bert_family.loadTokenizerFromModelDir(allocator, model_dir);
         errdefer tokenizer.deinit();
 
-        const weights_path = try std.fs.path.join(allocator, &.{ model_dir, "model.safetensors" });
-        defer allocator.free(weights_path);
-        var store = try tensor_store.TensorStore.open(allocator, weights_path);
-        errdefer store.deinit();
+        var backend = try tensor_backend.Backend.openFromModelDir(allocator, model_dir, .auto);
+        errdefer backend.deinit();
 
         const cfg = parsed_config.value;
-        const embeddings_norm_weight = try store.readElementsAsF32Alloc("bert.embeddings.LayerNorm.gamma", 0, cfg.hidden_size);
+        const resolved_thread_count = @max(1, std.Thread.getCpuCount() catch 1);
+        var parallel_pool = try parallel_rows.Pool.init(allocator, resolved_thread_count);
+        errdefer parallel_pool.deinit();
+        var workspace = try Workspace.init(allocator, cfg);
+        errdefer workspace.deinit(allocator);
+
+        const word_embeddings_tensor = try backend.resolveTensor(word_embeddings_name);
+        const position_embeddings_tensor = try backend.resolveTensor(position_embeddings_name);
+        const mlm_transform_tensor = try backend.resolveTensor(mlm_transform_weight_name);
+
+        const embeddings_norm_weight = try loadVectorByName(allocator, &backend, "bert.embeddings.LayerNorm.gamma", cfg.hidden_size);
         errdefer allocator.free(embeddings_norm_weight);
-        const embeddings_norm_bias = try store.readElementsAsF32Alloc("bert.embeddings.LayerNorm.beta", 0, cfg.hidden_size);
+        const embeddings_norm_bias = try loadVectorByName(allocator, &backend, "bert.embeddings.LayerNorm.beta", cfg.hidden_size);
         errdefer allocator.free(embeddings_norm_bias);
-        const token_type_zero_embedding = try store.readRowAsF32Alloc("bert.embeddings.token_type_embeddings.weight", 0);
+        const token_type_zero_embedding = try loadRowByName(allocator, &backend, "bert.embeddings.token_type_embeddings.weight", 0, cfg.hidden_size);
         errdefer allocator.free(token_type_zero_embedding);
-        const mlm_transform_bias = try store.readElementsAsF32Alloc("cls.predictions.transform.dense.bias", 0, cfg.hidden_size);
+        const mlm_transform_bias = try loadVectorByName(allocator, &backend, "cls.predictions.transform.dense.bias", cfg.hidden_size);
         errdefer allocator.free(mlm_transform_bias);
-        const mlm_norm_weight = try store.readElementsAsF32Alloc("cls.predictions.transform.LayerNorm.gamma", 0, cfg.hidden_size);
+        const mlm_norm_weight = try loadVectorByName(allocator, &backend, "cls.predictions.transform.LayerNorm.gamma", cfg.hidden_size);
         errdefer allocator.free(mlm_norm_weight);
-        const mlm_norm_bias = try store.readElementsAsF32Alloc("cls.predictions.transform.LayerNorm.beta", 0, cfg.hidden_size);
+        const mlm_norm_bias = try loadVectorByName(allocator, &backend, "cls.predictions.transform.LayerNorm.beta", cfg.hidden_size);
         errdefer allocator.free(mlm_norm_bias);
-        const mlm_bias = try store.readElementsAsF32Alloc("cls.predictions.bias", 0, cfg.vocab_size);
+        const mlm_bias = try loadVectorByName(allocator, &backend, "cls.predictions.bias", cfg.vocab_size);
         errdefer allocator.free(mlm_bias);
 
         const cls_token_id = tokenizer.idForToken(tokenizer.cls_token) orelse return error.MissingClsToken;
@@ -172,9 +226,8 @@ pub const Runtime = struct {
         errdefer {
             for (layers[0..initialized]) |*layer| layer.deinit(allocator);
         }
-
         for (layers, 0..) |*layer, layer_index| {
-            layer.* = try LayerWeights.init(allocator, &store, layer_index, cfg.hidden_size, cfg.intermediate_size);
+            layer.* = try LayerWeights.init(allocator, &backend, layer_index, cfg.hidden_size, cfg.intermediate_size);
             initialized += 1;
         }
 
@@ -183,7 +236,13 @@ pub const Runtime = struct {
             .allocator = allocator,
             .cfg = cfg,
             .tokenizer = tokenizer,
-            .store = store,
+            .backend = backend,
+            .parallel_pool = parallel_pool,
+            .thread_count = resolved_thread_count,
+            .workspace = workspace,
+            .word_embeddings_tensor = word_embeddings_tensor,
+            .position_embeddings_tensor = position_embeddings_tensor,
+            .mlm_transform_tensor = mlm_transform_tensor,
             .layers = layers,
             .embeddings_norm_weight = embeddings_norm_weight,
             .embeddings_norm_bias = embeddings_norm_bias,
@@ -208,7 +267,9 @@ pub const Runtime = struct {
         self.allocator.free(self.mlm_norm_weight);
         self.allocator.free(self.mlm_norm_bias);
         self.allocator.free(self.mlm_bias);
-        self.store.deinit();
+        self.workspace.deinit(self.allocator);
+        self.parallel_pool.deinit();
+        self.backend.deinit();
         self.tokenizer.deinit();
     }
 
@@ -231,24 +292,38 @@ pub const Runtime = struct {
         const input_ids = try self.wrapEncodedWithSpecialTokensAlloc(encoded);
         defer self.allocator.free(input_ids);
         const mask_position = mask_index + 1;
-        var encoded_sequence = try self.runEncoder(input_ids);
-        defer encoded_sequence.deinit(self.allocator);
+        const encoded_output = try self.runEncoder(input_ids);
 
-        const token_hidden = try self.allocator.alloc(f32, self.cfg.hidden_size);
-        defer self.allocator.free(token_hidden);
-        const logits = try self.allocator.alloc(f32, self.cfg.vocab_size);
-        defer self.allocator.free(logits);
+        const masked_hidden = encoded_output.hidden[mask_position * self.cfg.hidden_size ..][0..self.cfg.hidden_size];
+        try self.backend.matmulVec(
+            self.workspace.token_hidden,
+            self.mlm_transform_tensor,
+            masked_hidden,
+            self.thread_count,
+            &self.parallel_pool,
+            self.workspace.empty_scratch[0..],
+        );
+        addBiasInPlace(self.workspace.token_hidden, self.mlm_transform_bias);
+        cpu.geluInPlace(self.workspace.token_hidden);
+        try cpu.layerNorm(
+            self.workspace.token_hidden,
+            self.workspace.token_hidden,
+            self.mlm_norm_weight,
+            self.mlm_norm_bias,
+            @floatCast(self.cfg.rms_norm_eps),
+        );
 
-        const masked_hidden = encoded_sequence.hidden[mask_position * self.cfg.hidden_size ..][0..self.cfg.hidden_size];
-        try self.store.matmulVecByName(token_hidden, mlm_transform_weight_name, masked_hidden);
-        addBiasInPlace(token_hidden, self.mlm_transform_bias);
-        cpu.geluInPlace(token_hidden);
-        try cpu.layerNorm(token_hidden, token_hidden, self.mlm_norm_weight, self.mlm_norm_bias, @floatCast(self.cfg.rms_norm_eps));
+        try self.backend.matmulVec(
+            self.workspace.logits,
+            self.word_embeddings_tensor,
+            self.workspace.token_hidden,
+            self.thread_count,
+            &self.parallel_pool,
+            self.workspace.empty_scratch[0..],
+        );
+        addBiasInPlace(self.workspace.logits, self.mlm_bias);
 
-        try self.store.matmulVecByName(logits, word_embeddings_name, token_hidden);
-        addBiasInPlace(logits, self.mlm_bias);
-
-        const top = try logits_util.topKLogitsAlloc(self.allocator, logits, top_k);
+        const top = try logits_util.topKLogitsAlloc(self.allocator, self.workspace.logits, top_k);
         defer self.allocator.free(top);
 
         const predictions = try self.allocator.alloc(Prediction, top.len);
@@ -276,33 +351,26 @@ pub const Runtime = struct {
 
         const input_ids = try self.wrapEncodedWithSpecialTokensAlloc(encoded);
         defer self.allocator.free(input_ids);
-
-        var encoded_sequence = try self.runEncoder(input_ids);
-        defer encoded_sequence.deinit(self.allocator);
+        const encoded_output = try self.runEncoder(input_ids);
 
         const embedding = try self.allocator.alloc(f32, self.cfg.hidden_size);
-
         switch (mode) {
             .cls => {
-                @memcpy(embedding, encoded_sequence.hidden[0..self.cfg.hidden_size]);
+                @memcpy(embedding, encoded_output.hidden[0..self.cfg.hidden_size]);
             },
             .mean => {
                 @memset(embedding, 0.0);
-                const start: usize = if (encoded_sequence.seq_len > 2) 1 else 0;
-                const end: usize = if (encoded_sequence.seq_len > 2) encoded_sequence.seq_len - 1 else encoded_sequence.seq_len;
+                const start: usize = if (encoded_output.seq_len > 2) 1 else 0;
+                const end: usize = if (encoded_output.seq_len > 2) encoded_output.seq_len - 1 else encoded_output.seq_len;
                 const token_count = @max(@as(usize, 1), end - start);
-
                 for (start..end) |position| {
-                    const hidden_slice = encoded_sequence.hidden[position * self.cfg.hidden_size ..][0..self.cfg.hidden_size];
-                    for (embedding, hidden_slice) |*out, value| {
-                        out.* += value;
-                    }
+                    const hidden_slice = encoded_output.hidden[position * self.cfg.hidden_size ..][0..self.cfg.hidden_size];
+                    for (embedding, hidden_slice) |*out, value| out.* += value;
                 }
                 const scale = 1.0 / @as(f32, @floatFromInt(token_count));
                 for (embedding) |*value| value.* *= scale;
             },
         }
-
         return embedding;
     }
 
@@ -319,33 +387,19 @@ pub const Runtime = struct {
         return input_ids;
     }
 
-    fn runEncoder(self: *Runtime, input_ids: []const usize) !EncodedSequence {
+    fn runEncoder(self: *Runtime, input_ids: []const usize) !EncoderOutput {
         const seq_len = input_ids.len;
-        const hidden_bytes = seq_len * self.cfg.hidden_size;
-        const hidden_a = try self.allocator.alloc(f32, hidden_bytes);
-        defer self.allocator.free(hidden_a);
-        const hidden_b = try self.allocator.alloc(f32, hidden_bytes);
-        defer self.allocator.free(hidden_b);
-        const projected_q = try self.allocator.alloc(f32, hidden_bytes);
-        defer self.allocator.free(projected_q);
-        const projected_k = try self.allocator.alloc(f32, hidden_bytes);
-        defer self.allocator.free(projected_k);
-        const projected_v = try self.allocator.alloc(f32, hidden_bytes);
-        defer self.allocator.free(projected_v);
-        const attention_context = try self.allocator.alloc(f32, hidden_bytes);
-        defer self.allocator.free(attention_context);
-        const position_embedding = try self.allocator.alloc(f32, self.cfg.hidden_size);
-        defer self.allocator.free(position_embedding);
-        const token_hidden = try self.allocator.alloc(f32, self.cfg.hidden_size);
-        defer self.allocator.free(token_hidden);
-        const normed_hidden = try self.allocator.alloc(f32, self.cfg.hidden_size);
-        defer self.allocator.free(normed_hidden);
-        const intermediate = try self.allocator.alloc(f32, self.cfg.intermediate_size);
-        defer self.allocator.free(intermediate);
-        const scores = try self.allocator.alloc(f32, seq_len);
-        defer self.allocator.free(scores);
+        const hidden_len = seq_len * self.cfg.hidden_size;
 
-        try self.embedInputs(input_ids, hidden_a, position_embedding);
+        const hidden_a = self.workspace.hidden_a[0..hidden_len];
+        const hidden_b = self.workspace.hidden_b[0..hidden_len];
+        const projected_q = self.workspace.projected_q[0..hidden_len];
+        const projected_k = self.workspace.projected_k[0..hidden_len];
+        const projected_v = self.workspace.projected_v[0..hidden_len];
+        const attention_context = self.workspace.attention_context[0..hidden_len];
+        const scores = self.workspace.scores[0 .. seq_len * seq_len];
+
+        try self.embedInputs(input_ids, hidden_a);
 
         var hidden_in = hidden_a;
         var hidden_out = hidden_b;
@@ -359,32 +413,34 @@ pub const Runtime = struct {
                 projected_k,
                 projected_v,
                 attention_context,
-                token_hidden,
-                normed_hidden,
-                intermediate,
                 scores,
             );
             std.mem.swap([]f32, &hidden_in, &hidden_out);
         }
 
         return .{
-            .hidden = try self.allocator.dupe(f32, hidden_in),
+            .hidden = hidden_in,
             .seq_len = seq_len,
         };
     }
 
-    fn embedInputs(
-        self: *Runtime,
-        input_ids: []const usize,
-        hidden: []f32,
-        position_embedding: []f32,
-    ) !void {
+    fn embedInputs(self: *Runtime, input_ids: []const usize, hidden: []f32) !void {
         for (input_ids, 0..) |token_id, position| {
             const hidden_slice = hidden[position * self.cfg.hidden_size ..][0..self.cfg.hidden_size];
-            try self.store.readRowAsF32Into(word_embeddings_name, token_id, hidden_slice, &.{});
-            try self.store.readRowAsF32Into(position_embeddings_name, position, position_embedding, &.{});
+            try self.backend.readRowIntoTensor(
+                self.word_embeddings_tensor,
+                token_id,
+                hidden_slice,
+                self.workspace.empty_scratch[0..],
+            );
+            try self.backend.readRowIntoTensor(
+                self.position_embeddings_tensor,
+                position,
+                self.workspace.position_embedding,
+                self.workspace.empty_scratch[0..],
+            );
             try cpu.axpyInPlace(hidden_slice, 1.0, self.token_type_zero_embedding);
-            try cpu.axpyInPlace(hidden_slice, 1.0, position_embedding);
+            try cpu.axpyInPlace(hidden_slice, 1.0, self.workspace.position_embedding);
             try cpu.layerNorm(
                 hidden_slice,
                 hidden_slice,
@@ -405,9 +461,6 @@ pub const Runtime = struct {
         projected_k: []f32,
         projected_v: []f32,
         attention_context: []f32,
-        token_hidden: []f32,
-        normed_hidden: []f32,
-        intermediate: []f32,
         scores: []f32,
     ) !void {
         for (0..seq_len) |position| {
@@ -416,11 +469,11 @@ pub const Runtime = struct {
             const k_slice = projected_k[position * self.cfg.hidden_size ..][0..self.cfg.hidden_size];
             const v_slice = projected_v[position * self.cfg.hidden_size ..][0..self.cfg.hidden_size];
 
-            try self.store.matmulVecByName(q_slice, layer.query_weight_name, input_slice);
+            try self.backend.matmulVec(q_slice, layer.query_tensor, input_slice, self.thread_count, &self.parallel_pool, self.workspace.empty_scratch[0..]);
             addBiasInPlace(q_slice, layer.query_bias);
-            try self.store.matmulVecByName(k_slice, layer.key_weight_name, input_slice);
+            try self.backend.matmulVec(k_slice, layer.key_tensor, input_slice, self.thread_count, &self.parallel_pool, self.workspace.empty_scratch[0..]);
             addBiasInPlace(k_slice, layer.key_bias);
-            try self.store.matmulVecByName(v_slice, layer.value_weight_name, input_slice);
+            try self.backend.matmulVec(v_slice, layer.value_tensor, input_slice, self.thread_count, &self.parallel_pool, self.workspace.empty_scratch[0..]);
             addBiasInPlace(v_slice, layer.value_bias);
         }
 
@@ -431,19 +484,52 @@ pub const Runtime = struct {
             const output_slice = hidden_out[position * self.cfg.hidden_size ..][0..self.cfg.hidden_size];
             const context_slice = attention_context[position * self.cfg.hidden_size ..][0..self.cfg.hidden_size];
 
-            try self.store.matmulVecByName(token_hidden, layer.attention_output_weight_name, context_slice);
-            addBiasInPlace(token_hidden, layer.attention_output_bias);
-            try cpu.axpyInPlace(token_hidden, 1.0, input_slice);
-            try cpu.layerNorm(normed_hidden, token_hidden, layer.attention_norm_weight, layer.attention_norm_bias, @floatCast(self.cfg.rms_norm_eps));
+            try self.backend.matmulVec(
+                self.workspace.token_hidden,
+                layer.attention_output_tensor,
+                context_slice,
+                self.thread_count,
+                &self.parallel_pool,
+                self.workspace.empty_scratch[0..],
+            );
+            addBiasInPlace(self.workspace.token_hidden, layer.attention_output_bias);
+            try cpu.axpyInPlace(self.workspace.token_hidden, 1.0, input_slice);
+            try cpu.layerNorm(
+                self.workspace.normed_hidden,
+                self.workspace.token_hidden,
+                layer.attention_norm_weight,
+                layer.attention_norm_bias,
+                @floatCast(self.cfg.rms_norm_eps),
+            );
 
-            try self.store.matmulVecByName(intermediate, layer.intermediate_weight_name, normed_hidden);
-            addBiasInPlace(intermediate, layer.intermediate_bias);
-            cpu.geluInPlace(intermediate);
+            try self.backend.matmulVec(
+                self.workspace.intermediate,
+                layer.intermediate_tensor,
+                self.workspace.normed_hidden,
+                self.thread_count,
+                &self.parallel_pool,
+                self.workspace.empty_scratch[0..],
+            );
+            addBiasInPlace(self.workspace.intermediate, layer.intermediate_bias);
+            cpu.geluInPlace(self.workspace.intermediate);
 
-            try self.store.matmulVecByName(token_hidden, layer.output_weight_name, intermediate);
-            addBiasInPlace(token_hidden, layer.output_bias);
-            try cpu.axpyInPlace(token_hidden, 1.0, normed_hidden);
-            try cpu.layerNorm(output_slice, token_hidden, layer.output_norm_weight, layer.output_norm_bias, @floatCast(self.cfg.rms_norm_eps));
+            try self.backend.matmulVec(
+                self.workspace.token_hidden,
+                layer.output_tensor,
+                self.workspace.intermediate,
+                self.thread_count,
+                &self.parallel_pool,
+                self.workspace.empty_scratch[0..],
+            );
+            addBiasInPlace(self.workspace.token_hidden, layer.output_bias);
+            try cpu.axpyInPlace(self.workspace.token_hidden, 1.0, self.workspace.normed_hidden);
+            try cpu.layerNorm(
+                output_slice,
+                self.workspace.token_hidden,
+                layer.output_norm_weight,
+                layer.output_norm_bias,
+                @floatCast(self.cfg.rms_norm_eps),
+            );
         }
     }
 
@@ -456,26 +542,79 @@ pub const Runtime = struct {
         output: []f32,
         scores: []f32,
     ) !void {
+        const Context = struct {
+            runtime: *Runtime,
+            seq_len: usize,
+            projected_q: []const f32,
+            projected_k: []const f32,
+            projected_v: []const f32,
+            output: []f32,
+            scores: []f32,
+
+            fn runRange(ctx_ptr: *anyopaque, start_row: usize, end_row: usize) void {
+                const ctx: *@This() = @ptrCast(@alignCast(ctx_ptr));
+                ctx.runtime.computeAttentionRange(
+                    ctx.seq_len,
+                    ctx.projected_q,
+                    ctx.projected_k,
+                    ctx.projected_v,
+                    ctx.output,
+                    ctx.scores,
+                    start_row,
+                    end_row,
+                ) catch unreachable;
+            }
+        };
+
+        if (shouldParallelizeAttention(seq_len, self.cfg.hidden_size, self.thread_count, self.parallel_pool.workerCount() > 1)) {
+            var context = Context{
+                .runtime = self,
+                .seq_len = seq_len,
+                .projected_q = projected_q,
+                .projected_k = projected_k,
+                .projected_v = projected_v,
+                .output = output,
+                .scores = scores,
+            };
+            self.parallel_pool.run(seq_len, &context, Context.runRange);
+            return;
+        }
+
+        try self.computeAttentionRange(seq_len, projected_q, projected_k, projected_v, output, scores, 0, seq_len);
+    }
+
+    fn computeAttentionRange(
+        self: *Runtime,
+        seq_len: usize,
+        projected_q: []const f32,
+        projected_k: []const f32,
+        projected_v: []const f32,
+        output: []f32,
+        scores: []f32,
+        start_query: usize,
+        end_query: usize,
+    ) !void {
         const head_count = self.cfg.num_attention_heads;
         const head_dim = self.cfg.head_dim;
         const scale = 1.0 / @sqrt(@as(f32, @floatFromInt(head_dim)));
 
-        for (0..seq_len) |query_position| {
+        for (start_query..end_query) |query_position| {
             const out_slice = output[query_position * self.cfg.hidden_size ..][0..self.cfg.hidden_size];
+            const score_slice = scores[query_position * seq_len ..][0..seq_len];
             @memset(out_slice, 0.0);
 
             for (0..head_count) |head_index| {
                 const query_head = projected_q[query_position * self.cfg.hidden_size + head_index * head_dim ..][0..head_dim];
                 for (0..seq_len) |key_position| {
                     const key_head = projected_k[key_position * self.cfg.hidden_size + head_index * head_dim ..][0..head_dim];
-                    scores[key_position] = (try cpu.dot(query_head, key_head)) * scale;
+                    score_slice[key_position] = (try cpu.dot(query_head, key_head)) * scale;
                 }
-                try attention.softmaxInPlace(scores[0..seq_len]);
+                try attention.softmaxInPlace(score_slice);
 
                 const out_head = out_slice[head_index * head_dim ..][0..head_dim];
                 for (0..seq_len) |key_position| {
                     const value_head = projected_v[key_position * self.cfg.hidden_size + head_index * head_dim ..][0..head_dim];
-                    try cpu.axpyInPlace(out_head, scores[key_position], value_head);
+                    try cpu.axpyInPlace(out_head, score_slice[key_position], value_head);
                 }
             }
         }
@@ -489,14 +628,56 @@ fn addBiasInPlace(values: []f32, bias: []const f32) void {
     }
 }
 
-fn loadVector(
+fn resolveLayerTensor(
     allocator: std.mem.Allocator,
-    store: *const tensor_store.TensorStore,
+    backend: *const tensor_backend.Backend,
+    layer_index: usize,
+    suffix: []const u8,
+) !tensor_backend.Backend.TensorHandle {
+    const name = try std.fmt.allocPrint(allocator, "bert.encoder.layer.{d}.{s}", .{ layer_index, suffix });
+    defer allocator.free(name);
+    return try backend.resolveTensor(name);
+}
+
+fn loadLayerVector(
+    allocator: std.mem.Allocator,
+    backend: *const tensor_backend.Backend,
     layer_index: usize,
     suffix: []const u8,
     count: usize,
 ) ![]f32 {
     const name = try std.fmt.allocPrint(allocator, "bert.encoder.layer.{d}.{s}", .{ layer_index, suffix });
     defer allocator.free(name);
-    return try store.readElementsAsF32Alloc(name, 0, count);
+    return try loadVectorByName(allocator, backend, name, count);
+}
+
+fn loadVectorByName(
+    allocator: std.mem.Allocator,
+    backend: *const tensor_backend.Backend,
+    name: []const u8,
+    count: usize,
+) ![]f32 {
+    const values = try allocator.alloc(f32, count);
+    errdefer allocator.free(values);
+    try backend.readVectorInto(name, values, &.{});
+    return values;
+}
+
+fn loadRowByName(
+    allocator: std.mem.Allocator,
+    backend: *const tensor_backend.Backend,
+    name: []const u8,
+    row_index: usize,
+    row_width: usize,
+) ![]f32 {
+    const values = try allocator.alloc(f32, row_width);
+    errdefer allocator.free(values);
+    try backend.readRowInto(name, row_index, values, &.{});
+    return values;
+}
+
+fn shouldParallelizeAttention(seq_len: usize, hidden_size: usize, thread_count: usize, has_pool: bool) bool {
+    if (!has_pool or thread_count <= 1) return false;
+    const work = std.math.mul(u64, seq_len * seq_len, hidden_size) catch return true;
+    return work >= 131_072;
 }

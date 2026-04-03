@@ -4,33 +4,38 @@ const kernels = @import("kernels.zig");
 const types = @import("types.zig");
 const parallel_rows = @import("../../parallel/parallel_rows.zig");
 const tensor_store = @import("../../storage/store.zig");
+const mapped_file = @import("../../storage/mapped_file.zig");
 
 pub const Store = struct {
     allocator: std.mem.Allocator,
-    bytes: []u8,
+    bytes: []align(std.heap.page_size_min) const u8,
     parsed: types.ParsedFile,
 
     pub fn open(allocator: std.mem.Allocator, path: []const u8) !Store {
-        const bytes = if (std.fs.path.isAbsolute(path)) blk: {
-            const file = try std.fs.openFileAbsolute(path, .{});
-            defer file.close();
-            break :blk try file.readToEndAlloc(allocator, std.math.maxInt(usize));
-        } else try std.fs.cwd().readFileAlloc(allocator, path, std.math.maxInt(usize));
-        errdefer allocator.free(bytes);
+        const file = if (std.fs.path.isAbsolute(path))
+            try std.fs.openFileAbsolute(path, .{})
+        else
+            try std.fs.cwd().openFile(path, .{});
+        errdefer file.close();
 
-        var parsed = try file_impl.parseFromBytes(allocator, bytes);
+        var mapped = try mapped_file.MappedFile.open(file);
+        file.close();
+        errdefer mapped.deinit();
+
+        var parsed = try file_impl.parseFromBytes(allocator, mapped.bytes);
         errdefer parsed.deinit();
 
         return .{
             .allocator = allocator,
-            .bytes = bytes,
+            .bytes = mapped.bytes,
             .parsed = parsed,
         };
     }
 
     pub fn deinit(self: *Store) void {
         self.parsed.deinit();
-        self.allocator.free(self.bytes);
+        var mapped = mapped_file.MappedFile{ .bytes = self.bytes };
+        mapped.deinit();
     }
 
     pub fn getTensor(self: *const Store, name: []const u8) ?types.TensorInfo {
@@ -253,7 +258,7 @@ pub const Store = struct {
 fn shouldParallelize(rows: usize, cols: usize, thread_count: usize, has_parallel_backend: bool) bool {
     if (!has_parallel_backend or thread_count <= 1) return false;
     const work = std.math.mul(u64, rows, cols) catch return true;
-    return work >= 1_000_000;
+    return work >= 262_144;
 }
 
 test "quantized store matmulVecByName matches q8 rows for hot width" {

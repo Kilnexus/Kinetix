@@ -3,33 +3,38 @@ const kernel_registry = @import("../../kernel/registry.zig");
 const bfloat16 = @import("../formats/bfloat16.zig");
 const parallel_rows = @import("../parallel/parallel_rows.zig");
 const safetensors = @import("../../format/safetensors.zig");
+const mapped_file = @import("mapped_file.zig");
 
 pub const TensorStore = struct {
     allocator: std.mem.Allocator,
-    bytes: []u8,
+    bytes: []align(std.heap.page_size_min) const u8,
     parsed: safetensors.ParsedFile,
 
     pub fn open(allocator: std.mem.Allocator, weights_path: []const u8) !TensorStore {
-        const bytes = if (std.fs.path.isAbsolute(weights_path)) blk: {
-            const file = try std.fs.openFileAbsolute(weights_path, .{});
-            defer file.close();
-            break :blk try file.readToEndAlloc(allocator, std.math.maxInt(usize));
-        } else try std.fs.cwd().readFileAlloc(allocator, weights_path, std.math.maxInt(usize));
-        errdefer allocator.free(bytes);
+        const file = if (std.fs.path.isAbsolute(weights_path))
+            try std.fs.openFileAbsolute(weights_path, .{})
+        else
+            try std.fs.cwd().openFile(weights_path, .{});
+        errdefer file.close();
 
-        var parsed = try safetensors.parseFromBytes(allocator, bytes);
+        var mapped = try mapped_file.MappedFile.open(file);
+        file.close();
+        errdefer mapped.deinit();
+
+        var parsed = try safetensors.parseFromBytes(allocator, mapped.bytes);
         errdefer parsed.deinit();
 
         return .{
             .allocator = allocator,
-            .bytes = bytes,
+            .bytes = mapped.bytes,
             .parsed = parsed,
         };
     }
 
     pub fn deinit(self: *TensorStore) void {
         self.parsed.deinit();
-        self.allocator.free(self.bytes);
+        var mapped = mapped_file.MappedFile{ .bytes = self.bytes };
+        mapped.deinit();
     }
 
     pub fn getTensor(self: *const TensorStore, name: []const u8) ?safetensors.TensorInfo {
@@ -358,7 +363,7 @@ pub const TensorStore = struct {
 fn shouldParallelize(rows: usize, cols: usize, thread_count: usize, has_parallel_backend: bool) bool {
     if (!has_parallel_backend or thread_count <= 1) return false;
     const work = std.math.mul(u64, rows, cols) catch return true;
-    return work >= 1_000_000;
+    return work >= 262_144;
 }
 
 pub const handwritten_hidden_width: usize = 1024;
