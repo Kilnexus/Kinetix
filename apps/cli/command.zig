@@ -30,6 +30,7 @@ pub const RunArgs = struct {
     preferred_weights: backend.WeightScheme = .auto,
     legacy_exec: bool = false,
     max_tokens: ?usize = null,
+    native_exec: bool = false,
 };
 
 pub const BatchPlanArgs = struct {
@@ -163,6 +164,7 @@ pub fn parse(allocator: std.mem.Allocator) !ParsedCommand {
     var preferred_weights: backend.WeightScheme = .auto;
     var legacy_exec = false;
     var max_tokens: ?usize = null;
+    var native_exec = false;
 
     var i: usize = 2;
     while (i < args.len) : (i += 1) {
@@ -200,6 +202,10 @@ pub fn parse(allocator: std.mem.Allocator) !ParsedCommand {
             legacy_exec = true;
             continue;
         }
+        if (std.mem.eql(u8, args[i], "--native-exec")) {
+            native_exec = true;
+            continue;
+        }
         if (std.mem.eql(u8, args[i], "--max-tokens")) {
             i += 1;
             if (i >= args.len) return error.MissingMaxTokens;
@@ -220,6 +226,7 @@ pub fn parse(allocator: std.mem.Allocator) !ParsedCommand {
             .preferred_weights = preferred_weights,
             .legacy_exec = legacy_exec,
             .max_tokens = max_tokens,
+            .native_exec = native_exec,
         } },
         .argv_copy = copied,
     };
@@ -240,14 +247,14 @@ pub fn printUsage(writer: anytype) !void {
         \\Kinetix CLI
         \\
         \\Usage:
-        \\  kinetix run --model-dir <path> [--operation <name>] [--input <value>] [--execution sync|async|stream] [--weights auto|bf16|q8|q6|q4] [--legacy-exec]
+        \\  kinetix run --model-dir <path> [--operation <name>] [--input <value>] [--execution sync|async|stream] [--weights auto|bf16|q8|q6|q4] [--legacy-exec] [--native-exec]
         \\  kinetix batch-plan --model-dir <path> --requests-file <json> [--native-exec]
         \\  kinetix batch-run --model-dir <path> --requests-file <json> [--native-exec]
         \\  kinetix --help
         \\
         \\Examples:
         \\  kinetix run --model-dir .\\models\\vision\\compat_yolo11n --operation detect --legacy-exec --input .\\datasets\\vision\\archive\\images\\000_0001.png
-        \\  kinetix run --model-dir .\\models\\text\\Qwen3-0.6B --execution stream --input "Hello from Kinetix"
+        \\  kinetix run --model-dir .\\models\\text\\Qwen3-0.6B --operation generate --input "Hello from Kinetix" --max-tokens 8 --native-exec
         \\  kinetix run --model-dir .\\models\\ocr\\PP-OCRv5_server_det_infer --operation infer-ocr --legacy-exec --input input.ppm
         \\  kinetix batch-plan --model-dir .\\models\\text\\Qwen3-0.6B --requests-file requests.json
         \\  kinetix batch-run --model-dir .\\models\\text\\Qwen3-0.6B --requests-file requests.json --native-exec
@@ -263,6 +270,7 @@ fn runCommand(stdout: anytype, args: RunArgs) !void {
         .execution = args.execution,
         .preferred_weights = args.preferred_weights,
         .max_tokens = args.max_tokens,
+        .native_exec = args.native_exec,
     });
     defer prepared.deinit();
 

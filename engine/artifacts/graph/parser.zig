@@ -26,6 +26,13 @@ pub fn loadSummary(allocator: std.mem.Allocator, graph_path: []const u8) !Summar
         .model_name = try allocator.dupe(u8, graph.model_name),
         .tensor_count = graph.tensors.len,
         .execution_nodes = graph.execution_nodes.len,
+        .class_count = if (graph.getMetadata("class_count")) |value|
+            if (value.asInteger()) |count|
+                @intCast(count)
+            else
+                null
+        else
+            null,
     };
 }
 

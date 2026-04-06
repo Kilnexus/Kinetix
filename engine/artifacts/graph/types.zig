@@ -198,4 +198,5 @@ pub const Summary = struct {
     model_name: []const u8,
     tensor_count: usize,
     execution_nodes: usize,
+    class_count: ?usize = null,
 };

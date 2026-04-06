@@ -49,6 +49,7 @@ pub const OutputPayload = union(enum) {
 
 pub const ExecutionOrigin = enum {
     shared_adapter,
+    native_single_bridge,
     native_batch_bridge,
 };
 
@@ -56,6 +57,7 @@ pub const ExecutionNote = enum {
     none,
     validated_only,
     text_request_ready,
+    text_native_qwen_single,
     text_native_qwen_batch,
     vision_graph_ready,
     ocr_model_ready,

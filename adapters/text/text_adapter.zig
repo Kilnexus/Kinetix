@@ -9,6 +9,18 @@ const legacy_command = @import("../legacy_command.zig");
 const registry_mod = kinetix.registry;
 const task = kinetix.core.task;
 const zinfer_batch_bridge = if (builtin.is_test) struct {
+    pub fn executeQwenSingle(
+        allocator: std.mem.Allocator,
+        model_dir: []const u8,
+        preferred_weights: backend.WeightScheme,
+        request: task.TaskRequest,
+    ) ![]u8 {
+        _ = model_dir;
+        _ = preferred_weights;
+        _ = request;
+        return try allocator.dupe(u8, "stub-native-single");
+    }
+
     pub const NativeBatchOutput = struct {
         texts: [][]u8,
         total_decoded_tokens: usize,
@@ -192,11 +204,22 @@ pub const TextAdapter = struct {
     }
 
     fn execute(ctx: *anyopaque, allocator: std.mem.Allocator, request: task.TaskRequest) !adapter_mod.ExecutionResult {
-        _ = allocator;
+        const self: *TextAdapter = @ptrCast(@alignCast(ctx));
+        const use_native = canUseNativeQwenSingle(self, request);
+        const output = if (use_native)
+            adapter_mod.OutputPayload{ .text = try zinfer_batch_bridge.executeQwenSingle(
+                allocator,
+                self.catalog.model_dir,
+                self.plan.weight_scheme orelse .auto,
+                request,
+            ) }
+        else
+            .none;
         return .{
             .submission = try submit(ctx, request),
-            .origin = .shared_adapter,
-            .note = .text_request_ready,
+            .origin = if (use_native) .native_single_bridge else .shared_adapter,
+            .note = if (use_native) .text_native_qwen_single else .text_request_ready,
+            .output = output,
         };
     }
 
@@ -310,4 +333,15 @@ fn canUseNativeQwenBatch(self: *const TextAdapter, requests: []const task.TaskRe
     }
 
     return true;
+}
+
+fn canUseNativeQwenSingle(self: *const TextAdapter, request: task.TaskRequest) bool {
+    if (self.family != .qwen3) return false;
+    if (!request.generation.native_execution) return false;
+    if (request.spec.execution != .sync) return false;
+    if (!std.mem.eql(u8, request.spec.operation, "generate") and !std.mem.eql(u8, request.spec.operation, "chat")) return false;
+    return switch (request.input) {
+        .none, .text => true,
+        else => false,
+    };
 }

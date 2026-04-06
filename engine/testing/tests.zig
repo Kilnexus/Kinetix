@@ -424,6 +424,40 @@ test "text adapter resolves qwen3 model and integrates with scheduler" {
     try std.testing.expectEqual(task.ExecutionMode.stream, submission.execution);
 }
 
+test "text adapter can surface native single execution output" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "config.json", "{\"model_type\":\"qwen3\"}");
+    try writeTmpFile(tmp.dir, "tokenizer.json", "{}");
+    try writeTmpFile(tmp.dir, "model.q8.zinfer", "q8");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var text_adapter = try text_adapter_mod.TextAdapter.init(std.testing.allocator, root_path, .auto);
+    defer text_adapter.deinit();
+
+    var result = try text_adapter.asAdapter().execute(std.testing.allocator, .{
+        .spec = .{
+            .modality = .text,
+            .operation = "generate",
+            .model_family = "qwen3",
+            .execution = .sync,
+        },
+        .input = .{ .text = "hello" },
+        .generation = .{
+            .max_tokens = 8,
+            .native_execution = true,
+        },
+    });
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(adapter_mod.ExecutionOrigin.native_single_bridge, result.origin);
+    try std.testing.expectEqual(adapter_mod.ExecutionNote.text_native_qwen_single, result.note);
+    try std.testing.expectEqualStrings("stub-native-single", result.output.text);
+}
+
 test "text adapter restricts bert model to bert-compatible operations" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -510,6 +544,30 @@ test "vision adapter resolves yolo artifacts and integrates with scheduler" {
 
     try std.testing.expect(submission.accepted);
     try std.testing.expectEqual(task.ExecutionMode.sync, submission.execution);
+
+    var result = try vision_adapter.asAdapter().execute(std.testing.allocator, .{
+        .spec = .{
+            .modality = .vision,
+            .operation = "detect",
+            .model_family = "yolo",
+            .execution = .sync,
+        },
+        .input = .{ .image_path = "demo.png" },
+    });
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(adapter_mod.ExecutionNote.vision_graph_ready, result.note);
+    switch (result.output) {
+        .json => |payload| {
+            const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, payload, .{});
+            defer parsed.deinit();
+
+            try std.testing.expectEqualStrings("graph_ready", parsed.value.object.get("status").?.string);
+            try std.testing.expectEqualStrings("demo.png", parsed.value.object.get("input_path").?.string);
+            try std.testing.expectEqual(@as(i64, 2), parsed.value.object.get("class_count").?.integer);
+        },
+        else => return error.ExpectedJsonOutput,
+    }
 }
 
 test "vision adapter rejects missing binary weights" {

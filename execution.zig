@@ -16,6 +16,7 @@ pub const PrepareRequest = struct {
     execution: task.ExecutionMode = .sync,
     preferred_weights: backend.WeightScheme = .auto,
     max_tokens: ?usize = null,
+    native_exec: bool = false,
 };
 
 pub const PrepareBatchItem = struct {
@@ -123,7 +124,10 @@ pub fn prepare(allocator: std.mem.Allocator, request: PrepareRequest) !PreparedE
     const task_request = task.TaskRequest{
         .spec = spec,
         .input = inferInputPayload(descriptor.modality, request.input),
-        .generation = .{ .max_tokens = request.max_tokens },
+        .generation = .{
+            .max_tokens = request.max_tokens,
+            .native_execution = request.native_exec,
+        },
     };
 
     return .{
@@ -238,6 +242,34 @@ test "prepared execution resolves text adapter through shared executor" {
     defer result.deinit(std.testing.allocator);
     try std.testing.expect(result.submission.accepted);
     try std.testing.expectEqual(engine.adapter.ExecutionNote.text_request_ready, result.note);
+}
+
+test "prepared execution can request native text execution output" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "config.json", "{\"model_type\":\"qwen3\"}");
+    try writeTmpFile(tmp.dir, "tokenizer.json", "{}");
+    try writeTmpFile(tmp.dir, "model.q8.zinfer", "q8");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var prepared = try prepare(std.testing.allocator, .{
+        .model_dir = root_path,
+        .operation = "generate",
+        .input = "hello",
+        .max_tokens = 8,
+        .native_exec = true,
+    });
+    defer prepared.deinit();
+
+    var result = try prepared.execute();
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(engine.adapter.ExecutionOrigin.native_single_bridge, result.origin);
+    try std.testing.expectEqual(engine.adapter.ExecutionNote.text_native_qwen_single, result.note);
+    try std.testing.expectEqualStrings("stub-native-single", result.output.text);
 }
 
 test "prepared batch execution groups compatible text requests" {

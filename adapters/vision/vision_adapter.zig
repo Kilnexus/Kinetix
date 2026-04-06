@@ -139,11 +139,13 @@ pub const VisionAdapter = struct {
     }
 
     fn execute(ctx: *anyopaque, allocator: std.mem.Allocator, request: task.TaskRequest) !adapter_mod.ExecutionResult {
-        _ = allocator;
+        const self: *VisionAdapter = @ptrCast(@alignCast(ctx));
+        const output = try buildOutputJson(self, allocator, request);
         return .{
             .submission = try submit(ctx, request),
             .origin = .shared_adapter,
             .note = .vision_graph_ready,
+            .output = .{ .json = output },
         };
     }
 };
@@ -173,4 +175,35 @@ fn detectModelFamily(allocator: std.mem.Allocator, graph_path: []const u8) !Mode
 fn defaultImagePath(model_dir: []const u8) []const u8 {
     _ = model_dir;
     return "data/archive/images/000_0001.png";
+}
+
+fn buildOutputJson(self: *const VisionAdapter, allocator: std.mem.Allocator, request: task.TaskRequest) ![]u8 {
+    const VisionReceipt = struct {
+        status: []const u8,
+        operation: []const u8,
+        model_name: []const u8,
+        model_family: []const u8,
+        input_path: ?[]const u8,
+        execution_nodes: usize,
+        tensor_count: usize,
+        class_count: ?usize,
+        detections: []const struct {},
+    };
+
+    const receipt = VisionReceipt{
+        .status = "graph_ready",
+        .operation = request.spec.operation,
+        .model_name = self.graph_summary.model_name,
+        .model_family = self.family.name(),
+        .input_path = request.input.asString(),
+        .execution_nodes = self.graph_summary.execution_nodes,
+        .tensor_count = self.graph_summary.tensor_count,
+        .class_count = self.graph_summary.class_count,
+        .detections = &.{},
+    };
+
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    defer out.deinit();
+    try std.json.Stringify.value(receipt, .{}, &out.writer);
+    return try allocator.dupe(u8, out.written());
 }

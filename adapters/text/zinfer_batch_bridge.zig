@@ -2,6 +2,7 @@ const std = @import("std");
 const backend = @import("../../engine/artifacts/backend/backend.zig");
 const task = @import("../../engine/core/task.zig");
 const zinfer_prompts = @import("../../legacy/zinfer/src/app/cli/prompts.zig");
+const zinfer_args = @import("../../legacy/zinfer/src/app/cli/args.zig");
 const zinfer_runtime = @import("../../legacy/zinfer/src/app/cli/runtime.zig");
 const zinfer_decoder_family = @import("../../legacy/zinfer/src/model/runtime/decoder_family.zig");
 const zinfer_kv_cache = @import("../../legacy/zinfer/src/model/runtime/optimized_kv_cache.zig");
@@ -19,6 +20,52 @@ pub const NativeBatchOutput = struct {
         self.* = undefined;
     }
 };
+
+pub fn executeQwenSingle(
+    allocator: std.mem.Allocator,
+    model_dir: []const u8,
+    preferred_weights: backend.WeightScheme,
+    request: task.TaskRequest,
+) ![]u8 {
+    const input = switch (request.input) {
+        .text => |value| value,
+        .none => "",
+        else => return error.InvalidInputPayload,
+    };
+
+    var runtime = try zinfer_runtime.GeneratorRuntime.init(
+        allocator,
+        model_dir,
+        mapBackendScheme(preferred_weights),
+        0,
+    );
+    defer runtime.deinit();
+
+    const prompt = try zinfer_prompts.buildSingleUserPromptAlloc(
+        allocator,
+        runtime.model.cfg.architecture,
+        input,
+        null,
+        .disabled,
+    );
+    defer allocator.free(prompt);
+
+    const options = zinfer_args.GenerateOptions{
+        .max_new_tokens = request.generation.max_tokens orelse 64,
+        .thinking_mode = .disabled,
+        .system_prompt = null,
+        .sampling = zinfer_args.defaultSamplingConfig(.disabled),
+        .seed = 0,
+        .stream_output = false,
+        .stop_sequences = &.{},
+        .backend_scheme = mapBackendScheme(preferred_weights),
+        .kv_cache_scheme = .auto,
+        .q8_layout = zinfer_kv_cache.default_q8_layout,
+        .thread_count = 0,
+    };
+
+    return try runtime.generateFromPrompt(prompt, options);
+}
 
 pub fn executeQwenBatch(
     allocator: std.mem.Allocator,
