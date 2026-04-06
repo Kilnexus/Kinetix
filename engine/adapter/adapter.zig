@@ -1,0 +1,42 @@
+const std = @import("std");
+const task = @import("../core/task.zig");
+
+pub const Descriptor = struct {
+    id: []const u8,
+    modality: task.Modality,
+    version: []const u8 = "0.1.0",
+    supports_batching: bool = false,
+    supports_streaming: bool = false,
+    supported_operations: []const []const u8 = &.{},
+
+    pub fn supportsOperation(self: Descriptor, operation: []const u8) bool {
+        if (self.supported_operations.len == 0) return true;
+        for (self.supported_operations) |supported| {
+            if (std.mem.eql(u8, supported, operation)) return true;
+        }
+        return false;
+    }
+};
+
+pub const Submission = struct {
+    adapter_id: []const u8,
+    accepted: bool = true,
+    execution: task.ExecutionMode,
+};
+
+pub const VTable = struct {
+    submit: *const fn (ctx: *anyopaque, spec: task.TaskSpec) anyerror!Submission,
+};
+
+pub const Adapter = struct {
+    ctx: *anyopaque,
+    descriptor: Descriptor,
+    vtable: *const VTable,
+
+    pub fn submit(self: Adapter, spec: task.TaskSpec) !Submission {
+        if (spec.modality != self.descriptor.modality) return error.ModalityMismatch;
+        if (!self.descriptor.supportsOperation(spec.operation)) return error.OperationNotSupported;
+        if (spec.execution == .stream and !self.descriptor.supports_streaming) return error.StreamingNotSupported;
+        return try self.vtable.submit(self.ctx, spec);
+    }
+};

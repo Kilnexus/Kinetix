@@ -1,0 +1,7 @@
+.{
+    .name = .Kinetix,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.15.2",
+    .paths = .{ "", "engine", "docs" },
+    .fingerprint = 0x6778871e1529574e,
+}
