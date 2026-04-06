@@ -1,6 +1,4 @@
-pub const core = struct {
-    pub const task = @import("core/task.zig");
-};
+pub const core = @import("core/core.zig");
 
 pub const adapter = @import("adapter/adapter.zig");
 pub const registry = @import("registry/registry.zig");

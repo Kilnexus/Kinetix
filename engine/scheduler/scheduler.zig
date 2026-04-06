@@ -2,6 +2,8 @@ const task = @import("../core/task.zig");
 const adapter_mod = @import("../adapter/adapter.zig");
 const registry_mod = @import("../registry/registry.zig");
 
+pub const RuntimePool = @import("runtime_pool.zig").RuntimePool;
+
 pub const QueueKey = struct {
     modality: task.Modality,
     operation: []const u8,

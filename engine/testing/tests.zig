@@ -1,6 +1,7 @@
 const std = @import("std");
 const task = @import("../core/task.zig");
 const adapter_mod = @import("../adapter/adapter.zig");
+const memory = @import("../core/memory/memory.zig");
 const registry_mod = @import("../registry/registry.zig");
 const scheduler_mod = @import("../scheduler/scheduler.zig");
 
@@ -115,4 +116,52 @@ test "registry rejects duplicate adapter ids" {
 
     try registry.register(adapter);
     try std.testing.expectError(error.AdapterAlreadyRegistered, registry.register(adapter));
+}
+
+test "runtime pool acquires and releases owned items" {
+    const TestPool = scheduler_mod.RuntimePool(u32);
+
+    const items = try std.testing.allocator.alloc(u32, 2);
+    items[0] = 11;
+    items[1] = 29;
+
+    var pool = try TestPool.initOwned(std.testing.allocator, items);
+    defer pool.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), pool.len());
+    try std.testing.expectEqual(@as(usize, 2), pool.availableCount());
+
+    const lease_a = pool.tryAcquire() orelse return error.ExpectedLease;
+    try std.testing.expectEqual(@as(u32, 11), lease_a.item.*);
+    try std.testing.expectEqual(@as(usize, 1), pool.availableCount());
+
+    const lease_b = pool.tryAcquire() orelse return error.ExpectedLease;
+    try std.testing.expectEqual(@as(u32, 29), lease_b.item.*);
+    try std.testing.expectEqual(@as(usize, 0), pool.availableCount());
+    try std.testing.expect(pool.tryAcquire() == null);
+
+    lease_a.release();
+    try std.testing.expectEqual(@as(usize, 1), pool.availableCount());
+
+    lease_b.release();
+    try std.testing.expectEqual(@as(usize, 2), pool.availableCount());
+}
+
+test "shared reuse allocator is exposed through engine core" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    var reuse = memory.ReuseAllocator.init(gpa.allocator());
+    defer reuse.deinit();
+
+    const allocator = reuse.allocator();
+    const first = try allocator.alloc(u8, 4096);
+    const first_ptr = first.ptr;
+    allocator.free(first);
+
+    const second = try allocator.alloc(u8, 4096);
+    defer allocator.free(second);
+
+    try std.testing.expectEqual(@intFromPtr(first_ptr), @intFromPtr(second.ptr));
+    try std.testing.expectEqual(@as(usize, 1), reuse.snapshot().cache_hits);
 }
