@@ -556,15 +556,18 @@ test "vision adapter resolves yolo artifacts and integrates with scheduler" {
     });
     defer result.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(adapter_mod.ExecutionNote.vision_graph_ready, result.note);
+    try std.testing.expectEqual(adapter_mod.ExecutionOrigin.legacy_process_bridge, result.origin);
+    try std.testing.expectEqual(adapter_mod.ExecutionNote.vision_legacy_detect_json, result.note);
     switch (result.output) {
         .json => |payload| {
             const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, payload, .{});
             defer parsed.deinit();
 
-            try std.testing.expectEqualStrings("graph_ready", parsed.value.object.get("status").?.string);
+            try std.testing.expectEqualStrings("detect_completed", parsed.value.object.get("status").?.string);
             try std.testing.expectEqualStrings("demo.png", parsed.value.object.get("input_path").?.string);
             try std.testing.expectEqual(@as(i64, 2), parsed.value.object.get("class_count").?.integer);
+            try std.testing.expectEqual(@as(i64, 4), parsed.value.object.get("candidate_count").?.integer);
+            try std.testing.expectEqual(@as(usize, 1), parsed.value.object.get("detections").?.array.items.len);
         },
         else => return error.ExpectedJsonOutput,
     }
@@ -641,6 +644,33 @@ test "ocr adapter resolves swiftocr model and integrates with scheduler" {
 
     try std.testing.expect(submission.accepted);
     try std.testing.expectEqual(task.ExecutionMode.sync, submission.execution);
+
+    var result = try ocr_adapter.asAdapter().execute(std.testing.allocator, .{
+        .spec = .{
+            .modality = .ocr,
+            .operation = "infer-ocr",
+            .model_family = "swiftocr",
+            .execution = .sync,
+        },
+        .input = .{ .image_path = "demo.ppm" },
+    });
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(adapter_mod.ExecutionOrigin.legacy_process_bridge, result.origin);
+    try std.testing.expectEqual(adapter_mod.ExecutionNote.ocr_legacy_infer_summary, result.note);
+    switch (result.output) {
+        .json => |payload| {
+            const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, payload, .{});
+            defer parsed.deinit();
+
+            try std.testing.expectEqualStrings("ocr_infer_completed", parsed.value.object.get("status").?.string);
+            try std.testing.expectEqualStrings("demo.ppm", parsed.value.object.get("input_path").?.string);
+            try std.testing.expectEqual(@as(i64, 2), parsed.value.object.get("loaded_tensors").?.integer);
+            try std.testing.expectEqual(@as(i64, 1), parsed.value.object.get("image_width").?.integer);
+            try std.testing.expectEqual(@as(i64, 1), parsed.value.object.get("image_height").?.integer);
+        },
+        else => return error.ExpectedJsonOutput,
+    }
 }
 
 test "text adapter rejects image payloads in shared request path" {

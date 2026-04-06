@@ -49,6 +49,7 @@ pub const OutputPayload = union(enum) {
 
 pub const ExecutionOrigin = enum {
     shared_adapter,
+    legacy_process_bridge,
     native_single_bridge,
     native_batch_bridge,
 };
@@ -60,7 +61,9 @@ pub const ExecutionNote = enum {
     text_native_qwen_single,
     text_native_qwen_batch,
     vision_graph_ready,
+    vision_legacy_detect_json,
     ocr_model_ready,
+    ocr_legacy_infer_summary,
 };
 
 pub const ExecutionResult = struct {

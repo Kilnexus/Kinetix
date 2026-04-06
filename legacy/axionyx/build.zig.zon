@@ -1,0 +1,16 @@
+.{
+    .name = .Axionyx,
+    .version = "0.0.1",
+    .fingerprint = 0x8d6c01edc8319063,
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        .Pixio = .{
+            .path = "../../../Pixio",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
