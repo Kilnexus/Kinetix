@@ -1,6 +1,7 @@
 const std = @import("std");
 const task = @import("../core/task.zig");
 const adapter_mod = @import("../adapter/adapter.zig");
+const graph = @import("../artifacts/graph/graph.zig");
 const memory = @import("../core/memory/memory.zig");
 const registry_mod = @import("../registry/registry.zig");
 const scheduler_mod = @import("../scheduler/scheduler.zig");
@@ -164,4 +165,90 @@ test "shared reuse allocator is exposed through engine core" {
 
     try std.testing.expectEqual(@intFromPtr(first_ptr), @intFromPtr(second.ptr));
     try std.testing.expectEqual(@as(usize, 1), reuse.snapshot().cache_hits);
+}
+
+test "generic plan graph parses component tree and metadata" {
+    const raw =
+        \\{
+        \\  "format_version": 1,
+        \\  "model_name": "kinetix-generic",
+        \\  "metadata": {
+        \\    "modality": "vision",
+        \\    "supports_batching": true
+        \\  },
+        \\  "tensors": [
+        \\    { "name": "encoder.weight", "shape": [3, 4], "offset": 0, "nbytes": 48 }
+        \\  ],
+        \\  "execution_plan": [
+        \\    { "index": 0, "path": "pipeline.encoder", "kind": "Encode", "from": [-1] },
+        \\    { "index": 1, "path": "pipeline.head", "kind": "Head", "from": [0] }
+        \\  ],
+        \\  "component_tree": {
+        \\    "path": "pipeline",
+        \\    "kind": "Pipeline",
+        \\    "attrs": {},
+        \\    "children": [
+        \\      {
+        \\        "path": "pipeline.encoder",
+        \\        "kind": "Encode",
+        \\        "attrs": { "hidden": 128 },
+        \\        "children": []
+        \\      },
+        \\      {
+        \\        "path": "pipeline.head",
+        \\        "kind": "Head",
+        \\        "attrs": { "classes": 80 },
+        \\        "children": []
+        \\      }
+        \\    ]
+        \\  }
+        \\}
+    ;
+
+    var parsed = try graph.parseGraph(std.testing.allocator, raw);
+    defer parsed.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), parsed.tensors.len);
+    try std.testing.expectEqual(@as(usize, 2), parsed.execution_nodes.len);
+    try std.testing.expectEqualStrings("kinetix-generic", parsed.model_name);
+    try std.testing.expectEqualStrings("vision", parsed.getMetadata("modality").?.asString().?);
+    try std.testing.expect(parsed.getMetadata("supports_batching").?.asBool().?);
+    try std.testing.expectEqual(@as(usize, 1), parsed.execution_use_counts[0]);
+    try std.testing.expectEqual(@as(usize, 0), parsed.execution_use_counts[1]);
+    try std.testing.expectEqualStrings("pipeline.head", parsed.execution_components[1].?.path);
+    try std.testing.expectEqual(@as(usize, 2), parsed.findTensor("encoder.weight").?.rank());
+}
+
+test "generic plan graph preserves compatibility with Axionyx execution path mapping" {
+    const raw =
+        \\{
+        \\  "format_version": 1,
+        \\  "model_name": "axionyx-compat",
+        \\  "metadata": {},
+        \\  "tensors": [],
+        \\  "execution_plan": [
+        \\    { "index": 0, "path": "model.0", "kind": "Conv", "from": [-1] }
+        \\  ],
+        \\  "module_tree": {
+        \\    "path": "model",
+        \\    "kind": "Root",
+        \\    "attrs": {},
+        \\    "children": [
+        \\      {
+        \\        "path": "model.model.0",
+        \\        "kind": "Conv",
+        \\        "attrs": { "stride": [2, 2] },
+        \\        "children": []
+        \\      }
+        \\    ]
+        \\  }
+        \\}
+    ;
+
+    var parsed = try graph.parseGraph(std.testing.allocator, raw);
+    defer parsed.deinit();
+
+    try std.testing.expect(parsed.execution_components[0] != null);
+    try std.testing.expectEqualStrings("model.model.0", parsed.execution_components[0].?.path);
+    try std.testing.expectEqualStrings("Conv", parsed.execution_components[0].?.kind);
 }
