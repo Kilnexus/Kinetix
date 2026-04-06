@@ -8,6 +8,7 @@ const task = kinetix.core.task;
 pub const Command = union(enum) {
     help,
     run: RunArgs,
+    batch_plan: BatchPlanArgs,
 };
 
 pub const ParsedCommand = struct {
@@ -28,6 +29,23 @@ pub const RunArgs = struct {
     preferred_weights: backend.WeightScheme = .auto,
     legacy_exec: bool = false,
     max_tokens: ?usize = null,
+};
+
+pub const BatchPlanArgs = struct {
+    model_dir: []const u8,
+    requests_file: []const u8,
+    operation: ?[]const u8 = null,
+    execution: task.ExecutionMode = .sync,
+    preferred_weights: backend.WeightScheme = .auto,
+    max_tokens: ?usize = null,
+};
+
+const BatchRequestJson = struct {
+    operation: ?[]const u8 = null,
+    input: ?[]const u8 = null,
+    execution: ?[]const u8 = null,
+    max_tokens: ?usize = null,
+    allows_batching: ?bool = null,
 };
 
 pub fn parse(allocator: std.mem.Allocator) !ParsedCommand {
@@ -54,6 +72,71 @@ pub fn parse(allocator: std.mem.Allocator) !ParsedCommand {
     if (std.mem.eql(u8, cmd, "--help") or std.mem.eql(u8, cmd, "-h") or std.mem.eql(u8, cmd, "help")) {
         return .{ .command = .help, .argv_copy = copied };
     }
+    if (std.mem.eql(u8, cmd, "batch-plan")) {
+        var model_dir: ?[]const u8 = null;
+        var requests_file: ?[]const u8 = null;
+        var operation: ?[]const u8 = null;
+        var execution_mode: task.ExecutionMode = .sync;
+        var preferred_weights: backend.WeightScheme = .auto;
+        var max_tokens: ?usize = null;
+
+        var i: usize = 2;
+        while (i < args.len) : (i += 1) {
+            if (std.mem.eql(u8, args[i], "--model-dir")) {
+                i += 1;
+                if (i >= args.len) return error.MissingModelDir;
+                model_dir = copied[i];
+                continue;
+            }
+            if (std.mem.eql(u8, args[i], "--requests-file")) {
+                i += 1;
+                if (i >= args.len) return error.MissingRequestsFile;
+                requests_file = copied[i];
+                continue;
+            }
+            if (std.mem.eql(u8, args[i], "--operation")) {
+                i += 1;
+                if (i >= args.len) return error.MissingOperation;
+                operation = copied[i];
+                continue;
+            }
+            if (std.mem.eql(u8, args[i], "--execution")) {
+                i += 1;
+                if (i >= args.len) return error.MissingExecutionMode;
+                execution_mode = try parseExecutionMode(args[i]);
+                continue;
+            }
+            if (std.mem.eql(u8, args[i], "--weights")) {
+                i += 1;
+                if (i >= args.len) return error.MissingWeightScheme;
+                preferred_weights = try parseWeightScheme(args[i]);
+                continue;
+            }
+            if (std.mem.eql(u8, args[i], "--max-tokens")) {
+                i += 1;
+                if (i >= args.len) return error.MissingMaxTokens;
+                max_tokens = try std.fmt.parseInt(usize, args[i], 10);
+                continue;
+            }
+            return error.UnknownOption;
+        }
+
+        if (model_dir == null) return error.MissingModelDir;
+        if (requests_file == null) return error.MissingRequestsFile;
+
+        return .{
+            .command = .{ .batch_plan = .{
+                .model_dir = model_dir.?,
+                .requests_file = requests_file.?,
+                .operation = operation,
+                .execution = execution_mode,
+                .preferred_weights = preferred_weights,
+                .max_tokens = max_tokens,
+            } },
+            .argv_copy = copied,
+        };
+    }
+
     if (!std.mem.eql(u8, cmd, "run")) return error.UnknownCommand;
 
     var model_dir: ?[]const u8 = null;
@@ -130,6 +213,7 @@ pub fn run(stdout: anytype, stderr: anytype, parsed: ParsedCommand) !void {
     switch (parsed.command) {
         .help => try printUsage(stdout),
         .run => |args| try runCommand(stdout, args),
+        .batch_plan => |args| try runBatchPlan(stdout, args),
     }
 }
 
@@ -139,12 +223,14 @@ pub fn printUsage(writer: anytype) !void {
         \\
         \\Usage:
         \\  kinetix run --model-dir <path> [--operation <name>] [--input <value>] [--execution sync|async|stream] [--weights auto|bf16|q8|q6|q4] [--legacy-exec]
+        \\  kinetix batch-plan --model-dir <path> --requests-file <json>
         \\  kinetix --help
         \\
         \\Examples:
         \\  kinetix run --model-dir .\\legacy\\axionyx\\artifacts --operation detect --legacy-exec --input data\\archive\\images\\000_0001.png
         \\  kinetix run --model-dir .\\models\\Qwen3-0.6B --execution stream --input "Hello from Kinetix"
         \\  kinetix run --model-dir .\\ocr-demo --operation infer-ocr --legacy-exec --input input.ppm
+        \\  kinetix batch-plan --model-dir .\\models\\Qwen3-0.6B --requests-file requests.json
         \\
     );
 }
@@ -183,6 +269,55 @@ fn runCommand(stdout: anytype, args: RunArgs) !void {
 
         const term = try execution.executeLegacyCommand(legacy);
         try stdout.print("legacy_exit: {s}\n", .{termText(term)});
+    }
+}
+
+fn runBatchPlan(stdout: anytype, args: BatchPlanArgs) !void {
+    const file_bytes = try std.fs.cwd().readFileAlloc(std.heap.page_allocator, args.requests_file, 4 * 1024 * 1024);
+    defer std.heap.page_allocator.free(file_bytes);
+
+    const parsed = try std.json.parseFromSlice([]BatchRequestJson, std.heap.page_allocator, file_bytes, .{});
+    defer parsed.deinit();
+
+    const items = try std.heap.page_allocator.alloc(execution.PrepareBatchItem, parsed.value.len);
+    defer std.heap.page_allocator.free(items);
+
+    for (parsed.value, items) |entry, *item| {
+        item.* = .{
+            .operation = entry.operation orelse args.operation,
+            .input = entry.input,
+            .execution = if (entry.execution) |mode| try parseExecutionMode(mode) else args.execution,
+            .max_tokens = entry.max_tokens orelse args.max_tokens,
+            .allows_batching = entry.allows_batching orelse true,
+        };
+    }
+
+    var prepared = try execution.prepareBatch(std.heap.page_allocator, .{
+        .model_dir = args.model_dir,
+        .preferred_weights = args.preferred_weights,
+        .items = items,
+    });
+    defer prepared.deinit();
+
+    try stdout.print("adapter: {s}\n", .{prepared.descriptor.id});
+    try stdout.print("modality: {s}\n", .{@tagName(prepared.descriptor.modality)});
+    try stdout.print("model_family: {s}\n", .{prepared.descriptor.bound_model_family.?});
+    try stdout.print("requests: {d}\n", .{prepared.requests.len});
+    try stdout.print("batches: {d}\n", .{prepared.batch_plan.batches.len});
+
+    for (prepared.batch_plan.batches, 0..) |batch, batch_index| {
+        try stdout.print("batch[{d}]: size={d} execution={s} batching={s} input={s} indices=", .{
+            batch_index,
+            batch.len(),
+            @tagName(batch.execution),
+            boolText(batch.supports_batching),
+            @tagName(batch.input_tag),
+        });
+        for (batch.request_indices, 0..) |request_index, request_offset| {
+            if (request_offset != 0) try stdout.writeAll(",");
+            try stdout.print("{d}", .{request_index});
+        }
+        try stdout.writeAll("\n");
     }
 }
 

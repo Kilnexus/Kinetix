@@ -17,6 +17,20 @@ pub const PrepareRequest = struct {
     max_tokens: ?usize = null,
 };
 
+pub const PrepareBatchItem = struct {
+    operation: ?[]const u8 = null,
+    input: ?[]const u8 = null,
+    execution: ?task.ExecutionMode = null,
+    max_tokens: ?usize = null,
+    allows_batching: bool = true,
+};
+
+pub const PrepareBatchRequest = struct {
+    model_dir: []const u8,
+    preferred_weights: backend.WeightScheme = .auto,
+    items: []const PrepareBatchItem,
+};
+
 pub const LegacyOptions = struct {
     input: ?[]const u8 = null,
     max_tokens: ?usize = null,
@@ -54,6 +68,23 @@ pub const PreparedExecution = struct {
     }
 };
 
+pub const PreparedBatchExecution = struct {
+    allocator: std.mem.Allocator,
+    registry: registry_mod.Registry,
+    managed: adapters.factory.ManagedAdapter,
+    descriptor: engine.adapter.Descriptor,
+    requests: []task.TaskRequest,
+    batch_plan: scheduler_mod.BatchPlan,
+
+    pub fn deinit(self: *PreparedBatchExecution) void {
+        self.batch_plan.deinit();
+        self.allocator.free(self.requests);
+        self.managed.deinit();
+        self.registry.deinit();
+        self.* = undefined;
+    }
+};
+
 pub fn prepare(allocator: std.mem.Allocator, request: PrepareRequest) !PreparedExecution {
     var registry = registry_mod.Registry.init(allocator);
     errdefer registry.deinit();
@@ -88,6 +119,48 @@ pub fn prepare(allocator: std.mem.Allocator, request: PrepareRequest) !PreparedE
         .request = task_request,
         .plan = try scheduler.planRequest(task_request),
         .submission = try scheduler.submit(task_request),
+    };
+}
+
+pub fn prepareBatch(allocator: std.mem.Allocator, request: PrepareBatchRequest) !PreparedBatchExecution {
+    var registry = registry_mod.Registry.init(allocator);
+    errdefer registry.deinit();
+
+    var managed = try adapters.factory.initAuto(allocator, request.model_dir, request.preferred_weights);
+    errdefer managed.deinit();
+    try managed.registerInto(&registry);
+
+    const descriptor = managed.descriptor();
+    const operation = defaultOperation(descriptor);
+    const model_family = descriptor.bound_model_family orelse return error.MissingModelFamilyBinding;
+    const scheduler = scheduler_mod.Scheduler.init(&registry);
+
+    const requests = try allocator.alloc(task.TaskRequest, request.items.len);
+    errdefer allocator.free(requests);
+
+    for (request.items, requests) |item, *slot| {
+        const execution_mode = item.execution orelse .sync;
+        slot.* = .{
+            .spec = .{
+                .modality = descriptor.modality,
+                .operation = item.operation orelse operation,
+                .model_family = model_family,
+                .adapter_id = descriptor.id,
+                .execution = execution_mode,
+                .allows_batching = item.allows_batching,
+            },
+            .input = inferInputPayload(descriptor.modality, item.input),
+            .generation = .{ .max_tokens = item.max_tokens },
+        };
+    }
+
+    return .{
+        .allocator = allocator,
+        .registry = registry,
+        .managed = managed,
+        .descriptor = descriptor,
+        .requests = requests,
+        .batch_plan = try scheduler.planBatches(allocator, requests),
     };
 }
 
@@ -140,6 +213,35 @@ test "prepared execution resolves text adapter through shared executor" {
     try std.testing.expectEqual(@as(?usize, 32), prepared.request.generation.max_tokens);
     try std.testing.expectEqual(task.ExecutionMode.stream, prepared.plan.execution);
     try std.testing.expect(prepared.plan.supports_streaming);
+}
+
+test "prepared batch execution groups compatible text requests" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "config.json", "{\"model_type\":\"qwen3\"}");
+    try writeTmpFile(tmp.dir, "tokenizer.json", "{}");
+    try writeTmpFile(tmp.dir, "model.q8.zinfer", "q8");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    const items = [_]PrepareBatchItem{
+        .{ .input = "hello" },
+        .{ .input = "world" },
+        .{ .input = "solo", .allows_batching = false },
+    };
+
+    var prepared = try prepareBatch(std.testing.allocator, .{
+        .model_dir = root_path,
+        .items = &items,
+    });
+    defer prepared.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), prepared.requests.len);
+    try std.testing.expectEqual(@as(usize, 2), prepared.batch_plan.batches.len);
+    try std.testing.expectEqual(@as(usize, 2), prepared.batch_plan.batches[0].len());
+    try std.testing.expectEqual(@as(usize, 1), prepared.batch_plan.batches[1].len());
 }
 
 fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {
