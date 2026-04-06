@@ -5,7 +5,6 @@ const adapter_mod = kinetix.adapter;
 const backend = kinetix.artifacts.backend;
 const load_plan = kinetix.runtime.load_plan;
 const ocr_pipeline = kinetix.runtime.ocr_pipeline;
-const legacy_command = @import("../legacy_command.zig");
 const registry_mod = kinetix.registry;
 const task = kinetix.core.task;
 
@@ -63,32 +62,6 @@ pub const OCRAdapter = struct {
 
     pub fn registerInto(self: *OCRAdapter, registry: *registry_mod.Registry) !void {
         try registry.register(self.asAdapter());
-    }
-
-    pub fn buildLegacyCommand(self: *const OCRAdapter, allocator: std.mem.Allocator, options: legacy_command.BuildOptions) !legacy_command.LegacyCommand {
-        const project_dir = try legacy_command.legacyProjectDirAlloc(allocator, "legacy/swiftocr");
-        defer allocator.free(project_dir);
-
-        const model_path = if (std.fs.path.isAbsolute(self.plan.ocr_model_path.?))
-            self.plan.ocr_model_path.?
-        else
-            try std.fs.cwd().realpathAlloc(allocator, self.plan.ocr_model_path.?);
-        defer if (!std.fs.path.isAbsolute(self.plan.ocr_model_path.?)) allocator.free(model_path);
-
-        const input_path = if (options.input) |value|
-            if (std.fs.path.isAbsolute(value))
-                value
-            else
-                try std.fs.cwd().realpathAlloc(allocator, value)
-        else
-            "input.ppm";
-        defer if (options.input != null and !std.fs.path.isAbsolute(options.input.?)) allocator.free(input_path);
-
-        return try legacy_command.init(allocator, project_dir, &.{
-            "zig", "build", "run", "--", "infer",
-            "--model", model_path,
-            "--image", input_path,
-        });
     }
 
     fn submit(ctx: *anyopaque, request: task.TaskRequest) !adapter_mod.Submission {

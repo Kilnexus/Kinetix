@@ -3,7 +3,6 @@ const adapters = @import("adapters/adapters.zig");
 const engine = @import("engine/kinetix.zig");
 
 const backend = engine.artifacts.backend;
-const legacy_command = adapters.legacy_command;
 const registry_mod = engine.registry;
 const batch_executor = engine.runtime.batch_executor;
 const scheduler_mod = engine.scheduler;
@@ -34,11 +33,6 @@ pub const PrepareBatchRequest = struct {
     items: []const PrepareBatchItem,
 };
 
-pub const LegacyOptions = struct {
-    input: ?[]const u8 = null,
-    max_tokens: ?usize = null,
-};
-
 pub const PreparedExecution = struct {
     allocator: std.mem.Allocator,
     registry: registry_mod.Registry,
@@ -58,22 +52,6 @@ pub const PreparedExecution = struct {
     pub fn execute(self: *const PreparedExecution) !engine.adapter.ExecutionResult {
         const entry = self.registry.findById(self.plan.adapter_id) orelse return error.AdapterNotFound;
         return try entry.adapter.execute(self.allocator, self.request);
-    }
-
-    pub fn prepareLegacyCommand(self: *const PreparedExecution, options: LegacyOptions) !legacy_command.LegacyCommand {
-        const resolved_input = options.input orelse self.request.input.asString();
-        const resolved_max_tokens = options.max_tokens orelse self.request.generation.max_tokens;
-        return try self.managed.buildLegacyCommand(self.allocator, .{
-            .operation = self.request.spec.operation,
-            .input = resolved_input,
-            .max_tokens = resolved_max_tokens,
-        });
-    }
-
-    pub fn executeLegacy(self: *const PreparedExecution, options: LegacyOptions) !std.process.Child.Term {
-        var command = try self.prepareLegacyCommand(options);
-        defer command.deinit();
-        return try executeLegacyCommand(command);
     }
 };
 
@@ -186,16 +164,6 @@ pub fn prepareBatch(allocator: std.mem.Allocator, request: PrepareBatchRequest) 
         .requests = requests,
         .batch_plan = try scheduler.planBatches(allocator, requests),
     };
-}
-
-pub fn executeLegacyCommand(command: legacy_command.LegacyCommand) !std.process.Child.Term {
-    var child = std.process.Child.init(command.argv, std.heap.page_allocator);
-    child.cwd = command.workdir;
-    child.stdin_behavior = .Inherit;
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
-    try child.spawn();
-    return try child.wait();
 }
 
 fn defaultOperation(descriptor: engine.adapter.Descriptor) []const u8 {

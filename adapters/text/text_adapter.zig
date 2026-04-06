@@ -5,7 +5,6 @@ const kinetix = @import("../../engine/kinetix.zig");
 const backend = kinetix.artifacts.backend;
 const load_plan = kinetix.runtime.load_plan;
 const adapter_mod = kinetix.adapter;
-const legacy_command = @import("../legacy_command.zig");
 const registry_mod = kinetix.registry;
 const task = kinetix.core.task;
 const text_native_dispatch = kinetix.runtime.text.native_dispatch;
@@ -131,49 +130,6 @@ pub const TextAdapter = struct {
         try registry.register(self.asAdapter());
     }
 
-    pub fn buildLegacyCommand(self: *const TextAdapter, allocator: std.mem.Allocator, options: legacy_command.BuildOptions) !legacy_command.LegacyCommand {
-        const project_dir = try legacy_command.legacyProjectDirAlloc(allocator, "legacy/zinfer");
-        defer allocator.free(project_dir);
-
-        const input = options.input orelse defaultTextInput(self.family, options.operation);
-        return switch (self.family) {
-            .qwen3 => blk: {
-                if (std.mem.eql(u8, options.operation, "generate") or std.mem.eql(u8, options.operation, "chat")) {
-                    const max_tokens = options.max_tokens orelse 64;
-                    const max_tokens_text = try std.fmt.allocPrint(allocator, "{d}", .{max_tokens});
-                    defer allocator.free(max_tokens_text);
-                    break :blk try legacy_command.init(allocator, project_dir, &.{
-                        "zig",                  "build", "run",           "--", "generate",
-                        self.catalog.model_dir, input,   max_tokens_text,
-                    });
-                }
-                if (std.mem.eql(u8, options.operation, "embed")) {
-                    break :blk try legacy_command.init(allocator, project_dir, &.{
-                        "zig",                  "build", "run", "--", "embed-text",
-                        self.catalog.model_dir, input,
-                    });
-                }
-                return error.UnsupportedLegacyOperation;
-            },
-            .bert => blk: {
-                if (std.mem.eql(u8, options.operation, "fill-mask")) {
-                    break :blk try legacy_command.init(allocator, project_dir, &.{
-                        "zig",                  "build", "run", "--", "fill-mask",
-                        self.catalog.model_dir, input,
-                    });
-                }
-                if (std.mem.eql(u8, options.operation, "embed")) {
-                    break :blk try legacy_command.init(allocator, project_dir, &.{
-                        "zig",                  "build", "run", "--", "embed-text",
-                        self.catalog.model_dir, input,
-                    });
-                }
-                return error.UnsupportedLegacyOperation;
-            },
-            .unknown => return error.UnsupportedLegacyOperation,
-        };
-    }
-
     fn submit(ctx: *anyopaque, request: task.TaskRequest) !adapter_mod.Submission {
         const self: *TextAdapter = @ptrCast(@alignCast(ctx));
         if (self.plan.weights_path == null) return error.MissingWeightArtifacts;
@@ -274,11 +230,6 @@ fn detectModelFamily(allocator: std.mem.Allocator, config_path: []const u8) !Mod
     if (std.mem.eql(u8, model_type_value.string, "qwen3")) return .qwen3;
     if (std.mem.eql(u8, model_type_value.string, "bert")) return .bert;
     return .unknown;
-}
-
-fn defaultTextInput(family: ModelFamily, operation: []const u8) []const u8 {
-    if (family == .bert and std.mem.eql(u8, operation, "fill-mask")) return "Hello [MASK]";
-    return "Hello from Kinetix";
 }
 
 fn buildSubmissions(self: *const TextAdapter, allocator: std.mem.Allocator, requests: []const task.TaskRequest) ![]adapter_mod.Submission {

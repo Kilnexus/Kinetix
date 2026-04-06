@@ -49,7 +49,6 @@ pub const OutputPayload = union(enum) {
 
 pub const ExecutionOrigin = enum {
     shared_adapter,
-    legacy_process_bridge,
     native_single_bridge,
     native_batch_bridge,
 };

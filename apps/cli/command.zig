@@ -28,7 +28,6 @@ pub const RunArgs = struct {
     input: ?[]const u8 = null,
     execution: task.ExecutionMode = .sync,
     preferred_weights: backend.WeightScheme = .auto,
-    legacy_exec: bool = false,
     max_tokens: ?usize = null,
     native_exec: bool = false,
 };
@@ -162,7 +161,6 @@ pub fn parse(allocator: std.mem.Allocator) !ParsedCommand {
     var input: ?[]const u8 = null;
     var execution_mode: task.ExecutionMode = .sync;
     var preferred_weights: backend.WeightScheme = .auto;
-    var legacy_exec = false;
     var max_tokens: ?usize = null;
     var native_exec = false;
 
@@ -198,10 +196,6 @@ pub fn parse(allocator: std.mem.Allocator) !ParsedCommand {
             preferred_weights = try parseWeightScheme(args[i]);
             continue;
         }
-        if (std.mem.eql(u8, args[i], "--legacy-exec")) {
-            legacy_exec = true;
-            continue;
-        }
         if (std.mem.eql(u8, args[i], "--native-exec")) {
             native_exec = true;
             continue;
@@ -224,7 +218,6 @@ pub fn parse(allocator: std.mem.Allocator) !ParsedCommand {
             .input = input,
             .execution = execution_mode,
             .preferred_weights = preferred_weights,
-            .legacy_exec = legacy_exec,
             .max_tokens = max_tokens,
             .native_exec = native_exec,
         } },
@@ -247,15 +240,15 @@ pub fn printUsage(writer: anytype) !void {
         \\Kinetix CLI
         \\
         \\Usage:
-        \\  kinetix run --model-dir <path> [--operation <name>] [--input <value>] [--execution sync|async|stream] [--weights auto|bf16|q8|q6|q4] [--legacy-exec] [--native-exec]
+        \\  kinetix run --model-dir <path> [--operation <name>] [--input <value>] [--execution sync|async|stream] [--weights auto|bf16|q8|q6|q4] [--native-exec]
         \\  kinetix batch-plan --model-dir <path> --requests-file <json> [--native-exec]
         \\  kinetix batch-run --model-dir <path> --requests-file <json> [--native-exec]
         \\  kinetix --help
         \\
         \\Examples:
-        \\  kinetix run --model-dir .\\models\\vision\\compat_yolo11n --operation detect --legacy-exec --input .\\datasets\\vision\\archive\\images\\000_0001.png
+        \\  kinetix run --model-dir .\\models\\vision\\compat_yolo11n --operation detect --input .\\datasets\\vision\\archive\\images\\000_0001.png
         \\  kinetix run --model-dir .\\models\\text\\Qwen3-0.6B --operation generate --input "Hello from Kinetix" --max-tokens 8 --native-exec
-        \\  kinetix run --model-dir .\\models\\ocr\\PP-OCRv5_server_det_infer --operation infer-ocr --legacy-exec --input input.ppm
+        \\  kinetix run --model-dir .\\models\\ocr\\PP-OCRv5_server_det_infer --operation infer-ocr --input input.ppm
         \\  kinetix batch-plan --model-dir .\\models\\text\\Qwen3-0.6B --requests-file requests.json
         \\  kinetix batch-run --model-dir .\\models\\text\\Qwen3-0.6B --requests-file requests.json --native-exec
         \\
@@ -283,32 +276,16 @@ fn runCommand(stdout: anytype, args: RunArgs) !void {
     try stdout.print("supports_streaming: {s}\n", .{boolText(prepared.plan.supports_streaming)});
     try stdout.print("accepted: {s}\n", .{boolText(prepared.submission.accepted)});
 
-    if (args.legacy_exec) {
-        var legacy = try prepared.prepareLegacyCommand(.{});
-        defer legacy.deinit();
-
-        try stdout.print("legacy_workdir: {s}\n", .{legacy.workdir});
-        try stdout.print("legacy_argv: ", .{});
-        for (legacy.argv, 0..) |arg, index| {
-            if (index != 0) try stdout.writeAll(" ");
-            try stdout.writeAll(arg);
-        }
-        try stdout.writeAll("\n");
-
-        const term = try execution.executeLegacyCommand(legacy);
-        try stdout.print("legacy_exit: {s}\n", .{termText(term)});
-    } else {
-        var result = try prepared.execute();
-        defer result.deinit(std.heap.page_allocator);
-        try stdout.print("execution_origin: {s}\n", .{@tagName(result.origin)});
-        if (result.note != .none) {
-            try stdout.print("execution_note: {s}\n", .{@tagName(result.note)});
-        }
-        switch (result.output) {
-            .none => {},
-            .text => |value| try stdout.print("output_text: {s}\n", .{value}),
-            .json => |value| try stdout.print("output_json: {s}\n", .{value}),
-        }
+    var result = try prepared.execute();
+    defer result.deinit(std.heap.page_allocator);
+    try stdout.print("execution_origin: {s}\n", .{@tagName(result.origin)});
+    if (result.note != .none) {
+        try stdout.print("execution_note: {s}\n", .{@tagName(result.note)});
+    }
+    switch (result.output) {
+        .none => {},
+        .text => |value| try stdout.print("output_text: {s}\n", .{value}),
+        .json => |value| try stdout.print("output_json: {s}\n", .{value}),
     }
 }
 
@@ -470,13 +447,4 @@ fn parseWeightScheme(value: []const u8) !backend.WeightScheme {
     if (std.mem.eql(u8, value, "q6")) return .q6;
     if (std.mem.eql(u8, value, "q4")) return .q4;
     return error.InvalidWeightScheme;
-}
-
-fn termText(term: std.process.Child.Term) []const u8 {
-    return switch (term) {
-        .Exited => "exited",
-        .Signal => "signal",
-        .Stopped => "stopped",
-        .Unknown => "unknown",
-    };
 }
