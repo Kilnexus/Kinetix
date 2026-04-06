@@ -39,6 +39,7 @@ pub const BatchPlanArgs = struct {
     execution: task.ExecutionMode = .sync,
     preferred_weights: backend.WeightScheme = .auto,
     max_tokens: ?usize = null,
+    native_exec: bool = false,
 };
 
 const BatchRequestJson = struct {
@@ -46,6 +47,7 @@ const BatchRequestJson = struct {
     input: ?[]const u8 = null,
     execution: ?[]const u8 = null,
     max_tokens: ?usize = null,
+    native_exec: ?bool = null,
     allows_batching: ?bool = null,
 };
 
@@ -80,6 +82,7 @@ pub fn parse(allocator: std.mem.Allocator) !ParsedCommand {
         var execution_mode: task.ExecutionMode = .sync;
         var preferred_weights: backend.WeightScheme = .auto;
         var max_tokens: ?usize = null;
+        var native_exec = false;
 
         var i: usize = 2;
         while (i < args.len) : (i += 1) {
@@ -119,6 +122,10 @@ pub fn parse(allocator: std.mem.Allocator) !ParsedCommand {
                 max_tokens = try std.fmt.parseInt(usize, args[i], 10);
                 continue;
             }
+            if (std.mem.eql(u8, args[i], "--native-exec")) {
+                native_exec = true;
+                continue;
+            }
             return error.UnknownOption;
         }
 
@@ -133,6 +140,7 @@ pub fn parse(allocator: std.mem.Allocator) !ParsedCommand {
                 .execution = execution_mode,
                 .preferred_weights = preferred_weights,
                 .max_tokens = max_tokens,
+                .native_exec = native_exec,
             } } else .{ .batch_plan = .{
                 .model_dir = model_dir.?,
                 .requests_file = requests_file.?,
@@ -140,6 +148,7 @@ pub fn parse(allocator: std.mem.Allocator) !ParsedCommand {
                 .execution = execution_mode,
                 .preferred_weights = preferred_weights,
                 .max_tokens = max_tokens,
+                .native_exec = native_exec,
             } },
             .argv_copy = copied,
         };
@@ -232,8 +241,8 @@ pub fn printUsage(writer: anytype) !void {
         \\
         \\Usage:
         \\  kinetix run --model-dir <path> [--operation <name>] [--input <value>] [--execution sync|async|stream] [--weights auto|bf16|q8|q6|q4] [--legacy-exec]
-        \\  kinetix batch-plan --model-dir <path> --requests-file <json>
-        \\  kinetix batch-run --model-dir <path> --requests-file <json>
+        \\  kinetix batch-plan --model-dir <path> --requests-file <json> [--native-exec]
+        \\  kinetix batch-run --model-dir <path> --requests-file <json> [--native-exec]
         \\  kinetix --help
         \\
         \\Examples:
@@ -241,7 +250,7 @@ pub fn printUsage(writer: anytype) !void {
         \\  kinetix run --model-dir .\\models\\Qwen3-0.6B --execution stream --input "Hello from Kinetix"
         \\  kinetix run --model-dir .\\ocr-demo --operation infer-ocr --legacy-exec --input input.ppm
         \\  kinetix batch-plan --model-dir .\\models\\Qwen3-0.6B --requests-file requests.json
-        \\  kinetix batch-run --model-dir .\\models\\Qwen3-0.6B --requests-file requests.json
+        \\  kinetix batch-run --model-dir .\\models\\Qwen3-0.6B --requests-file requests.json --native-exec
         \\
     );
 }
@@ -301,13 +310,20 @@ fn runBatchPlan(stdout: anytype, args: BatchPlanArgs) !void {
     try stdout.print("batches: {d}\n", .{prepared.batch_plan.batches.len});
 
     for (prepared.batch_plan.batches, 0..) |batch, batch_index| {
-        try stdout.print("batch[{d}]: size={d} execution={s} batching={s} input={s} indices=", .{
+        try stdout.print("batch[{d}]: size={d} execution={s} batching={s} input={s}", .{
             batch_index,
             batch.len(),
             @tagName(batch.execution),
             boolText(batch.supports_batching),
             @tagName(batch.input_tag),
         });
+        if (batch.generation_max_tokens) |max_tokens| {
+            try stdout.print(" max_tokens={d}", .{max_tokens});
+        }
+        if (batch.native_execution) {
+            try stdout.writeAll(" native=true");
+        }
+        try stdout.writeAll(" indices=");
         for (batch.request_indices, 0..) |request_index, request_offset| {
             if (request_offset != 0) try stdout.writeAll(",");
             try stdout.print("{d}", .{request_index});
@@ -368,6 +384,7 @@ fn loadBatchItems(args: BatchPlanArgs) ![]execution.PrepareBatchItem {
             .input = entry.input,
             .execution = if (entry.execution) |mode| try parseExecutionMode(mode) else args.execution,
             .max_tokens = entry.max_tokens orelse args.max_tokens,
+            .native_exec = entry.native_exec orelse args.native_exec,
             .allows_batching = entry.allows_batching orelse true,
         };
     }

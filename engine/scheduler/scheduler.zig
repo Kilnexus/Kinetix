@@ -26,6 +26,8 @@ pub const DispatchBatch = struct {
     supports_batching: bool,
     supports_streaming: bool,
     input_tag: std.meta.Tag(task.InputPayload),
+    generation_max_tokens: ?usize,
+    native_execution: bool,
     request_indices: []usize,
 
     pub fn len(self: DispatchBatch) usize {
@@ -96,6 +98,8 @@ pub const Scheduler = struct {
             supports_batching: bool,
             supports_streaming: bool,
             input_tag: std.meta.Tag(task.InputPayload),
+            generation_max_tokens: ?usize,
+            native_execution: bool,
             indices: std.ArrayListUnmanaged(usize) = .empty,
 
             fn deinit(builder: *@This(), alloc: std.mem.Allocator) void {
@@ -119,6 +123,8 @@ pub const Scheduler = struct {
                     if (!builder.supports_batching) continue;
                     if (builder.execution != dispatch_plan.execution) continue;
                     if (builder.input_tag != payload_tag) continue;
+                    if (builder.generation_max_tokens != request.generation.max_tokens) continue;
+                    if (builder.native_execution != request.generation.native_execution) continue;
                     if (!std.mem.eql(u8, builder.adapter_id, dispatch_plan.adapter_id)) continue;
                     if (builder.queue.modality != dispatch_plan.queue.modality) continue;
                     if (!std.mem.eql(u8, builder.queue.operation, dispatch_plan.queue.operation)) continue;
@@ -133,6 +139,8 @@ pub const Scheduler = struct {
                         .supports_batching = true,
                         .supports_streaming = dispatch_plan.supports_streaming,
                         .input_tag = payload_tag,
+                        .generation_max_tokens = request.generation.max_tokens,
+                        .native_execution = request.generation.native_execution,
                     };
                     try builder.indices.append(allocator, index);
                     try builders.append(allocator, builder);
@@ -147,6 +155,8 @@ pub const Scheduler = struct {
                 .supports_batching = false,
                 .supports_streaming = dispatch_plan.supports_streaming,
                 .input_tag = payload_tag,
+                .generation_max_tokens = request.generation.max_tokens,
+                .native_execution = request.generation.native_execution,
             };
             try builder.indices.append(allocator, index);
             try builders.append(allocator, builder);
@@ -163,6 +173,8 @@ pub const Scheduler = struct {
                 .supports_batching = builder.supports_batching,
                 .supports_streaming = builder.supports_streaming,
                 .input_tag = builder.input_tag,
+                .generation_max_tokens = builder.generation_max_tokens,
+                .native_execution = builder.native_execution,
                 .request_indices = try builder.indices.toOwnedSlice(allocator),
             };
         }

@@ -47,6 +47,7 @@ pub const InputPayload = union(enum) {
 
 pub const GenerationOptions = struct {
     max_tokens: ?usize = null,
+    native_execution: bool = false,
 };
 
 pub const TaskRequest = struct {
@@ -80,4 +81,5 @@ test "task request carries typed payload and generation options" {
 
     try std.testing.expectEqualStrings("hello", request.input.asString().?);
     try std.testing.expectEqual(@as(?usize, 128), request.generation.max_tokens);
+    try std.testing.expect(!request.generation.native_execution);
 }

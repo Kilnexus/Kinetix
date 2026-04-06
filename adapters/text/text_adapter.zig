@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const kinetix = @import("../../engine/kinetix.zig");
 
 const backend = kinetix.artifacts.backend;
@@ -7,6 +8,20 @@ const adapter_mod = kinetix.adapter;
 const legacy_command = @import("../legacy_command.zig");
 const registry_mod = kinetix.registry;
 const task = kinetix.core.task;
+const zinfer_batch_bridge = if (builtin.is_test) struct {
+    pub fn executeQwenBatch(
+        allocator: std.mem.Allocator,
+        model_dir: []const u8,
+        preferred_weights: backend.WeightScheme,
+        requests: []const task.TaskRequest,
+    ) !void {
+        _ = allocator;
+        _ = model_dir;
+        _ = preferred_weights;
+        _ = requests;
+        return error.NativeBatchBridgeUnavailableInTests;
+    }
+} else @import("zinfer_batch_bridge.zig");
 
 pub const ModelFamily = enum {
     qwen3,
@@ -163,6 +178,15 @@ pub const TextAdapter = struct {
         if (self.plan.config_path == null) return error.MissingConfigArtifact;
         if (self.plan.tokenizer_path == null) return error.MissingTokenizerArtifact;
 
+        if (canUseNativeQwenBatch(self, requests)) {
+            try zinfer_batch_bridge.executeQwenBatch(
+                allocator,
+                self.catalog.model_dir,
+                self.plan.weight_scheme orelse .auto,
+                requests,
+            );
+        }
+
         const submissions = try allocator.alloc(adapter_mod.Submission, requests.len);
         errdefer allocator.free(submissions);
 
@@ -214,4 +238,23 @@ fn detectModelFamily(allocator: std.mem.Allocator, config_path: []const u8) !Mod
 fn defaultTextInput(family: ModelFamily, operation: []const u8) []const u8 {
     if (family == .bert and std.mem.eql(u8, operation, "fill-mask")) return "Hello [MASK]";
     return "Hello from Kinetix";
+}
+
+fn canUseNativeQwenBatch(self: *const TextAdapter, requests: []const task.TaskRequest) bool {
+    if (self.family != .qwen3) return false;
+    if (requests.len <= 1) return false;
+
+    for (requests, 0..) |request, index| {
+        if (!request.generation.native_execution) return false;
+        if (request.spec.execution != .sync) return false;
+        if (!std.mem.eql(u8, request.spec.operation, "generate") and !std.mem.eql(u8, request.spec.operation, "chat")) return false;
+        switch (request.input) {
+            .text => {},
+            else => return false,
+        }
+
+        if (index != 0 and request.generation.max_tokens != requests[0].generation.max_tokens) return false;
+    }
+
+    return true;
 }

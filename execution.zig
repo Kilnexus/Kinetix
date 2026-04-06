@@ -23,6 +23,7 @@ pub const PrepareBatchItem = struct {
     input: ?[]const u8 = null,
     execution: ?task.ExecutionMode = null,
     max_tokens: ?usize = null,
+    native_exec: bool = false,
     allows_batching: bool = true,
 };
 
@@ -155,7 +156,10 @@ pub fn prepareBatch(allocator: std.mem.Allocator, request: PrepareBatchRequest) 
                 .allows_batching = item.allows_batching,
             },
             .input = inferInputPayload(descriptor.modality, item.input),
-            .generation = .{ .max_tokens = item.max_tokens },
+            .generation = .{
+                .max_tokens = item.max_tokens,
+                .native_execution = item.native_exec,
+            },
         };
     }
 

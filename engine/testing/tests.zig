@@ -196,6 +196,54 @@ test "scheduler groups compatible text requests into one batch" {
     try std.testing.expect(batch_plan.batches[0].supports_batching);
 }
 
+test "scheduler splits text batches when generation limits differ" {
+    var registry = registry_mod.Registry.init(std.testing.allocator);
+    defer registry.deinit();
+
+    var state = MockState{ .adapter_id = "text.qwen3" };
+    try registry.register(.{
+        .ctx = &state,
+        .descriptor = .{
+            .id = "text.qwen3",
+            .modality = .text,
+            .bound_model_family = "qwen3",
+            .supports_batching = true,
+            .supports_streaming = true,
+            .supported_operations = &.{ "generate" },
+        },
+        .vtable = &mock_vtable,
+    });
+
+    const scheduler = scheduler_mod.Scheduler.init(&registry);
+    const requests = [_]task.TaskRequest{
+        .{
+            .spec = .{
+                .modality = .text,
+                .operation = "generate",
+                .model_family = "qwen3",
+                .execution = .sync,
+            },
+            .input = .{ .text = "hello" },
+            .generation = .{ .max_tokens = 16 },
+        },
+        .{
+            .spec = .{
+                .modality = .text,
+                .operation = "generate",
+                .model_family = "qwen3",
+                .execution = .sync,
+            },
+            .input = .{ .text = "world" },
+            .generation = .{ .max_tokens = 32 },
+        },
+    };
+
+    var batch_plan = try scheduler.planBatches(std.testing.allocator, &requests);
+    defer batch_plan.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), batch_plan.batches.len);
+}
+
 test "scheduler keeps non-batchable OCR requests isolated" {
     var registry = registry_mod.Registry.init(std.testing.allocator);
     defer registry.deinit();
