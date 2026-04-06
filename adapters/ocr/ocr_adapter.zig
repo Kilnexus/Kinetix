@@ -1,111 +1,13 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const kinetix = @import("../../engine/kinetix.zig");
 
 const adapter_mod = kinetix.adapter;
 const backend = kinetix.artifacts.backend;
 const load_plan = kinetix.runtime.load_plan;
+const ocr_pipeline = kinetix.runtime.ocr_pipeline;
 const legacy_command = @import("../legacy_command.zig");
 const registry_mod = kinetix.registry;
 const task = kinetix.core.task;
-const ocr_legacy_bridge = if (builtin.is_test) struct {
-    pub const InferOutput = struct {
-        loaded_tensors: usize,
-        image_width: usize,
-        image_height: usize,
-    };
-
-    pub fn executeInfer(
-        allocator: std.mem.Allocator,
-        model_path: []const u8,
-        image_path: []const u8,
-    ) !InferOutput {
-        _ = allocator;
-        _ = model_path;
-        _ = image_path;
-        return .{
-            .loaded_tensors = 2,
-            .image_width = 1,
-            .image_height = 1,
-        };
-    }
-} else struct {
-    pub const InferOutput = struct {
-        loaded_tensors: usize,
-        image_width: usize,
-        image_height: usize,
-    };
-
-    pub fn executeInfer(
-        allocator: std.mem.Allocator,
-        model_path: []const u8,
-        image_path: []const u8,
-    ) !InferOutput {
-        const resolved_model_path = if (std.fs.path.isAbsolute(model_path))
-            try allocator.dupe(u8, model_path)
-        else
-            try std.fs.cwd().realpathAlloc(allocator, model_path);
-        defer allocator.free(resolved_model_path);
-
-        const resolved_image_path = if (std.fs.path.isAbsolute(image_path))
-            try allocator.dupe(u8, image_path)
-        else
-            try std.fs.cwd().realpathAlloc(allocator, image_path);
-        defer allocator.free(resolved_image_path);
-
-        const workdir = try legacy_command.legacyProjectDirAlloc(allocator, "legacy/swiftocr");
-        defer allocator.free(workdir);
-
-        const result = try std.process.Child.run(.{
-            .allocator = allocator,
-            .argv = &.{
-                "zig",
-                "build",
-                "run",
-                "--",
-                "infer",
-                "--model",
-                resolved_model_path,
-                "--image",
-                resolved_image_path,
-            },
-            .cwd = workdir,
-            .max_output_bytes = 64 * 1024,
-        });
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-
-        switch (result.term) {
-            .Exited => |code| if (code != 0) return error.LegacyOCRInferFailed,
-            else => return error.LegacyOCRInferFailed,
-        }
-
-        return try parseInferOutput(result.stdout);
-    }
-
-    fn parseInferOutput(stdout: []const u8) !InferOutput {
-        const loaded_prefix = "Loaded tensors: ";
-        const image_prefix = "Image: ";
-
-        const loaded_start = std.mem.indexOf(u8, stdout, loaded_prefix) orelse return error.InvalidLegacyOCROutput;
-        const image_start = std.mem.indexOf(u8, stdout, image_prefix) orelse return error.InvalidLegacyOCROutput;
-
-        const loaded_line = sliceLine(stdout[loaded_start + loaded_prefix.len ..]);
-        const image_line = sliceLine(stdout[image_start + image_prefix.len ..]);
-        const x_index = std.mem.indexOfScalar(u8, image_line, 'x') orelse return error.InvalidLegacyOCROutput;
-
-        return .{
-            .loaded_tensors = try std.fmt.parseInt(usize, std.mem.trim(u8, loaded_line, " \r\n\t"), 10),
-            .image_width = try std.fmt.parseInt(usize, std.mem.trim(u8, image_line[0..x_index], " \r\n\t"), 10),
-            .image_height = try std.fmt.parseInt(usize, std.mem.trim(u8, image_line[x_index + 1 ..], " \r\n\t"), 10),
-        };
-    }
-
-    fn sliceLine(bytes: []const u8) []const u8 {
-        const newline_index = std.mem.indexOfScalar(u8, bytes, '\n') orelse bytes.len;
-        return bytes[0..newline_index];
-    }
-};
 
 const swiftocr_operations = [_][]const u8{ "infer-ocr", "detect-text", "recognize-text" };
 
@@ -206,12 +108,12 @@ pub const OCRAdapter = struct {
 
     fn execute(ctx: *anyopaque, allocator: std.mem.Allocator, request: task.TaskRequest) !adapter_mod.ExecutionResult {
         const self: *OCRAdapter = @ptrCast(@alignCast(ctx));
-        const infer_output = try maybeRunLegacyInfer(self, allocator, request);
+        const infer_output = try maybeRunSharedInfer(self, allocator, request);
         const output = try buildOutputJson(self, allocator, request, infer_output);
         return .{
             .submission = try submit(ctx, request),
-            .origin = if (infer_output != null) .legacy_process_bridge else .shared_adapter,
-            .note = if (infer_output != null) .ocr_legacy_infer_summary else .ocr_model_ready,
+            .origin = .shared_adapter,
+            .note = if (infer_output != null) .ocr_shared_infer else .ocr_model_ready,
             .output = .{ .json = output },
         };
     }
@@ -226,7 +128,7 @@ fn buildOutputJson(
     self: *const OCRAdapter,
     allocator: std.mem.Allocator,
     request: task.TaskRequest,
-    infer_output: ?ocr_legacy_bridge.InferOutput,
+    infer_output: ?ocr_pipeline.InferResult,
 ) ![]u8 {
     const OCRReceipt = struct {
         status: []const u8,
@@ -256,11 +158,11 @@ fn buildOutputJson(
     return try allocator.dupe(u8, out.written());
 }
 
-fn maybeRunLegacyInfer(
+fn maybeRunSharedInfer(
     self: *const OCRAdapter,
     allocator: std.mem.Allocator,
     request: task.TaskRequest,
-) !?ocr_legacy_bridge.InferOutput {
+) !?ocr_pipeline.InferResult {
     if (!std.mem.eql(u8, request.spec.operation, "infer-ocr")) return null;
     if (request.spec.execution != .sync) return null;
 
@@ -269,9 +171,11 @@ fn maybeRunLegacyInfer(
         else => return null,
     };
 
-    return try ocr_legacy_bridge.executeInfer(
-        allocator,
-        self.plan.ocr_model_path.?,
-        image_path,
-    );
+    var pipeline = ocr_pipeline.OCRPipeline.init(allocator);
+    defer pipeline.deinit();
+
+    return try pipeline.infer(.{
+        .model_path = self.plan.ocr_model_path.?,
+        .image_path = image_path,
+    });
 }

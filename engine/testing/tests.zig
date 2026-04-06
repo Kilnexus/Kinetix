@@ -556,8 +556,8 @@ test "vision adapter resolves yolo artifacts and integrates with scheduler" {
     });
     defer result.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(adapter_mod.ExecutionOrigin.legacy_process_bridge, result.origin);
-    try std.testing.expectEqual(adapter_mod.ExecutionNote.vision_legacy_detect_json, result.note);
+    try std.testing.expectEqual(adapter_mod.ExecutionOrigin.shared_adapter, result.origin);
+    try std.testing.expectEqual(adapter_mod.ExecutionNote.vision_shared_detect, result.note);
     switch (result.output) {
         .json => |payload| {
             const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, payload, .{});
@@ -618,10 +618,13 @@ test "ocr adapter resolves swiftocr model and integrates with scheduler" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try writeTmpFile(tmp.dir, "demo.swm", "SWOCR01");
+    try writeOCRModel(tmp.dir, "demo.swm", 0);
+    try writePPMImage(tmp.dir, "demo.ppm", 1, 1, &[_]u8{ 1, 2, 3 });
 
     const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
     defer std.testing.allocator.free(root_path);
+    const image_path = try tmp.dir.realpathAlloc(std.testing.allocator, "demo.ppm");
+    defer std.testing.allocator.free(image_path);
 
     var ocr_adapter = try ocr_adapter_mod.OCRAdapter.init(std.testing.allocator, root_path);
     defer ocr_adapter.deinit();
@@ -652,20 +655,20 @@ test "ocr adapter resolves swiftocr model and integrates with scheduler" {
             .model_family = "swiftocr",
             .execution = .sync,
         },
-        .input = .{ .image_path = "demo.ppm" },
+        .input = .{ .image_path = image_path },
     });
     defer result.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(adapter_mod.ExecutionOrigin.legacy_process_bridge, result.origin);
-    try std.testing.expectEqual(adapter_mod.ExecutionNote.ocr_legacy_infer_summary, result.note);
+    try std.testing.expectEqual(adapter_mod.ExecutionOrigin.shared_adapter, result.origin);
+    try std.testing.expectEqual(adapter_mod.ExecutionNote.ocr_shared_infer, result.note);
     switch (result.output) {
         .json => |payload| {
             const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, payload, .{});
             defer parsed.deinit();
 
             try std.testing.expectEqualStrings("ocr_infer_completed", parsed.value.object.get("status").?.string);
-            try std.testing.expectEqualStrings("demo.ppm", parsed.value.object.get("input_path").?.string);
-            try std.testing.expectEqual(@as(i64, 2), parsed.value.object.get("loaded_tensors").?.integer);
+            try std.testing.expectEqualStrings(image_path, parsed.value.object.get("input_path").?.string);
+            try std.testing.expectEqual(@as(i64, 0), parsed.value.object.get("loaded_tensors").?.integer);
             try std.testing.expectEqual(@as(i64, 1), parsed.value.object.get("image_width").?.integer);
             try std.testing.expectEqual(@as(i64, 1), parsed.value.object.get("image_height").?.integer);
         },
@@ -1002,4 +1005,26 @@ fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8
     var file = try dir.createFile(relative_path, .{});
     defer file.close();
     try file.writeAll(contents);
+}
+
+fn writeOCRModel(dir: std.fs.Dir, relative_path: []const u8, tensor_count: u32) !void {
+    var file = try dir.createFile(relative_path, .{});
+    defer file.close();
+
+    var writer_impl = file.writer(&.{});
+    const writer = &writer_impl.interface;
+    try writer.writeAll(&[_]u8{ 'S', 'W', 'O', 'C', 'R', '0', '1', 0 });
+    try writer.writeInt(u32, tensor_count, .little);
+    try writer.flush();
+}
+
+fn writePPMImage(dir: std.fs.Dir, relative_path: []const u8, width: usize, height: usize, pixels: []const u8) !void {
+    var file = try dir.createFile(relative_path, .{});
+    defer file.close();
+
+    var writer_impl = file.writer(&.{});
+    const writer = &writer_impl.interface;
+    try writer.print("P6\n{d} {d}\n255\n", .{ width, height });
+    try writer.writeAll(pixels);
+    try writer.flush();
 }

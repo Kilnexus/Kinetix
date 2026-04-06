@@ -62,8 +62,10 @@ pub const ExecutionNote = enum {
     text_native_qwen_batch,
     vision_graph_ready,
     vision_legacy_detect_json,
+    vision_shared_detect,
     ocr_model_ready,
     ocr_legacy_infer_summary,
+    ocr_shared_infer,
 };
 
 pub const ExecutionResult = struct {

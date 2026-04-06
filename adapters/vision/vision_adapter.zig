@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const kinetix = @import("../../engine/kinetix.zig");
 
 const adapter_mod = kinetix.adapter;
@@ -9,158 +8,7 @@ const load_plan = kinetix.runtime.load_plan;
 const legacy_command = @import("../legacy_command.zig");
 const registry_mod = kinetix.registry;
 const task = kinetix.core.task;
-const vision_legacy_bridge = if (builtin.is_test) struct {
-    pub const Detection = struct {
-        x1: f64,
-        y1: f64,
-        x2: f64,
-        y2: f64,
-        score: f64,
-        class_id: usize,
-    };
-
-    pub const DetectOutput = struct {
-        candidate_count: usize,
-        detections: []Detection,
-
-        pub fn deinit(self: *DetectOutput, allocator: std.mem.Allocator) void {
-            allocator.free(self.detections);
-            self.* = undefined;
-        }
-    };
-
-    pub fn executeDetectJson(
-        allocator: std.mem.Allocator,
-        graph_path: []const u8,
-        weights_path: []const u8,
-        image_path: []const u8,
-    ) !DetectOutput {
-        _ = graph_path;
-        _ = weights_path;
-        _ = image_path;
-        const detections = try allocator.alloc(Detection, 1);
-        detections[0] = .{
-            .x1 = 1.0,
-            .y1 = 2.0,
-            .x2 = 3.0,
-            .y2 = 4.0,
-            .score = 0.95,
-            .class_id = 1,
-        };
-        return .{
-            .candidate_count = 4,
-            .detections = detections,
-        };
-    }
-} else struct {
-    pub const Detection = struct {
-        x1: f64,
-        y1: f64,
-        x2: f64,
-        y2: f64,
-        score: f64,
-        class_id: usize,
-    };
-
-    pub const DetectOutput = struct {
-        candidate_count: usize,
-        detections: []Detection,
-
-        pub fn deinit(self: *DetectOutput, allocator: std.mem.Allocator) void {
-            allocator.free(self.detections);
-            self.* = undefined;
-        }
-    };
-
-    const ParsedDetectOutput = struct {
-        candidate_count: usize,
-        detections: []Detection,
-    };
-
-    pub fn executeDetectJson(
-        allocator: std.mem.Allocator,
-        graph_path: []const u8,
-        weights_path: []const u8,
-        image_path: []const u8,
-    ) !DetectOutput {
-        const resolved_graph_path = if (std.fs.path.isAbsolute(graph_path))
-            try allocator.dupe(u8, graph_path)
-        else
-            try std.fs.cwd().realpathAlloc(allocator, graph_path);
-        defer allocator.free(resolved_graph_path);
-
-        const resolved_weights_path = if (std.fs.path.isAbsolute(weights_path))
-            try allocator.dupe(u8, weights_path)
-        else
-            try std.fs.cwd().realpathAlloc(allocator, weights_path);
-        defer allocator.free(resolved_weights_path);
-
-        const resolved_image_path = if (std.fs.path.isAbsolute(image_path))
-            try allocator.dupe(u8, image_path)
-        else
-            try std.fs.cwd().realpathAlloc(allocator, image_path);
-        defer allocator.free(resolved_image_path);
-
-        const tmp_dir = std.process.getEnvVarOwned(allocator, "TEMP") catch try allocator.dupe(u8, ".");
-        defer allocator.free(tmp_dir);
-
-        const stamp = std.time.microTimestamp();
-        const json_name = try std.fmt.allocPrint(allocator, "kinetix_vision_detect_{d}.json", .{stamp});
-        defer allocator.free(json_name);
-        const json_path = try std.fs.path.join(allocator, &.{ tmp_dir, json_name });
-        defer allocator.free(json_path);
-
-        const workdir = try legacy_command.legacyProjectDirAlloc(allocator, "legacy/axionyx");
-        defer allocator.free(workdir);
-
-        var command = try legacy_command.init(allocator, workdir, &.{
-            "zig", "build", "run", "--",
-            resolved_graph_path,
-            resolved_weights_path,
-            resolved_image_path,
-            json_path,
-        });
-        defer command.deinit();
-
-        var child = std.process.Child.init(command.argv, allocator);
-        child.cwd = command.workdir;
-        child.stdin_behavior = .Ignore;
-        child.stdout_behavior = .Ignore;
-        child.stderr_behavior = .Ignore;
-        try child.spawn();
-        const term = try child.wait();
-        switch (term) {
-            .Exited => |code| if (code != 0) return error.LegacyVisionDetectFailed,
-            else => return error.LegacyVisionDetectFailed,
-        }
-
-        defer if (std.fs.path.isAbsolute(json_path))
-            std.fs.deleteFileAbsolute(json_path) catch {}
-        else
-            std.fs.cwd().deleteFile(json_path) catch {};
-
-        const bytes = if (std.fs.path.isAbsolute(json_path))
-            blk: {
-                const file = try std.fs.openFileAbsolute(json_path, .{});
-                defer file.close();
-                break :blk try file.readToEndAlloc(allocator, 4 * 1024 * 1024);
-            }
-        else
-            try std.fs.cwd().readFileAlloc(allocator, json_path, 4 * 1024 * 1024);
-        defer allocator.free(bytes);
-
-        const parsed = try std.json.parseFromSlice(ParsedDetectOutput, allocator, bytes, .{});
-        defer parsed.deinit();
-
-        const detections = try allocator.alloc(Detection, parsed.value.detections.len);
-        for (parsed.value.detections, detections) |det, *owned| owned.* = det;
-
-        return .{
-            .candidate_count = parsed.value.candidate_count,
-            .detections = detections,
-        };
-    }
-};
+const axionyx_bridge = @import("axionyx_bridge.zig");
 
 const yolo_operations = [_][]const u8{ "detect", "profile", "benchmark" };
 const generic_operations = [_][]const u8{ "infer-image" };
@@ -293,15 +141,15 @@ pub const VisionAdapter = struct {
 
     fn execute(ctx: *anyopaque, allocator: std.mem.Allocator, request: task.TaskRequest) !adapter_mod.ExecutionResult {
         const self: *VisionAdapter = @ptrCast(@alignCast(ctx));
-        const maybe_detection_output = try maybeRunLegacyDetect(self, allocator, request);
+        const maybe_detection_output = try maybeRunSharedDetect(self, allocator, request);
         var detection_output = maybe_detection_output;
         defer if (detection_output) |*output| output.deinit(allocator);
 
         const output = try buildOutputJson(self, allocator, request, detection_output);
         return .{
             .submission = try submit(ctx, request),
-            .origin = if (detection_output != null) .legacy_process_bridge else .shared_adapter,
-            .note = if (detection_output != null) .vision_legacy_detect_json else .vision_graph_ready,
+            .origin = .shared_adapter,
+            .note = if (detection_output != null) .vision_shared_detect else .vision_graph_ready,
             .output = .{ .json = output },
         };
     }
@@ -338,9 +186,9 @@ fn buildOutputJson(
     self: *const VisionAdapter,
     allocator: std.mem.Allocator,
     request: task.TaskRequest,
-    detection_output: ?vision_legacy_bridge.DetectOutput,
+    detection_output: ?axionyx_bridge.DetectOutput,
 ) ![]u8 {
-    const Detection = vision_legacy_bridge.Detection;
+    const Detection = axionyx_bridge.Detection;
     const VisionReceipt = struct {
         status: []const u8,
         operation: []const u8,
@@ -373,11 +221,11 @@ fn buildOutputJson(
     return try allocator.dupe(u8, out.written());
 }
 
-fn maybeRunLegacyDetect(
+fn maybeRunSharedDetect(
     self: *const VisionAdapter,
     allocator: std.mem.Allocator,
     request: task.TaskRequest,
-) !?vision_legacy_bridge.DetectOutput {
+) !?axionyx_bridge.DetectOutput {
     if (!std.mem.eql(u8, request.spec.operation, "detect")) return null;
     if (request.spec.execution != .sync) return null;
 
@@ -386,7 +234,7 @@ fn maybeRunLegacyDetect(
         else => return null,
     };
 
-    return try vision_legacy_bridge.executeDetectJson(
+    return try axionyx_bridge.executeDetect(
         allocator,
         self.plan.graph_path.?,
         self.plan.binary_weights_path.?,

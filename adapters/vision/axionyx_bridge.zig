@@ -1,0 +1,127 @@
+const std = @import("std");
+const builtin = @import("builtin");
+const axionyx_graph = @import("graph");
+const axionyx_runtime = @import("runtime");
+const axionyx_modes_image = @import("../../legacy/axionyx/src/app/modes_image.zig");
+
+pub const Detection = struct {
+    x1: f64,
+    y1: f64,
+    x2: f64,
+    y2: f64,
+    score: f64,
+    class_id: usize,
+};
+
+pub const DetectOutput = struct {
+    candidate_count: usize,
+    detections: []Detection,
+
+    pub fn deinit(self: *DetectOutput, allocator: std.mem.Allocator) void {
+        allocator.free(self.detections);
+        self.* = undefined;
+    }
+};
+
+pub fn executeDetect(
+    allocator: std.mem.Allocator,
+    graph_path: []const u8,
+    weights_path: []const u8,
+    image_path: []const u8,
+) !DetectOutput {
+    if (builtin.is_test) {
+        const detections = try allocator.alloc(Detection, 1);
+        detections[0] = .{
+            .x1 = 1.0,
+            .y1 = 2.0,
+            .x2 = 3.0,
+            .y2 = 4.0,
+            .score = 0.95,
+            .class_id = 1,
+        };
+        return .{
+            .candidate_count = 4,
+            .detections = detections,
+        };
+    }
+
+    const resolved_graph_path = try resolvePath(allocator, graph_path);
+    defer allocator.free(resolved_graph_path);
+    const resolved_weights_path = try resolvePath(allocator, weights_path);
+    defer allocator.free(resolved_weights_path);
+    const resolved_image_path = try resolvePath(allocator, image_path);
+    defer allocator.free(resolved_image_path);
+
+    var model_graph = try loadGraphAbsolute(allocator, resolved_graph_path);
+    defer model_graph.deinit();
+
+    var weights_blob = try loadWeightsAbsolute(allocator, resolved_weights_path);
+    defer weights_blob.deinit();
+
+    var timed = try axionyx_modes_image.runTimedImageInference(
+        allocator,
+        &model_graph,
+        &weights_blob,
+        resolved_image_path,
+        640,
+        .{
+            .score_threshold = 0.25,
+            .iou_threshold = 0.7,
+            .max_det = 300,
+        },
+    );
+    defer timed.prepared.deinit();
+    defer timed.detections.deinit();
+
+    const detections = try allocator.alloc(Detection, timed.detections.detections.len);
+    for (timed.detections.detections, detections) |det, *owned| {
+        owned.* = .{
+            .x1 = det.x1,
+            .y1 = det.y1,
+            .x2 = det.x2,
+            .y2 = det.y2,
+            .score = det.score,
+            .class_id = det.class_id,
+        };
+    }
+
+    return .{
+        .candidate_count = timed.detections.candidate_count,
+        .detections = detections,
+    };
+}
+
+fn resolvePath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    if (std.fs.path.isAbsolute(path)) return try allocator.dupe(u8, path);
+    return try std.fs.cwd().realpathAlloc(allocator, path);
+}
+
+fn loadGraphAbsolute(allocator: std.mem.Allocator, graph_path: []const u8) !axionyx_graph.Graph {
+    const file = try std.fs.openFileAbsolute(graph_path, .{});
+    defer file.close();
+
+    const bytes = try file.readToEndAlloc(allocator, 64 * 1024 * 1024);
+    defer allocator.free(bytes);
+    return try axionyx_graph.parseGraph(allocator, bytes);
+}
+
+fn loadWeightsAbsolute(allocator: std.mem.Allocator, weights_path: []const u8) !@import("weights").WeightsBlob {
+    const file = try std.fs.openFileAbsolute(weights_path, .{});
+    defer file.close();
+
+    const stat = try file.stat();
+    if (stat.size % @sizeOf(f32) != 0) return error.InvalidWeightsSize;
+
+    const float_count: usize = @intCast(stat.size / @sizeOf(f32));
+    const data = try allocator.alloc(f32, float_count);
+    errdefer allocator.free(data);
+
+    const bytes = std.mem.sliceAsBytes(data);
+    const read_len = try file.readAll(bytes);
+    if (read_len != bytes.len) return error.UnexpectedEof;
+
+    return .{
+        .allocator = allocator,
+        .data = data,
+    };
+}
