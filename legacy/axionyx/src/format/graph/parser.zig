@@ -11,8 +11,13 @@ pub const Summary = graph_types.Summary;
 pub const TensorMeta = graph_types.TensorMeta;
 
 pub fn load(allocator: std.mem.Allocator, graph_path: []const u8) !Graph {
-    const cwd = std.fs.cwd();
-    const contents = try cwd.readFileAlloc(allocator, graph_path, 64 * 1024 * 1024);
+    const file = if (std.fs.path.isAbsolute(graph_path))
+        try std.fs.openFileAbsolute(graph_path, .{})
+    else
+        try std.fs.cwd().openFile(graph_path, .{});
+    defer file.close();
+
+    const contents = try file.readToEndAlloc(allocator, 64 * 1024 * 1024);
     defer allocator.free(contents);
 
     return try parseGraph(allocator, contents);

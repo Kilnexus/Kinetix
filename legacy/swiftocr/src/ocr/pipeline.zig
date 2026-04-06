@@ -38,7 +38,6 @@ pub const Pipeline = struct {
         var image = try Image.loadPpmFile(self.allocator, req.image_path);
         defer image.deinit();
 
-        // Placeholder execution result. The next milestone will map model graph to op kernels.
         return .{
             .loaded_tensors = model.tensorCount(),
             .image_width = image.width,
@@ -47,43 +46,39 @@ pub const Pipeline = struct {
     }
 };
 
-test "pipeline basic infer skeleton" {
+test {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    // Write minimal model file.
-    var model_file = try tmp.dir.createFile("m.swm", .{});
+    var model_file = try tmp.dir.createFile("demo.swm", .{});
     defer model_file.close();
-    var mw_impl = model_file.writer(&.{});
-    const mw = &mw_impl.interface;
-    try mw.writeAll(&[_]u8{ 'S', 'W', 'O', 'C', 'R', '0', '1', 0 });
-    try mw.writeInt(u32, 0, .little);
-    try mw.flush();
+    var model_writer_impl = model_file.writer(&.{});
+    const model_writer = &model_writer_impl.interface;
+    try model_writer.writeAll(&[_]u8{ 'S', 'W', 'O', 'C', 'R', '0', '1', 0 });
+    try model_writer.writeInt(u32, 0, .little);
+    try model_writer.flush();
 
-    // Write 1x1 rgb PPM.
-    var image_file = try tmp.dir.createFile("i.ppm", .{});
+    var image_file = try tmp.dir.createFile("demo.ppm", .{});
     defer image_file.close();
-    var iw_impl = image_file.writer(&.{});
-    const iw = &iw_impl.interface;
-    try iw.writeAll("P6\n1 1\n255\n");
-    try iw.writeAll(&[_]u8{ 1, 2, 3 });
-    try iw.flush();
+    var image_writer_impl = image_file.writer(&.{});
+    const image_writer = &image_writer_impl.interface;
+    try image_writer.writeAll("P6\n1 1\n255\n");
+    try image_writer.writeAll(&[_]u8{ 1, 2, 3 });
+    try image_writer.flush();
 
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
-    defer std.debug.assert(gpa_state.deinit() == .ok);
-    const gpa = gpa_state.allocator();
+    const model_path = try tmp.dir.realpathAlloc(std.testing.allocator, "demo.swm");
+    defer std.testing.allocator.free(model_path);
+    const image_path = try tmp.dir.realpathAlloc(std.testing.allocator, "demo.ppm");
+    defer std.testing.allocator.free(image_path);
 
-    var pipeline = Pipeline.init(gpa);
+    var pipeline = Pipeline.init(std.testing.allocator);
     defer pipeline.deinit();
 
-    // Use cwd-relative workaround for this test by opening tmp dir and changing path lookup.
-    // We call IO loaders directly from tmp dir in this test to validate data first.
-    var model = try Model.loadFromDir(gpa, tmp.dir, "m.swm");
-    defer model.deinit();
-    var img = try Image.loadPpmFromDir(gpa, tmp.dir, "i.ppm");
-    defer img.deinit();
-
-    try std.testing.expectEqual(@as(usize, 0), model.tensorCount());
-    try std.testing.expectEqual(@as(usize, 1), img.width);
-    try std.testing.expectEqual(@as(usize, 1), img.height);
+    const result = try pipeline.infer(.{
+        .model_path = model_path,
+        .image_path = image_path,
+    });
+    try std.testing.expectEqual(@as(usize, 0), result.loaded_tensors);
+    try std.testing.expectEqual(@as(usize, 1), result.image_width);
+    try std.testing.expectEqual(@as(usize, 1), result.image_height);
 }

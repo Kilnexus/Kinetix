@@ -21,7 +21,7 @@ pub fn build(b: *std.Build) void {
     ops_mod.addImport("tensor", tensor_mod);
 
     const weights_mod = b.createModule(.{
-        .root_source_file = b.path("src/io/weights.zig"),
+        .root_source_file = b.path("../../engine/artifacts/vision/weights_blob.zig"),
         .target = target,
         .optimize = optimize,
     });

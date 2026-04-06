@@ -94,7 +94,7 @@ fn addLegacyImports(
     ops.addImport("tensor", tensor);
 
     const weights = b.createModule(.{
-        .root_source_file = b.path("legacy/axionyx/src/io/weights.zig"),
+        .root_source_file = b.path("engine/artifacts/vision/weights_blob.zig"),
         .target = target,
         .optimize = optimize,
     });

@@ -1,8 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const axionyx_graph = @import("graph");
-const axionyx_runtime = @import("runtime");
 const axionyx_modes_image = @import("../../legacy/axionyx/src/app/modes_image.zig");
+const vision_weights = @import("weights");
 
 pub const Detection = struct {
     x1: f64,
@@ -52,7 +52,7 @@ pub fn executeDetect(
     const resolved_image_path = try resolvePath(allocator, image_path);
     defer allocator.free(resolved_image_path);
 
-    var model_graph = try loadGraphAbsolute(allocator, resolved_graph_path);
+    var model_graph = try axionyx_graph.load(allocator, resolved_graph_path);
     defer model_graph.deinit();
 
     var weights_blob = try loadWeightsAbsolute(allocator, resolved_weights_path);
@@ -96,32 +96,6 @@ fn resolvePath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     return try std.fs.cwd().realpathAlloc(allocator, path);
 }
 
-fn loadGraphAbsolute(allocator: std.mem.Allocator, graph_path: []const u8) !axionyx_graph.Graph {
-    const file = try std.fs.openFileAbsolute(graph_path, .{});
-    defer file.close();
-
-    const bytes = try file.readToEndAlloc(allocator, 64 * 1024 * 1024);
-    defer allocator.free(bytes);
-    return try axionyx_graph.parseGraph(allocator, bytes);
-}
-
-fn loadWeightsAbsolute(allocator: std.mem.Allocator, weights_path: []const u8) !@import("weights").WeightsBlob {
-    const file = try std.fs.openFileAbsolute(weights_path, .{});
-    defer file.close();
-
-    const stat = try file.stat();
-    if (stat.size % @sizeOf(f32) != 0) return error.InvalidWeightsSize;
-
-    const float_count: usize = @intCast(stat.size / @sizeOf(f32));
-    const data = try allocator.alloc(f32, float_count);
-    errdefer allocator.free(data);
-
-    const bytes = std.mem.sliceAsBytes(data);
-    const read_len = try file.readAll(bytes);
-    if (read_len != bytes.len) return error.UnexpectedEof;
-
-    return .{
-        .allocator = allocator,
-        .data = data,
-    };
+fn loadWeightsAbsolute(allocator: std.mem.Allocator, weights_path: []const u8) !vision_weights.WeightsBlob {
+    return try vision_weights.WeightsBlob.load(allocator, weights_path);
 }
