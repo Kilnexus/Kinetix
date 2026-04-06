@@ -5,6 +5,7 @@ const engine = @import("engine/kinetix.zig");
 const backend = engine.artifacts.backend;
 const legacy_command = adapters.legacy_command;
 const registry_mod = engine.registry;
+const batch_executor = engine.runtime.batch_executor;
 const scheduler_mod = engine.scheduler;
 const task = engine.core.task;
 
@@ -82,6 +83,10 @@ pub const PreparedBatchExecution = struct {
         self.managed.deinit();
         self.registry.deinit();
         self.* = undefined;
+    }
+
+    pub fn execute(self: *const PreparedBatchExecution) !batch_executor.BatchExecutionReport {
+        return try batch_executor.execute(self.allocator, &self.registry, self.requests, &self.batch_plan);
     }
 };
 
@@ -242,6 +247,13 @@ test "prepared batch execution groups compatible text requests" {
     try std.testing.expectEqual(@as(usize, 2), prepared.batch_plan.batches.len);
     try std.testing.expectEqual(@as(usize, 2), prepared.batch_plan.batches[0].len());
     try std.testing.expectEqual(@as(usize, 1), prepared.batch_plan.batches[1].len());
+
+    var report = try prepared.execute();
+    defer report.deinit();
+
+    try std.testing.expectEqual(@as(usize, 3), report.totalRequests());
+    try std.testing.expectEqual(@as(usize, 3), report.totalAccepted());
+    try std.testing.expectEqual(@as(usize, 2), report.batches.len);
 }
 
 fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {

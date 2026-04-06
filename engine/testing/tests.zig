@@ -5,6 +5,7 @@ const backend = @import("../artifacts/backend/backend.zig");
 const graph = @import("../artifacts/graph/graph.zig");
 const memory = @import("../core/memory/memory.zig");
 const registry_mod = @import("../registry/registry.zig");
+const batch_executor_mod = @import("../runtime/batch_executor.zig");
 const load_plan = @import("../runtime/load_plan.zig");
 const scheduler_mod = @import("../scheduler/scheduler.zig");
 const adapter_factory_mod = @import("../../adapters/factory.zig");
@@ -221,6 +222,58 @@ test "scheduler keeps non-batchable OCR requests isolated" {
     try std.testing.expect(!batch_plan.batches[0].supports_batching);
     try std.testing.expectEqual(@as(usize, 1), batch_plan.batches[0].len());
     try std.testing.expectEqual(@as(usize, 1), batch_plan.batches[1].len());
+}
+
+test "batch executor submits planned requests through shared adapter interface" {
+    var registry = registry_mod.Registry.init(std.testing.allocator);
+    defer registry.deinit();
+
+    var state = MockState{ .adapter_id = "text.qwen3" };
+    try registry.register(.{
+        .ctx = &state,
+        .descriptor = .{
+            .id = "text.qwen3",
+            .modality = .text,
+            .bound_model_family = "qwen3",
+            .supports_batching = true,
+            .supports_streaming = true,
+            .supported_operations = &.{ "generate" },
+        },
+        .vtable = &mock_vtable,
+    });
+
+    const scheduler = scheduler_mod.Scheduler.init(&registry);
+    const requests = [_]task.TaskRequest{
+        .{
+            .spec = .{
+                .modality = .text,
+                .operation = "generate",
+                .model_family = "qwen3",
+                .execution = .sync,
+            },
+            .input = .{ .text = "hello" },
+        },
+        .{
+            .spec = .{
+                .modality = .text,
+                .operation = "generate",
+                .model_family = "qwen3",
+                .execution = .sync,
+            },
+            .input = .{ .text = "world" },
+        },
+    };
+
+    var batch_plan = try scheduler.planBatches(std.testing.allocator, &requests);
+    defer batch_plan.deinit();
+
+    var report = try batch_executor_mod.execute(std.testing.allocator, &registry, &requests, &batch_plan);
+    defer report.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), report.batches.len);
+    try std.testing.expectEqual(@as(usize, 2), report.totalRequests());
+    try std.testing.expectEqual(@as(usize, 2), report.totalAccepted());
+    try std.testing.expectEqual(@as(usize, 2), state.submit_count);
 }
 
 test "text adapter resolves qwen3 model and integrates with scheduler" {

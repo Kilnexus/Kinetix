@@ -9,6 +9,7 @@ pub const Command = union(enum) {
     help,
     run: RunArgs,
     batch_plan: BatchPlanArgs,
+    batch_run: BatchPlanArgs,
 };
 
 pub const ParsedCommand = struct {
@@ -72,7 +73,7 @@ pub fn parse(allocator: std.mem.Allocator) !ParsedCommand {
     if (std.mem.eql(u8, cmd, "--help") or std.mem.eql(u8, cmd, "-h") or std.mem.eql(u8, cmd, "help")) {
         return .{ .command = .help, .argv_copy = copied };
     }
-    if (std.mem.eql(u8, cmd, "batch-plan")) {
+    if (std.mem.eql(u8, cmd, "batch-plan") or std.mem.eql(u8, cmd, "batch-run")) {
         var model_dir: ?[]const u8 = null;
         var requests_file: ?[]const u8 = null;
         var operation: ?[]const u8 = null;
@@ -125,7 +126,14 @@ pub fn parse(allocator: std.mem.Allocator) !ParsedCommand {
         if (requests_file == null) return error.MissingRequestsFile;
 
         return .{
-            .command = .{ .batch_plan = .{
+            .command = if (std.mem.eql(u8, cmd, "batch-run")) .{ .batch_run = .{
+                .model_dir = model_dir.?,
+                .requests_file = requests_file.?,
+                .operation = operation,
+                .execution = execution_mode,
+                .preferred_weights = preferred_weights,
+                .max_tokens = max_tokens,
+            } } else .{ .batch_plan = .{
                 .model_dir = model_dir.?,
                 .requests_file = requests_file.?,
                 .operation = operation,
@@ -214,6 +222,7 @@ pub fn run(stdout: anytype, stderr: anytype, parsed: ParsedCommand) !void {
         .help => try printUsage(stdout),
         .run => |args| try runCommand(stdout, args),
         .batch_plan => |args| try runBatchPlan(stdout, args),
+        .batch_run => |args| try runBatchRun(stdout, args),
     }
 }
 
@@ -224,6 +233,7 @@ pub fn printUsage(writer: anytype) !void {
         \\Usage:
         \\  kinetix run --model-dir <path> [--operation <name>] [--input <value>] [--execution sync|async|stream] [--weights auto|bf16|q8|q6|q4] [--legacy-exec]
         \\  kinetix batch-plan --model-dir <path> --requests-file <json>
+        \\  kinetix batch-run --model-dir <path> --requests-file <json>
         \\  kinetix --help
         \\
         \\Examples:
@@ -231,6 +241,7 @@ pub fn printUsage(writer: anytype) !void {
         \\  kinetix run --model-dir .\\models\\Qwen3-0.6B --execution stream --input "Hello from Kinetix"
         \\  kinetix run --model-dir .\\ocr-demo --operation infer-ocr --legacy-exec --input input.ppm
         \\  kinetix batch-plan --model-dir .\\models\\Qwen3-0.6B --requests-file requests.json
+        \\  kinetix batch-run --model-dir .\\models\\Qwen3-0.6B --requests-file requests.json
         \\
     );
 }
@@ -273,24 +284,8 @@ fn runCommand(stdout: anytype, args: RunArgs) !void {
 }
 
 fn runBatchPlan(stdout: anytype, args: BatchPlanArgs) !void {
-    const file_bytes = try std.fs.cwd().readFileAlloc(std.heap.page_allocator, args.requests_file, 4 * 1024 * 1024);
-    defer std.heap.page_allocator.free(file_bytes);
-
-    const parsed = try std.json.parseFromSlice([]BatchRequestJson, std.heap.page_allocator, file_bytes, .{});
-    defer parsed.deinit();
-
-    const items = try std.heap.page_allocator.alloc(execution.PrepareBatchItem, parsed.value.len);
+    const items = try loadBatchItems(args);
     defer std.heap.page_allocator.free(items);
-
-    for (parsed.value, items) |entry, *item| {
-        item.* = .{
-            .operation = entry.operation orelse args.operation,
-            .input = entry.input,
-            .execution = if (entry.execution) |mode| try parseExecutionMode(mode) else args.execution,
-            .max_tokens = entry.max_tokens orelse args.max_tokens,
-            .allows_batching = entry.allows_batching orelse true,
-        };
-    }
 
     var prepared = try execution.prepareBatch(std.heap.page_allocator, .{
         .model_dir = args.model_dir,
@@ -319,6 +314,63 @@ fn runBatchPlan(stdout: anytype, args: BatchPlanArgs) !void {
         }
         try stdout.writeAll("\n");
     }
+}
+
+fn runBatchRun(stdout: anytype, args: BatchPlanArgs) !void {
+    const items = try loadBatchItems(args);
+    defer std.heap.page_allocator.free(items);
+
+    var prepared = try execution.prepareBatch(std.heap.page_allocator, .{
+        .model_dir = args.model_dir,
+        .preferred_weights = args.preferred_weights,
+        .items = items,
+    });
+    defer prepared.deinit();
+
+    var report = try prepared.execute();
+    defer report.deinit();
+
+    try stdout.print("adapter: {s}\n", .{prepared.descriptor.id});
+    try stdout.print("modality: {s}\n", .{@tagName(prepared.descriptor.modality)});
+    try stdout.print("model_family: {s}\n", .{prepared.descriptor.bound_model_family.?});
+    try stdout.print("requests: {d}\n", .{report.totalRequests()});
+    try stdout.print("accepted: {d}\n", .{report.totalAccepted()});
+    try stdout.print("batches: {d}\n", .{report.batches.len});
+
+    for (report.batches, 0..) |batch, batch_index| {
+        try stdout.print("batch[{d}]: size={d} accepted={d} execution={s} batching={s} indices=", .{
+            batch_index,
+            batch.len(),
+            batch.acceptedCount(),
+            @tagName(batch.execution),
+            boolText(batch.supports_batching),
+        });
+        for (batch.request_results, 0..) |result, result_index| {
+            if (result_index != 0) try stdout.writeAll(",");
+            try stdout.print("{d}", .{result.request_index});
+        }
+        try stdout.writeAll("\n");
+    }
+}
+
+fn loadBatchItems(args: BatchPlanArgs) ![]execution.PrepareBatchItem {
+    const file_bytes = try std.fs.cwd().readFileAlloc(std.heap.page_allocator, args.requests_file, 4 * 1024 * 1024);
+    defer std.heap.page_allocator.free(file_bytes);
+
+    const parsed = try std.json.parseFromSlice([]BatchRequestJson, std.heap.page_allocator, file_bytes, .{});
+    defer parsed.deinit();
+
+    const items = try std.heap.page_allocator.alloc(execution.PrepareBatchItem, parsed.value.len);
+    for (parsed.value, items) |entry, *item| {
+        item.* = .{
+            .operation = entry.operation orelse args.operation,
+            .input = entry.input,
+            .execution = if (entry.execution) |mode| try parseExecutionMode(mode) else args.execution,
+            .max_tokens = entry.max_tokens orelse args.max_tokens,
+            .allows_batching = entry.allows_batching orelse true,
+        };
+    }
+    return items;
 }
 
 fn boolText(value: bool) []const u8 {
