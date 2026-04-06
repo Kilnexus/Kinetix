@@ -4,6 +4,8 @@
 
 /.zig-cache/
 /zig-out/
+/models/
+/datasets/
 
 *.log
 *.tmp
