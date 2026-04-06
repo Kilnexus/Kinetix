@@ -41,7 +41,7 @@ pub const LegacyOptions = struct {
 pub const PreparedExecution = struct {
     allocator: std.mem.Allocator,
     registry: registry_mod.Registry,
-    managed: adapters.factory.ManagedAdapter,
+    managed: *adapters.factory.ManagedAdapter,
     descriptor: engine.adapter.Descriptor,
     request: task.TaskRequest,
     plan: scheduler_mod.DispatchPlan,
@@ -49,6 +49,7 @@ pub const PreparedExecution = struct {
 
     pub fn deinit(self: *PreparedExecution) void {
         self.managed.deinit();
+        self.allocator.destroy(self.managed);
         self.registry.deinit();
         self.* = undefined;
     }
@@ -78,7 +79,7 @@ pub const PreparedExecution = struct {
 pub const PreparedBatchExecution = struct {
     allocator: std.mem.Allocator,
     registry: registry_mod.Registry,
-    managed: adapters.factory.ManagedAdapter,
+    managed: *adapters.factory.ManagedAdapter,
     descriptor: engine.adapter.Descriptor,
     requests: []task.TaskRequest,
     batch_plan: scheduler_mod.BatchPlan,
@@ -87,6 +88,7 @@ pub const PreparedBatchExecution = struct {
         self.batch_plan.deinit();
         self.allocator.free(self.requests);
         self.managed.deinit();
+        self.allocator.destroy(self.managed);
         self.registry.deinit();
         self.* = undefined;
     }
@@ -100,7 +102,9 @@ pub fn prepare(allocator: std.mem.Allocator, request: PrepareRequest) !PreparedE
     var registry = registry_mod.Registry.init(allocator);
     errdefer registry.deinit();
 
-    var managed = try adapters.factory.initAuto(allocator, request.model_dir, request.preferred_weights);
+    const managed = try allocator.create(adapters.factory.ManagedAdapter);
+    errdefer allocator.destroy(managed);
+    managed.* = try adapters.factory.initAuto(allocator, request.model_dir, request.preferred_weights);
     errdefer managed.deinit();
     try managed.registerInto(&registry);
 
@@ -137,7 +141,9 @@ pub fn prepareBatch(allocator: std.mem.Allocator, request: PrepareBatchRequest) 
     var registry = registry_mod.Registry.init(allocator);
     errdefer registry.deinit();
 
-    var managed = try adapters.factory.initAuto(allocator, request.model_dir, request.preferred_weights);
+    const managed = try allocator.create(adapters.factory.ManagedAdapter);
+    errdefer allocator.destroy(managed);
+    managed.* = try adapters.factory.initAuto(allocator, request.model_dir, request.preferred_weights);
     errdefer managed.deinit();
     try managed.registerInto(&registry);
 
@@ -228,7 +234,8 @@ test "prepared execution resolves text adapter through shared executor" {
     try std.testing.expectEqual(task.ExecutionMode.stream, prepared.plan.execution);
     try std.testing.expect(prepared.plan.supports_streaming);
 
-    const result = try prepared.execute();
+    var result = try prepared.execute();
+    defer result.deinit(std.testing.allocator);
     try std.testing.expect(result.submission.accepted);
     try std.testing.expectEqual(engine.adapter.ExecutionNote.text_request_ready, result.note);
 }

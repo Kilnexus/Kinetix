@@ -3,17 +3,30 @@ const backend = @import("../../engine/artifacts/backend/backend.zig");
 const task = @import("../../engine/core/task.zig");
 const zinfer_prompts = @import("../../legacy/zinfer/src/app/cli/prompts.zig");
 const zinfer_runtime = @import("../../legacy/zinfer/src/app/cli/runtime.zig");
+const zinfer_decoder_family = @import("../../legacy/zinfer/src/model/runtime/decoder_family.zig");
 const zinfer_kv_cache = @import("../../legacy/zinfer/src/model/runtime/optimized_kv_cache.zig");
 const zinfer_optimized_decoder = @import("../../legacy/zinfer/src/model/runtime/optimized_decoder.zig");
 const zinfer_tensor_backend = @import("../../legacy/zinfer/src/tensor/backends/backend.zig");
+
+pub const NativeBatchOutput = struct {
+    texts: [][]u8,
+    total_decoded_tokens: usize,
+    finished_requests: usize,
+
+    pub fn deinit(self: *NativeBatchOutput, allocator: std.mem.Allocator) void {
+        for (self.texts) |text| allocator.free(text);
+        allocator.free(self.texts);
+        self.* = undefined;
+    }
+};
 
 pub fn executeQwenBatch(
     allocator: std.mem.Allocator,
     model_dir: []const u8,
     preferred_weights: backend.WeightScheme,
     requests: []const task.TaskRequest,
-) !void {
-    if (requests.len == 0) return;
+) !NativeBatchOutput {
+    if (requests.len == 0) return error.InvalidBatchSize;
 
     const resolved_max_tokens = resolveMaxTokens(requests);
     if (resolvedMaxTokensMismatch(requests, resolved_max_tokens)) return error.InconsistentBatchGenerationOptions;
@@ -81,7 +94,64 @@ pub fn executeQwenBatch(
         try batch.prefillPromptIds(request_index, ids);
     }
 
-    _ = try batch.decodeRoundRobinArgMax(resolved_max_tokens);
+    const generated_tokens = try allocator.alloc(std.ArrayListUnmanaged(u32), requests.len);
+    defer {
+        for (generated_tokens) |*tokens| tokens.deinit(allocator);
+        allocator.free(generated_tokens);
+    }
+    for (generated_tokens) |*tokens| tokens.* = .empty;
+
+    var active_requests = requests.len;
+    var finished_requests: usize = 0;
+    var total_decoded_tokens: usize = 0;
+
+    for (0..resolved_max_tokens) |_| {
+        if (active_requests == 0) break;
+
+        var progressed = false;
+        for (batch.requests, generated_tokens) |*request_state, *tokens| {
+            if (!request_state.active) continue;
+
+            const next_token = try zinfer_decoder_family.argMaxLogit(request_state.workspace.logits);
+            if (zinfer_decoder_family.isEosToken(batch.model.cfg.architecture, next_token)) {
+                request_state.active = false;
+                active_requests -= 1;
+                finished_requests += 1;
+                continue;
+            }
+
+            try tokens.append(allocator, std.math.cast(u32, next_token) orelse return error.TokenIdOutOfRange);
+            _ = try batch.model.forwardTokenId(&request_state.workspace, &request_state.cache, next_token);
+            request_state.decoded_tokens += 1;
+            total_decoded_tokens += 1;
+            progressed = true;
+        }
+
+        if (!progressed) break;
+    }
+
+    const texts = try allocator.alloc([]u8, requests.len);
+    errdefer {
+        for (texts, 0..) |text, index| {
+            if (index >= requests.len) break;
+            allocator.free(text);
+        }
+        allocator.free(texts);
+    }
+
+    for (generated_tokens, texts) |tokens, *text| {
+        if (tokens.items.len == 0) {
+            text.* = try allocator.dupe(u8, "");
+            continue;
+        }
+        text.* = try runtime.tokenizer.decodeAlloc(allocator, tokens.items);
+    }
+
+    return .{
+        .texts = texts,
+        .total_decoded_tokens = total_decoded_tokens,
+        .finished_requests = finished_requests,
+    };
 }
 
 fn resolveMaxTokens(requests: []const task.TaskRequest) usize {

@@ -55,6 +55,7 @@ pub const BatchExecutionReport = struct {
 
     pub fn deinit(self: *BatchExecutionReport) void {
         for (self.batches) |batch| {
+            for (batch.request_results) |*result| result.result.deinit(self.allocator);
             self.allocator.free(batch.request_results);
         }
         self.allocator.free(self.batches);

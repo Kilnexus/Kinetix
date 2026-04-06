@@ -32,6 +32,21 @@ pub const Submission = struct {
     execution: task.ExecutionMode,
 };
 
+pub const OutputPayload = union(enum) {
+    none,
+    text: []const u8,
+    json: []const u8,
+
+    pub fn deinit(self: *OutputPayload, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .none => {},
+            .text => |value| allocator.free(value),
+            .json => |value| allocator.free(value),
+        }
+        self.* = .none;
+    }
+};
+
 pub const ExecutionOrigin = enum {
     shared_adapter,
     native_batch_bridge,
@@ -50,6 +65,12 @@ pub const ExecutionResult = struct {
     submission: Submission,
     origin: ExecutionOrigin = .shared_adapter,
     note: ExecutionNote = .none,
+    output: OutputPayload = .none,
+
+    pub fn deinit(self: *ExecutionResult, allocator: std.mem.Allocator) void {
+        self.output.deinit(allocator);
+        self.* = undefined;
+    }
 };
 
 pub const BatchExecutionPath = enum {

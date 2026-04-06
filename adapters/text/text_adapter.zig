@@ -9,12 +9,23 @@ const legacy_command = @import("../legacy_command.zig");
 const registry_mod = kinetix.registry;
 const task = kinetix.core.task;
 const zinfer_batch_bridge = if (builtin.is_test) struct {
+    pub const NativeBatchOutput = struct {
+        texts: [][]u8,
+        total_decoded_tokens: usize,
+        finished_requests: usize,
+
+        pub fn deinit(self: *NativeBatchOutput, allocator: std.mem.Allocator) void {
+            _ = allocator;
+            _ = self;
+        }
+    };
+
     pub fn executeQwenBatch(
         allocator: std.mem.Allocator,
         model_dir: []const u8,
         preferred_weights: backend.WeightScheme,
         requests: []const task.TaskRequest,
-    ) !void {
+    ) !NativeBatchOutput {
         _ = allocator;
         _ = model_dir;
         _ = preferred_weights;
@@ -192,8 +203,11 @@ pub const TextAdapter = struct {
     fn executeBatch(ctx: *anyopaque, allocator: std.mem.Allocator, requests: []const task.TaskRequest) ![]adapter_mod.ExecutionResult {
         const self: *TextAdapter = @ptrCast(@alignCast(ctx));
         const use_native = canUseNativeQwenBatch(self, requests);
+        var native_output: ?zinfer_batch_bridge.NativeBatchOutput = null;
+        defer if (native_output) |*output| output.deinit(allocator);
+
         if (use_native) {
-            try zinfer_batch_bridge.executeQwenBatch(
+            native_output = try zinfer_batch_bridge.executeQwenBatch(
                 allocator,
                 self.catalog.model_dir,
                 self.plan.weight_scheme orelse .auto,
@@ -204,11 +218,15 @@ pub const TextAdapter = struct {
         const results = try allocator.alloc(adapter_mod.ExecutionResult, requests.len);
         errdefer allocator.free(results);
 
-        for (requests, results) |request, *result| {
+        for (requests, results, 0..) |request, *result, index| {
             result.* = .{
                 .submission = buildSubmission(self, request),
                 .origin = if (use_native) .native_batch_bridge else .shared_adapter,
                 .note = if (use_native) .text_native_qwen_batch else .text_request_ready,
+                .output = if (use_native)
+                    .{ .text = try allocator.dupe(u8, native_output.?.texts[index]) }
+                else
+                    .none,
             };
         }
 

@@ -290,10 +290,16 @@ fn runCommand(stdout: anytype, args: RunArgs) !void {
         const term = try execution.executeLegacyCommand(legacy);
         try stdout.print("legacy_exit: {s}\n", .{termText(term)});
     } else {
-        const result = try prepared.execute();
+        var result = try prepared.execute();
+        defer result.deinit(std.heap.page_allocator);
         try stdout.print("execution_origin: {s}\n", .{@tagName(result.origin)});
         if (result.note != .none) {
             try stdout.print("execution_note: {s}\n", .{@tagName(result.note)});
+        }
+        switch (result.output) {
+            .none => {},
+            .text => |value| try stdout.print("output_text: {s}\n", .{value}),
+            .json => |value| try stdout.print("output_json: {s}\n", .{value}),
         }
     }
 }
@@ -380,6 +386,14 @@ fn runBatchRun(stdout: anytype, args: BatchPlanArgs) !void {
             try stdout.print("{d}", .{result.request_index});
         }
         try stdout.writeAll("\n");
+
+        for (batch.request_results) |result| {
+            switch (result.result.output) {
+                .none => {},
+                .text => |value| try stdout.print("text[{d}]: {s}\n", .{ result.request_index, value }),
+                .json => |value| try stdout.print("json[{d}]: {s}\n", .{ result.request_index, value }),
+            }
+        }
     }
 }
 
