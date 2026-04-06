@@ -127,6 +127,102 @@ test "registry rejects duplicate adapter ids" {
     try std.testing.expectError(error.AdapterAlreadyRegistered, registry.register(adapter));
 }
 
+test "scheduler groups compatible text requests into one batch" {
+    var registry = registry_mod.Registry.init(std.testing.allocator);
+    defer registry.deinit();
+
+    var state = MockState{ .adapter_id = "text.qwen3" };
+    try registry.register(.{
+        .ctx = &state,
+        .descriptor = .{
+            .id = "text.qwen3",
+            .modality = .text,
+            .bound_model_family = "qwen3",
+            .supports_batching = true,
+            .supports_streaming = true,
+            .supported_operations = &.{ "generate" },
+        },
+        .vtable = &mock_vtable,
+    });
+
+    const scheduler = scheduler_mod.Scheduler.init(&registry);
+    const requests = [_]task.TaskRequest{
+        .{
+            .spec = .{
+                .modality = .text,
+                .operation = "generate",
+                .model_family = "qwen3",
+                .execution = .sync,
+            },
+            .input = .{ .text = "hello" },
+        },
+        .{
+            .spec = .{
+                .modality = .text,
+                .operation = "generate",
+                .model_family = "qwen3",
+                .execution = .sync,
+            },
+            .input = .{ .text = "world" },
+        },
+    };
+
+    var batch_plan = try scheduler.planBatches(std.testing.allocator, &requests);
+    defer batch_plan.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), batch_plan.batches.len);
+    try std.testing.expectEqual(@as(usize, 2), batch_plan.batches[0].len());
+    try std.testing.expect(batch_plan.batches[0].supports_batching);
+}
+
+test "scheduler keeps non-batchable OCR requests isolated" {
+    var registry = registry_mod.Registry.init(std.testing.allocator);
+    defer registry.deinit();
+
+    var state = MockState{ .adapter_id = "ocr.swiftocr" };
+    try registry.register(.{
+        .ctx = &state,
+        .descriptor = .{
+            .id = "ocr.swiftocr",
+            .modality = .ocr,
+            .bound_model_family = "swiftocr",
+            .supports_batching = false,
+            .supported_operations = &.{ "infer-ocr" },
+        },
+        .vtable = &mock_vtable,
+    });
+
+    const scheduler = scheduler_mod.Scheduler.init(&registry);
+    const requests = [_]task.TaskRequest{
+        .{
+            .spec = .{
+                .modality = .ocr,
+                .operation = "infer-ocr",
+                .model_family = "swiftocr",
+                .execution = .sync,
+            },
+            .input = .{ .image_path = "a.png" },
+        },
+        .{
+            .spec = .{
+                .modality = .ocr,
+                .operation = "infer-ocr",
+                .model_family = "swiftocr",
+                .execution = .sync,
+            },
+            .input = .{ .image_path = "b.png" },
+        },
+    };
+
+    var batch_plan = try scheduler.planBatches(std.testing.allocator, &requests);
+    defer batch_plan.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), batch_plan.batches.len);
+    try std.testing.expect(!batch_plan.batches[0].supports_batching);
+    try std.testing.expectEqual(@as(usize, 1), batch_plan.batches[0].len());
+    try std.testing.expectEqual(@as(usize, 1), batch_plan.batches[1].len());
+}
+
 test "text adapter resolves qwen3 model and integrates with scheduler" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
