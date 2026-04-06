@@ -35,6 +35,14 @@ pub const ManagedAdapter = union(enum) {
             .ocr => |adapter| adapter.descriptor.id,
         };
     }
+
+    pub fn descriptor(self: *const ManagedAdapter) kinetix.adapter.Descriptor {
+        return switch (self.*) {
+            .text => |adapter| adapter.descriptor,
+            .vision => |adapter| adapter.descriptor,
+            .ocr => |adapter| adapter.descriptor,
+        };
+    }
 };
 
 pub fn initAuto(
