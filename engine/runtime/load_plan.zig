@@ -6,6 +6,7 @@ pub const ResolvedLoadPlan = struct {
     weights_path: ?[]const u8,
     graph_path: ?[]const u8,
     binary_weights_path: ?[]const u8,
+    ocr_model_path: ?[]const u8,
     config_path: ?[]const u8,
     tokenizer_path: ?[]const u8,
 };
@@ -22,6 +23,7 @@ pub fn resolve(catalog: *const backend.ModelCatalog, request: LoadRequest) !Reso
         .weights_path = null,
         .graph_path = null,
         .binary_weights_path = null,
+        .ocr_model_path = null,
         .config_path = null,
         .tokenizer_path = null,
     };
@@ -46,6 +48,10 @@ pub fn resolve(catalog: *const backend.ModelCatalog, request: LoadRequest) !Reso
 
     if (catalog.find(.weights_bin)) |artifact| {
         plan.binary_weights_path = artifact.absolute_path;
+    }
+
+    if (catalog.find(.ocr_model)) |artifact| {
+        plan.ocr_model_path = artifact.absolute_path;
     }
 
     if (catalog.resolveAutoScheme() != .auto or request.preferred_weights != .auto) {

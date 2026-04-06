@@ -7,7 +7,10 @@ const memory = @import("../core/memory/memory.zig");
 const registry_mod = @import("../registry/registry.zig");
 const load_plan = @import("../runtime/load_plan.zig");
 const scheduler_mod = @import("../scheduler/scheduler.zig");
+const adapter_factory_mod = @import("root").adapters.factory;
+const ocr_adapter_mod = @import("root").adapters.ocr;
 const text_adapter_mod = @import("root").adapters.text;
+const vision_adapter_mod = @import("root").adapters.vision;
 
 const MockState = struct {
     adapter_id: []const u8,
@@ -189,6 +192,199 @@ test "text adapter restricts bert model to bert-compatible operations" {
         .model_family = "bert",
         .execution = .sync,
     }));
+}
+
+test "vision adapter resolves yolo artifacts and integrates with scheduler" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "graph.json",
+        \\{
+        \\  "format_version": 1,
+        \\  "model_name": "vision-yolo",
+        \\  "metadata": { "class_count": 2 },
+        \\  "tensors": [],
+        \\  "execution_plan": [
+        \\    { "index": 0, "path": "pipeline.detect", "kind": "Detect", "from": [-1] }
+        \\  ],
+        \\  "component_tree": {
+        \\    "path": "pipeline",
+        \\    "kind": "Pipeline",
+        \\    "attrs": {},
+        \\    "children": [
+        \\      {
+        \\        "path": "pipeline.detect",
+        \\        "kind": "Detect",
+        \\        "attrs": {},
+        \\        "children": []
+        \\      }
+        \\    ]
+        \\  }
+        \\}
+    );
+    try writeTmpFile(tmp.dir, "weights.bin", "vision");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var vision_adapter = try vision_adapter_mod.VisionAdapter.init(std.testing.allocator, root_path);
+    defer vision_adapter.deinit();
+
+    try std.testing.expectEqualStrings("yolo", vision_adapter.descriptor.bound_model_family.?);
+    try std.testing.expect(vision_adapter.descriptor.supportsOperation("detect"));
+    try std.testing.expect(!vision_adapter.descriptor.supportsOperation("generate"));
+
+    var registry = registry_mod.Registry.init(std.testing.allocator);
+    defer registry.deinit();
+    try vision_adapter.registerInto(&registry);
+
+    const scheduler = scheduler_mod.Scheduler.init(&registry);
+    const submission = try scheduler.submit(.{
+        .modality = .vision,
+        .operation = "detect",
+        .model_family = "yolo",
+        .execution = .sync,
+    });
+
+    try std.testing.expect(submission.accepted);
+    try std.testing.expectEqual(task.ExecutionMode.sync, submission.execution);
+}
+
+test "vision adapter rejects missing binary weights" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "graph.json",
+        \\{
+        \\  "format_version": 1,
+        \\  "model_name": "vision-generic",
+        \\  "metadata": {},
+        \\  "tensors": [],
+        \\  "execution_plan": [],
+        \\  "component_tree": {
+        \\    "path": "pipeline",
+        \\    "kind": "Pipeline",
+        \\    "attrs": {},
+        \\    "children": []
+        \\  }
+        \\}
+    );
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    try std.testing.expectError(error.MissingBinaryWeightsArtifact, vision_adapter_mod.VisionAdapter.init(std.testing.allocator, root_path));
+}
+
+test "model catalog discovers swiftocr single-file model artifacts" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "demo.swm", "SWOCR01");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var catalog = try backend.ModelCatalog.discover(std.testing.allocator, root_path);
+    defer catalog.deinit();
+
+    try std.testing.expect(catalog.has(.ocr_model));
+}
+
+test "ocr adapter resolves swiftocr model and integrates with scheduler" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "demo.swm", "SWOCR01");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var ocr_adapter = try ocr_adapter_mod.OCRAdapter.init(std.testing.allocator, root_path);
+    defer ocr_adapter.deinit();
+
+    try std.testing.expectEqualStrings("swiftocr", ocr_adapter.descriptor.bound_model_family.?);
+    try std.testing.expect(ocr_adapter.descriptor.supportsOperation("infer-ocr"));
+    try std.testing.expect(!ocr_adapter.descriptor.supportsOperation("generate"));
+
+    var registry = registry_mod.Registry.init(std.testing.allocator);
+    defer registry.deinit();
+    try ocr_adapter.registerInto(&registry);
+
+    const scheduler = scheduler_mod.Scheduler.init(&registry);
+    const submission = try scheduler.submit(.{
+        .modality = .ocr,
+        .operation = "infer-ocr",
+        .model_family = "swiftocr",
+        .execution = .sync,
+    });
+
+    try std.testing.expect(submission.accepted);
+    try std.testing.expectEqual(task.ExecutionMode.sync, submission.execution);
+}
+
+test "adapter factory auto-detects text model directories" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "config.json", "{\"model_type\":\"qwen3\"}");
+    try writeTmpFile(tmp.dir, "tokenizer.json", "{}");
+    try writeTmpFile(tmp.dir, "model.q8.zinfer", "q8");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var managed = try adapter_factory_mod.initAuto(std.testing.allocator, root_path, .auto);
+    defer managed.deinit();
+
+    try std.testing.expect(std.mem.startsWith(u8, managed.descriptorId(), "text.qwen3."));
+}
+
+test "adapter factory auto-detects vision model directories" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "graph.json",
+        \\{
+        \\  "format_version": 1,
+        \\  "model_name": "vision-yolo",
+        \\  "metadata": {},
+        \\  "tensors": [],
+        \\  "execution_plan": [
+        \\    { "index": 0, "path": "pipeline.detect", "kind": "Detect", "from": [-1] }
+        \\  ],
+        \\  "component_tree": {
+        \\    "path": "pipeline",
+        \\    "kind": "Pipeline",
+        \\    "attrs": {},
+        \\    "children": []
+        \\  }
+        \\}
+    );
+    try writeTmpFile(tmp.dir, "weights.bin", "vision");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var managed = try adapter_factory_mod.initAuto(std.testing.allocator, root_path, .auto);
+    defer managed.deinit();
+
+    try std.testing.expect(std.mem.startsWith(u8, managed.descriptorId(), "vision.yolo."));
+}
+
+test "adapter factory auto-detects ocr model directories" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "demo.swm", "SWOCR01");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var managed = try adapter_factory_mod.initAuto(std.testing.allocator, root_path, .auto);
+    defer managed.deinit();
+
+    try std.testing.expect(std.mem.startsWith(u8, managed.descriptorId(), "ocr.swiftocr."));
 }
 
 test "runtime pool acquires and releases owned items" {

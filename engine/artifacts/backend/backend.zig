@@ -27,6 +27,7 @@ pub const ArtifactRole = enum {
     merges_txt,
     graph_json,
     weights_bin,
+    ocr_model,
     safetensors,
     q8_weights,
     q6_weights,
@@ -42,6 +43,7 @@ pub const ArtifactLocation = struct {
     role: ArtifactRole,
     relative_path: []const u8,
     absolute_path: []u8,
+    owns_relative_path: bool = false,
 };
 
 pub const WeightSelection = struct {
@@ -73,11 +75,14 @@ pub const ModelCatalog = struct {
                     .role = spec.role,
                     .relative_path = spec.relative_path,
                     .absolute_path = absolute_path,
+                    .owns_relative_path = false,
                 });
             } else {
                 allocator.free(absolute_path);
             }
         }
+
+        try discoverExtensionArtifacts(allocator, model_dir, &found);
 
         return .{
             .allocator = allocator,
@@ -88,7 +93,10 @@ pub const ModelCatalog = struct {
 
     pub fn deinit(self: *ModelCatalog) void {
         self.allocator.free(self.model_dir);
-        for (self.artifacts) |artifact| self.allocator.free(artifact.absolute_path);
+        for (self.artifacts) |artifact| {
+            if (artifact.owns_relative_path) self.allocator.free(@constCast(artifact.relative_path));
+            self.allocator.free(artifact.absolute_path);
+        }
         self.allocator.free(self.artifacts);
         self.* = undefined;
     }
@@ -167,4 +175,42 @@ fn pathExists(path: []const u8) bool {
     } else |_| {
         return false;
     }
+}
+
+fn discoverExtensionArtifacts(
+    allocator: std.mem.Allocator,
+    model_dir: []const u8,
+    found: *std.ArrayListUnmanaged(ArtifactLocation),
+) !void {
+    var dir = if (std.fs.path.isAbsolute(model_dir))
+        try std.fs.openDirAbsolute(model_dir, .{ .iterate = true })
+    else
+        try std.fs.cwd().openDir(model_dir, .{ .iterate = true });
+    defer dir.close();
+
+    var iter = dir.iterate();
+    while (try iter.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".swm")) continue;
+        if (containsRole(found.items, .ocr_model)) continue;
+
+        const relative_path = try allocator.dupe(u8, entry.name);
+        errdefer allocator.free(relative_path);
+        const absolute_path = try std.fs.path.join(allocator, &.{ model_dir, entry.name });
+        errdefer allocator.free(absolute_path);
+
+        try found.append(allocator, .{
+            .role = .ocr_model,
+            .relative_path = relative_path,
+            .absolute_path = absolute_path,
+            .owns_relative_path = true,
+        });
+    }
+}
+
+fn containsRole(items: []const ArtifactLocation, role: ArtifactRole) bool {
+    for (items) |item| {
+        if (item.role == role) return true;
+    }
+    return false;
 }
