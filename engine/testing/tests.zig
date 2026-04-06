@@ -16,6 +16,7 @@ const vision_adapter_mod = @import("../../adapters/vision/vision.zig");
 const MockState = struct {
     adapter_id: []const u8,
     submit_count: usize = 0,
+    submit_batch_count: usize = 0,
 };
 
 fn submitMock(ctx: *anyopaque, request: task.TaskRequest) !adapter_mod.Submission {
@@ -28,8 +29,27 @@ fn submitMock(ctx: *anyopaque, request: task.TaskRequest) !adapter_mod.Submissio
     };
 }
 
+fn submitMockBatch(ctx: *anyopaque, allocator: std.mem.Allocator, requests: []const task.TaskRequest) ![]adapter_mod.Submission {
+    const state: *MockState = @ptrCast(@alignCast(ctx));
+    state.submit_batch_count += 1;
+
+    const submissions = try allocator.alloc(adapter_mod.Submission, requests.len);
+    errdefer allocator.free(submissions);
+
+    for (requests, submissions) |request, *submission| {
+        submission.* = .{
+            .adapter_id = state.adapter_id,
+            .accepted = true,
+            .execution = request.spec.execution,
+        };
+    }
+
+    return submissions;
+}
+
 const mock_vtable = adapter_mod.VTable{
     .submit = submitMock,
+    .submit_batch = submitMockBatch,
 };
 
 test "registry resolves task to matching modality adapter" {
@@ -273,7 +293,8 @@ test "batch executor submits planned requests through shared adapter interface" 
     try std.testing.expectEqual(@as(usize, 1), report.batches.len);
     try std.testing.expectEqual(@as(usize, 2), report.totalRequests());
     try std.testing.expectEqual(@as(usize, 2), report.totalAccepted());
-    try std.testing.expectEqual(@as(usize, 2), state.submit_count);
+    try std.testing.expectEqual(@as(usize, 0), state.submit_count);
+    try std.testing.expectEqual(@as(usize, 1), state.submit_batch_count);
 }
 
 test "text adapter resolves qwen3 model and integrates with scheduler" {

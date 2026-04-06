@@ -156,10 +156,36 @@ pub const TextAdapter = struct {
             .execution = request.spec.execution,
         };
     }
+
+    fn submitBatch(ctx: *anyopaque, allocator: std.mem.Allocator, requests: []const task.TaskRequest) ![]adapter_mod.Submission {
+        const self: *TextAdapter = @ptrCast(@alignCast(ctx));
+        if (self.plan.weights_path == null) return error.MissingWeightArtifacts;
+        if (self.plan.config_path == null) return error.MissingConfigArtifact;
+        if (self.plan.tokenizer_path == null) return error.MissingTokenizerArtifact;
+
+        const submissions = try allocator.alloc(adapter_mod.Submission, requests.len);
+        errdefer allocator.free(submissions);
+
+        for (requests, submissions) |request, *submission| {
+            switch (request.input) {
+                .none, .text => {},
+                else => return error.InvalidInputPayload,
+            }
+
+            submission.* = .{
+                .adapter_id = self.descriptor.id,
+                .accepted = true,
+                .execution = request.spec.execution,
+            };
+        }
+
+        return submissions;
+    }
 };
 
 const vtable = adapter_mod.VTable{
     .submit = TextAdapter.submit,
+    .submit_batch = TextAdapter.submitBatch,
 };
 
 fn operationsForFamily(family: ModelFamily) []const []const u8 {

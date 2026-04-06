@@ -64,14 +64,24 @@ pub fn execute(
 
     for (batch_plan.batches, batches) |dispatch_batch, *executed_batch| {
         const entry = registry.findById(dispatch_batch.adapter_id) orelse return error.AdapterNotFound;
+        const batch_requests = try allocator.alloc(task.TaskRequest, dispatch_batch.request_indices.len);
+        defer allocator.free(batch_requests);
         const results = try allocator.alloc(RequestExecutionResult, dispatch_batch.request_indices.len);
         errdefer allocator.free(results);
 
-        for (dispatch_batch.request_indices, results) |request_index, *result| {
+        for (dispatch_batch.request_indices, batch_requests) |request_index, *request| {
             if (request_index >= requests.len) return error.InvalidRequestIndex;
+            request.* = requests[request_index];
+        }
+
+        const submissions = try entry.adapter.submitBatch(allocator, batch_requests);
+        defer allocator.free(submissions);
+        if (submissions.len != dispatch_batch.request_indices.len) return error.InvalidBatchSubmissionCount;
+
+        for (dispatch_batch.request_indices, submissions, results) |request_index, submission, *result| {
             result.* = .{
                 .request_index = request_index,
-                .submission = try entry.adapter.submit(requests[request_index]),
+                .submission = submission,
             };
         }
 
