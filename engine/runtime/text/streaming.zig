@@ -1,6 +1,6 @@
 const std = @import("std");
 const GenerateOptions = @import("generate_options.zig").GenerateOptions;
-const decoder_family = @import("../../../legacy/zinfer/src/model/runtime/decoder_family.zig");
+const decoder_family = @import("decoder_family.zig");
 
 pub const StopAnalysis = struct {
     printable_len: usize,

@@ -1,5 +1,8 @@
 pub const backend_scheme = @import("backend_scheme.zig");
+pub const decoder_family = @import("decoder_family.zig");
+pub const decoder_runtime = @import("decoder_runtime.zig");
 pub const generate_options = @import("generate_options.zig");
+pub const kv_cache = @import("kv_cache.zig");
 pub const sampler = @import("sampler.zig");
 pub const prompts = @import("prompts.zig");
 pub const streaming = @import("streaming.zig");

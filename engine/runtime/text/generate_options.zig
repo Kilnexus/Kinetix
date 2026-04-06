@@ -1,8 +1,8 @@
 const std = @import("std");
 const backend_scheme = @import("backend_scheme.zig");
+const decoder_family = @import("decoder_family.zig");
+const kv_cache = @import("kv_cache.zig");
 const sampler = @import("sampler.zig");
-const optimized_kv_cache = @import("../../../legacy/zinfer/src/model/runtime/optimized_kv_cache.zig");
-const decoder_family = @import("../../../legacy/zinfer/src/model/runtime/decoder_family.zig");
 
 pub const GenerateOptions = struct {
     max_new_tokens: usize,
@@ -13,8 +13,8 @@ pub const GenerateOptions = struct {
     stream_output: bool,
     stop_sequences: [][]const u8,
     backend_scheme: backend_scheme.Scheme,
-    kv_cache_scheme: optimized_kv_cache.Scheme,
-    q8_layout: optimized_kv_cache.Q8Layout,
+    kv_cache_scheme: kv_cache.Scheme,
+    q8_layout: kv_cache.Q8Layout,
     thread_count: usize,
 
     pub fn deinit(self: *GenerateOptions, allocator: std.mem.Allocator) void {

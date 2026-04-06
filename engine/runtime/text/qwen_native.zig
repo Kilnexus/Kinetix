@@ -2,11 +2,11 @@ const std = @import("std");
 const backend = @import("../../artifacts/backend/backend.zig");
 const task = @import("../../core/task.zig");
 const backend_scheme = @import("backend_scheme.zig");
+const decoder_runtime = @import("decoder_runtime.zig");
+const kv_cache = @import("kv_cache.zig");
 const text_prompts = @import("prompts.zig");
 const text_options = @import("generate_options.zig");
 const text_runtime = @import("generator_runtime.zig");
-const zinfer_kv_cache = @import("../../../legacy/zinfer/src/model/runtime/optimized_kv_cache.zig");
-const zinfer_optimized_decoder = @import("../../../legacy/zinfer/src/model/runtime/optimized_decoder.zig");
 
 pub const NativeBatchOutput = struct {
     texts: [][]u8,
@@ -68,7 +68,7 @@ pub fn executeQwenSingle(
         .stop_sequences = &.{},
         .backend_scheme = mapBackendScheme(preferred_weights),
         .kv_cache_scheme = .auto,
-        .q8_layout = zinfer_kv_cache.default_q8_layout,
+        .q8_layout = kv_cache.default_q8_layout,
         .thread_count = 0,
     };
 
@@ -94,7 +94,7 @@ pub fn executeQwenBatch(
     );
     defer runtime.deinit();
 
-    const resolved_kv_cache_scheme = zinfer_kv_cache.resolveScheme(.auto, runtime.model.backendName());
+    const resolved_kv_cache_scheme = kv_cache.resolveScheme(.auto, runtime.model.backendName());
 
     const prompts = try allocator.alloc([]u8, requests.len);
     defer {
@@ -135,13 +135,13 @@ pub fn executeQwenBatch(
         max_prompt_len = @max(max_prompt_len, ids.*.len);
     }
 
-    var batch = try zinfer_optimized_decoder.BatchRuntime.init(
+    var batch = try decoder_runtime.BatchRuntime.init(
         allocator,
         &runtime.model,
         requests.len,
         max_prompt_len + resolved_max_tokens,
         resolved_kv_cache_scheme,
-        zinfer_kv_cache.default_q8_layout,
+        kv_cache.default_q8_layout,
     );
     defer batch.deinit();
 

@@ -1,17 +1,16 @@
 const std = @import("std");
 const GenerateOptions = @import("generate_options.zig").GenerateOptions;
 const backend_scheme = @import("backend_scheme.zig");
+const decoder_family = @import("decoder_family.zig");
+const decoder_runtime = @import("decoder_runtime.zig");
+const kv_cache = @import("kv_cache.zig");
 const sampler = @import("sampler.zig");
-const optimized_kv_cache = @import("../../../legacy/zinfer/src/model/runtime/optimized_kv_cache.zig");
-const decoder_family = @import("../../../legacy/zinfer/src/model/runtime/decoder_family.zig");
-const optimized_decoder = @import("../../../legacy/zinfer/src/model/runtime/optimized_decoder.zig");
-const tensor_backend = @import("../../../legacy/zinfer/src/tensor/backends/backend.zig");
 const streaming = @import("streaming.zig");
 
 pub const GeneratorRuntime = struct {
     allocator: std.mem.Allocator,
     tokenizer: decoder_family.Tokenizer,
-    model: optimized_decoder.Runtime,
+    model: decoder_runtime.Runtime,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -34,10 +33,10 @@ pub const GeneratorRuntime = struct {
         );
         errdefer tokenizer.deinit();
 
-        var model = try optimized_decoder.Runtime.init(
+        var model = try decoder_runtime.initRuntime(
             allocator,
             model_dir,
-            mapBackendScheme(scheme),
+            scheme,
             if (thread_count == 0) null else thread_count,
         );
         errdefer model.deinit();
@@ -70,8 +69,8 @@ pub const GeneratorRuntime = struct {
         }
 
         const cfg = self.model.cfg;
-        const resolved_kv_cache_scheme = optimized_kv_cache.resolveScheme(options.kv_cache_scheme, self.model.backendName());
-        var cache = try optimized_kv_cache.ModelCache.initWithLayout(
+        const resolved_kv_cache_scheme = kv_cache.resolveScheme(options.kv_cache_scheme, self.model.backendName());
+        var cache = try kv_cache.ModelCache.initWithLayout(
             self.allocator,
             cfg.num_hidden_layers,
             prompt_ids.len + options.max_new_tokens,
@@ -126,13 +125,3 @@ pub const GeneratorRuntime = struct {
         return response;
     }
 };
-
-fn mapBackendScheme(scheme: backend_scheme.Scheme) tensor_backend.Scheme {
-    return switch (scheme) {
-        .auto => .auto,
-        .bf16 => .bf16,
-        .q8 => .q8,
-        .q6 => .q6,
-        .q4 => .q4,
-    };
-}
