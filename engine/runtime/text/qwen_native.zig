@@ -1,13 +1,12 @@
 const std = @import("std");
 const backend = @import("../../artifacts/backend/backend.zig");
 const task = @import("../../core/task.zig");
+const backend_scheme = @import("backend_scheme.zig");
 const text_prompts = @import("prompts.zig");
 const text_options = @import("generate_options.zig");
 const text_runtime = @import("generator_runtime.zig");
-const zinfer_decoder_family = @import("../../../legacy/zinfer/src/model/runtime/decoder_family.zig");
 const zinfer_kv_cache = @import("../../../legacy/zinfer/src/model/runtime/optimized_kv_cache.zig");
 const zinfer_optimized_decoder = @import("../../../legacy/zinfer/src/model/runtime/optimized_decoder.zig");
-const zinfer_tensor_backend = @import("../../../legacy/zinfer/src/tensor/backends/backend.zig");
 
 pub const NativeBatchOutput = struct {
     texts: [][]u8,
@@ -187,7 +186,7 @@ fn resolvedMaxTokensMismatch(requests: []const task.TaskRequest, expected: usize
     return false;
 }
 
-fn mapBackendScheme(scheme: backend.WeightScheme) zinfer_tensor_backend.Scheme {
+fn mapBackendScheme(scheme: backend.WeightScheme) backend_scheme.Scheme {
     return switch (scheme) {
         .auto => .auto,
         .bf16 => .bf16,

@@ -118,7 +118,7 @@ test "registry resolves task to matching modality adapter" {
             .id = "vision.yolo",
             .modality = .vision,
             .supports_batching = true,
-            .supported_operations = &.{ "detect" },
+            .supported_operations = &.{"detect"},
         },
         .vtable = &mock_vtable,
     });
@@ -180,7 +180,7 @@ test "registry rejects duplicate adapter ids" {
         .descriptor = .{
             .id = "vision.yolo",
             .modality = .vision,
-            .supported_operations = &.{ "detect" },
+            .supported_operations = &.{"detect"},
         },
         .vtable = &mock_vtable,
     };
@@ -202,7 +202,7 @@ test "scheduler groups compatible text requests into one batch" {
             .bound_model_family = "qwen3",
             .supports_batching = true,
             .supports_streaming = true,
-            .supported_operations = &.{ "generate" },
+            .supported_operations = &.{"generate"},
         },
         .vtable = &mock_vtable,
     });
@@ -250,7 +250,7 @@ test "scheduler splits text batches when generation limits differ" {
             .bound_model_family = "qwen3",
             .supports_batching = true,
             .supports_streaming = true,
-            .supported_operations = &.{ "generate" },
+            .supported_operations = &.{"generate"},
         },
         .vtable = &mock_vtable,
     });
@@ -297,7 +297,7 @@ test "scheduler keeps non-batchable OCR requests isolated" {
             .modality = .ocr,
             .bound_model_family = "swiftocr",
             .supports_batching = false,
-            .supported_operations = &.{ "infer-ocr" },
+            .supported_operations = &.{"infer-ocr"},
         },
         .vtable = &mock_vtable,
     });
@@ -346,7 +346,7 @@ test "batch executor submits planned requests through shared adapter interface" 
             .bound_model_family = "qwen3",
             .supports_batching = true,
             .supports_streaming = true,
-            .supported_operations = &.{ "generate" },
+            .supported_operations = &.{"generate"},
         },
         .vtable = &mock_vtable,
     });
@@ -704,7 +704,6 @@ test "text adapter rejects image payloads in shared request path" {
         },
         .input = .{ .image_path = "demo.png" },
     }));
-
 }
 
 test "adapter factory auto-detects text model directories" {
@@ -967,10 +966,11 @@ test "load plan resolves text model artifacts from shared catalog" {
     var catalog = try backend.ModelCatalog.discover(std.testing.allocator, root_path);
     defer catalog.deinit();
 
-    const plan = try load_plan.resolve(&catalog, .{
+    var plan = try load_plan.resolve(&catalog, .{
         .model_dir = root_path,
         .preferred_weights = .auto,
     });
+    defer plan.deinit();
 
     try std.testing.expect(plan.config_path != null);
     try std.testing.expect(plan.tokenizer_path != null);
@@ -991,9 +991,10 @@ test "load plan resolves vision graph and binary weights without tensor backend"
     var catalog = try backend.ModelCatalog.discover(std.testing.allocator, root_path);
     defer catalog.deinit();
 
-    const plan = try load_plan.resolve(&catalog, .{
+    var plan = try load_plan.resolve(&catalog, .{
         .model_dir = root_path,
     });
+    defer plan.deinit();
 
     try std.testing.expect(plan.graph_path != null);
     try std.testing.expect(plan.binary_weights_path != null);

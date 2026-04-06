@@ -66,7 +66,6 @@ const unknown_operations = [_][]const u8{"infer-text"};
 
 pub const TextAdapter = struct {
     allocator: std.mem.Allocator,
-    catalog: backend.ModelCatalog,
     plan: load_plan.ResolvedLoadPlan,
     family: ModelFamily,
     adapter_id: []u8,
@@ -78,26 +77,29 @@ pub const TextAdapter = struct {
         preferred_weights: backend.WeightScheme,
     ) !TextAdapter {
         var catalog = try backend.ModelCatalog.discover(allocator, model_dir);
-        errdefer catalog.deinit();
+        defer catalog.deinit();
 
         const plan = try load_plan.resolve(&catalog, .{
             .model_dir = catalog.model_dir,
             .preferred_weights = preferred_weights,
         });
+        errdefer {
+            var owned_plan = plan;
+            owned_plan.deinit();
+        }
 
         if (plan.config_path == null) return error.MissingConfigArtifact;
         if (plan.tokenizer_path == null) return error.MissingTokenizerArtifact;
         if (plan.weights_path == null) return error.MissingWeightArtifacts;
 
         const family = try detectModelFamily(allocator, plan.config_path.?);
-        const basename = std.fs.path.basename(catalog.model_dir);
+        const basename = std.fs.path.basename(plan.model_dir);
         const family_name = family.name();
         const adapter_id = try std.fmt.allocPrint(allocator, "text.{s}.{s}", .{ family_name, basename });
         errdefer allocator.free(adapter_id);
 
         return .{
             .allocator = allocator,
-            .catalog = catalog,
             .plan = plan,
             .family = family,
             .adapter_id = adapter_id,
@@ -114,7 +116,7 @@ pub const TextAdapter = struct {
 
     pub fn deinit(self: *TextAdapter) void {
         self.allocator.free(self.adapter_id);
-        self.catalog.deinit();
+        self.plan.deinit();
         self.* = undefined;
     }
 
@@ -168,7 +170,7 @@ pub const TextAdapter = struct {
         return try text_native_dispatch.executeSingle(
             allocator,
             native_batch_bridge,
-            self.catalog.model_dir,
+            self.plan.model_dir,
             self.plan.weight_scheme orelse .auto,
             try submit(ctx, request),
             request,
@@ -194,7 +196,7 @@ pub const TextAdapter = struct {
         return try text_native_dispatch.executeBatch(
             allocator,
             native_batch_bridge,
-            self.catalog.model_dir,
+            self.plan.model_dir,
             self.plan.weight_scheme orelse .auto,
             self.descriptor.id,
             requests,

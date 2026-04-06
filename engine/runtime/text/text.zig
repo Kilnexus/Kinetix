@@ -1,4 +1,6 @@
+pub const backend_scheme = @import("backend_scheme.zig");
 pub const generate_options = @import("generate_options.zig");
+pub const sampler = @import("sampler.zig");
 pub const prompts = @import("prompts.zig");
 pub const streaming = @import("streaming.zig");
 pub const generator_runtime = @import("generator_runtime.zig");

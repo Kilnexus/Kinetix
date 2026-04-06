@@ -1,8 +1,8 @@
 const std = @import("std");
+const backend_scheme = @import("backend_scheme.zig");
+const sampler = @import("sampler.zig");
 const optimized_kv_cache = @import("../../../legacy/zinfer/src/model/runtime/optimized_kv_cache.zig");
 const decoder_family = @import("../../../legacy/zinfer/src/model/runtime/decoder_family.zig");
-const tensor_backend = @import("../../../legacy/zinfer/src/tensor/backends/backend.zig");
-const sampler = @import("../../../legacy/zinfer/src/sampling/sampler.zig");
 
 pub const GenerateOptions = struct {
     max_new_tokens: usize,
@@ -12,7 +12,7 @@ pub const GenerateOptions = struct {
     seed: u64,
     stream_output: bool,
     stop_sequences: [][]const u8,
-    backend_scheme: tensor_backend.Scheme,
+    backend_scheme: backend_scheme.Scheme,
     kv_cache_scheme: optimized_kv_cache.Scheme,
     q8_layout: optimized_kv_cache.Q8Layout,
     thread_count: usize,

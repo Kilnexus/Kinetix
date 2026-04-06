@@ -12,27 +12,29 @@ const swiftocr_operations = [_][]const u8{ "infer-ocr", "detect-text", "recogniz
 
 pub const OCRAdapter = struct {
     allocator: std.mem.Allocator,
-    catalog: backend.ModelCatalog,
     plan: load_plan.ResolvedLoadPlan,
     adapter_id: []u8,
     descriptor: adapter_mod.Descriptor,
 
     pub fn init(allocator: std.mem.Allocator, model_dir: []const u8) !OCRAdapter {
         var catalog = try backend.ModelCatalog.discover(allocator, model_dir);
-        errdefer catalog.deinit();
+        defer catalog.deinit();
 
         const plan = try load_plan.resolve(&catalog, .{
             .model_dir = catalog.model_dir,
         });
+        errdefer {
+            var owned_plan = plan;
+            owned_plan.deinit();
+        }
         if (plan.ocr_model_path == null) return error.MissingOCRModelArtifact;
 
-        const basename = std.fs.path.basename(catalog.model_dir);
+        const basename = std.fs.path.basename(plan.model_dir);
         const adapter_id = try std.fmt.allocPrint(allocator, "ocr.swiftocr.{s}", .{basename});
         errdefer allocator.free(adapter_id);
 
         return .{
             .allocator = allocator,
-            .catalog = catalog,
             .plan = plan,
             .adapter_id = adapter_id,
             .descriptor = .{
@@ -48,7 +50,7 @@ pub const OCRAdapter = struct {
 
     pub fn deinit(self: *OCRAdapter) void {
         self.allocator.free(self.adapter_id);
-        self.catalog.deinit();
+        self.plan.deinit();
         self.* = undefined;
     }
 

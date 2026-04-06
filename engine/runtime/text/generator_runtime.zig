@@ -1,10 +1,11 @@
 const std = @import("std");
 const GenerateOptions = @import("generate_options.zig").GenerateOptions;
+const backend_scheme = @import("backend_scheme.zig");
+const sampler = @import("sampler.zig");
 const optimized_kv_cache = @import("../../../legacy/zinfer/src/model/runtime/optimized_kv_cache.zig");
 const decoder_family = @import("../../../legacy/zinfer/src/model/runtime/decoder_family.zig");
 const optimized_decoder = @import("../../../legacy/zinfer/src/model/runtime/optimized_decoder.zig");
 const tensor_backend = @import("../../../legacy/zinfer/src/tensor/backends/backend.zig");
-const sampler = @import("../../../legacy/zinfer/src/sampling/sampler.zig");
 const streaming = @import("streaming.zig");
 
 pub const GeneratorRuntime = struct {
@@ -15,7 +16,7 @@ pub const GeneratorRuntime = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         model_dir: []const u8,
-        backend_scheme: tensor_backend.Scheme,
+        scheme: backend_scheme.Scheme,
         thread_count: usize,
     ) !GeneratorRuntime {
         const config_path = try std.fs.path.join(allocator, &.{ model_dir, "config.json" });
@@ -36,7 +37,7 @@ pub const GeneratorRuntime = struct {
         var model = try optimized_decoder.Runtime.init(
             allocator,
             model_dir,
-            backend_scheme,
+            mapBackendScheme(scheme),
             if (thread_count == 0) null else thread_count,
         );
         errdefer model.deinit();
@@ -125,3 +126,13 @@ pub const GeneratorRuntime = struct {
         return response;
     }
 };
+
+fn mapBackendScheme(scheme: backend_scheme.Scheme) tensor_backend.Scheme {
+    return switch (scheme) {
+        .auto => .auto,
+        .bf16 => .bf16,
+        .q8 => .q8,
+        .q6 => .q6,
+        .q4 => .q4,
+    };
+}

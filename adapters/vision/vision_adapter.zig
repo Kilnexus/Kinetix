@@ -26,7 +26,6 @@ pub const ModelFamily = enum {
 
 pub const VisionAdapter = struct {
     allocator: std.mem.Allocator,
-    catalog: backend.ModelCatalog,
     plan: load_plan.ResolvedLoadPlan,
     family: ModelFamily,
     adapter_id: []u8,
@@ -35,11 +34,15 @@ pub const VisionAdapter = struct {
 
     pub fn init(allocator: std.mem.Allocator, model_dir: []const u8) !VisionAdapter {
         var catalog = try backend.ModelCatalog.discover(allocator, model_dir);
-        errdefer catalog.deinit();
+        defer catalog.deinit();
 
         const plan = try load_plan.resolve(&catalog, .{
             .model_dir = catalog.model_dir,
         });
+        errdefer {
+            var owned_plan = plan;
+            owned_plan.deinit();
+        }
         if (plan.graph_path == null) return error.MissingGraphArtifact;
         if (plan.binary_weights_path == null) return error.MissingBinaryWeightsArtifact;
 
@@ -47,13 +50,12 @@ pub const VisionAdapter = struct {
         errdefer allocator.free(summary.model_name);
 
         const family = try detectModelFamily(allocator, plan.graph_path.?);
-        const basename = std.fs.path.basename(catalog.model_dir);
+        const basename = std.fs.path.basename(plan.model_dir);
         const adapter_id = try std.fmt.allocPrint(allocator, "vision.{s}.{s}", .{ family.name(), basename });
         errdefer allocator.free(adapter_id);
 
         return .{
             .allocator = allocator,
-            .catalog = catalog,
             .plan = plan,
             .family = family,
             .adapter_id = adapter_id,
@@ -72,7 +74,7 @@ pub const VisionAdapter = struct {
     pub fn deinit(self: *VisionAdapter) void {
         self.allocator.free(@constCast(self.graph_summary.model_name));
         self.allocator.free(self.adapter_id);
-        self.catalog.deinit();
+        self.plan.deinit();
         self.* = undefined;
     }
 
