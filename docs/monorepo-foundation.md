@@ -10,7 +10,7 @@ This repository is the integration root for the Kinetix unified inference framew
 
 ## Target Layout
 
-- `legacy/`: history-preserved imported repositories
+- `legacy/`: history-preserved imported repositories and short-term compatibility bridge sources
 - `engine/`: shared runtime core, memory, tensor, scheduler, artifact loading
 - `adapters/`: modality-specific runtimes built on top of `engine/`
 - `apps/`: CLI and service entrypoints
