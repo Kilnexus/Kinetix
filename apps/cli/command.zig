@@ -314,7 +314,7 @@ fn runCommand(stdout: anytype, args: RunArgs) !void {
 
 fn runBatchPlan(stdout: anytype, args: BatchPlanArgs) !void {
     const items = try loadBatchItems(args);
-    defer std.heap.page_allocator.free(items);
+    defer freeBatchItems(items);
 
     var prepared = try execution.prepareBatch(std.heap.page_allocator, .{
         .model_dir = args.model_dir,
@@ -354,7 +354,7 @@ fn runBatchPlan(stdout: anytype, args: BatchPlanArgs) !void {
 
 fn runBatchRun(stdout: anytype, args: BatchPlanArgs) !void {
     const items = try loadBatchItems(args);
-    defer std.heap.page_allocator.free(items);
+    defer freeBatchItems(items);
 
     var prepared = try execution.prepareBatch(std.heap.page_allocator, .{
         .model_dir = args.model_dir,
@@ -413,10 +413,26 @@ fn loadBatchItems(args: BatchPlanArgs) ![]execution.PrepareBatchItem {
     defer parsed.deinit();
 
     const items = try std.heap.page_allocator.alloc(execution.PrepareBatchItem, parsed.value.len);
+    errdefer {
+        for (items, 0..) |item, index| {
+            if (index >= parsed.value.len) break;
+            freeBatchItem(item);
+        }
+        std.heap.page_allocator.free(items);
+    }
+
     for (parsed.value, items) |entry, *item| {
         item.* = .{
-            .operation = entry.operation orelse args.operation,
-            .input = entry.input,
+            .operation = if (entry.operation) |operation|
+                try std.heap.page_allocator.dupe(u8, operation)
+            else if (args.operation) |operation|
+                try std.heap.page_allocator.dupe(u8, operation)
+            else
+                null,
+            .input = if (entry.input) |input|
+                try std.heap.page_allocator.dupe(u8, input)
+            else
+                null,
             .execution = if (entry.execution) |mode| try parseExecutionMode(mode) else args.execution,
             .max_tokens = entry.max_tokens orelse args.max_tokens,
             .native_exec = entry.native_exec orelse args.native_exec,
@@ -424,6 +440,16 @@ fn loadBatchItems(args: BatchPlanArgs) ![]execution.PrepareBatchItem {
         };
     }
     return items;
+}
+
+fn freeBatchItems(items: []execution.PrepareBatchItem) void {
+    for (items) |item| freeBatchItem(item);
+    std.heap.page_allocator.free(items);
+}
+
+fn freeBatchItem(item: execution.PrepareBatchItem) void {
+    if (item.operation) |operation| std.heap.page_allocator.free(operation);
+    if (item.input) |input| std.heap.page_allocator.free(input);
 }
 
 fn boolText(value: bool) []const u8 {

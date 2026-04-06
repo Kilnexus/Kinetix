@@ -23,6 +23,17 @@ pub const DecodeStats = struct {
     scheduler_workers: usize,
 };
 
+pub const CollectedDecode = struct {
+    tokens_per_request: []std.ArrayListUnmanaged(u32),
+    stats: DecodeStats,
+
+    pub fn deinit(self: *CollectedDecode, allocator: std.mem.Allocator) void {
+        for (self.tokens_per_request) |*tokens| tokens.deinit(allocator);
+        allocator.free(self.tokens_per_request);
+        self.* = undefined;
+    }
+};
+
 pub const BatchRuntime = struct {
     allocator: std.mem.Allocator,
     model: *runtime_mod.Runtime,
@@ -294,6 +305,91 @@ pub const BatchRuntime = struct {
             .total_decoded_tokens = total_decoded_tokens,
             .finished_requests = finished_requests,
             .scheduler_workers = scheduler_workers,
+        };
+    }
+
+    pub fn decodeRoundRobinCollectArgMax(self: *BatchRuntime, allocator: std.mem.Allocator, max_new_tokens: usize) !CollectedDecode {
+        var active_requests = self.requests.len;
+        var total_decoded_tokens: usize = 0;
+        var finished_requests: usize = 0;
+        const scheduler_workers = self.schedulerWorkerCount();
+
+        const tokens_per_request = try allocator.alloc(std.ArrayListUnmanaged(u32), self.requests.len);
+        errdefer allocator.free(tokens_per_request);
+        for (tokens_per_request) |*tokens| tokens.* = .empty;
+        errdefer {
+            for (tokens_per_request) |*tokens| tokens.deinit(allocator);
+        }
+
+        for (0..max_new_tokens) |_| {
+            if (active_requests == 0) break;
+
+            var launches = std.ArrayListUnmanaged(Launch).empty;
+            defer launches.deinit(self.allocator);
+            var progressed = false;
+
+            for (self.requests, 0..) |*request, index| {
+                if (!request.active) continue;
+
+                const next_token = try decoder_family.argMaxLogit(request.workspace.logits);
+                if (decoder_family.isEosToken(self.model.cfg.architecture, next_token)) {
+                    request.active = false;
+                    active_requests -= 1;
+                    finished_requests += 1;
+                    continue;
+                }
+
+                try tokens_per_request[index].append(allocator, std.math.cast(u32, next_token) orelse return error.TokenIdOutOfRange);
+                try launches.append(self.allocator, .{
+                    .request = request,
+                    .token_id = next_token,
+                });
+            }
+
+            if (launches.items.len != 0) {
+                if (scheduler_workers <= 1) {
+                    runLaunchRange(self.model, launches.items);
+                } else {
+                    const worker_count = @min(scheduler_workers, launches.items.len);
+                    const threads = try self.allocator.alloc(std.Thread, worker_count - 1);
+                    defer self.allocator.free(threads);
+                    const contexts = try self.allocator.alloc(WorkerContext, worker_count - 1);
+                    defer self.allocator.free(contexts);
+                    const chunk = std.math.divCeil(usize, launches.items.len, worker_count) catch unreachable;
+
+                    var start_index: usize = 0;
+                    for (0..worker_count - 1) |idx| {
+                        const end_index = @min(launches.items.len, start_index + chunk);
+                        contexts[idx] = .{
+                            .runtime = self.model,
+                            .launches = launches.items[start_index..end_index],
+                        };
+                        threads[idx] = try std.Thread.spawn(.{}, WorkerContext.run, .{&contexts[idx]});
+                        start_index = end_index;
+                    }
+
+                    runLaunchRange(self.model, launches.items[start_index..]);
+                    for (threads) |thread| thread.join();
+                }
+
+                for (launches.items) |*launch| {
+                    _ = try launch.result;
+                    launch.request.decoded_tokens += 1;
+                    total_decoded_tokens += 1;
+                    progressed = true;
+                }
+            }
+
+            if (!progressed) break;
+        }
+
+        return .{
+            .tokens_per_request = tokens_per_request,
+            .stats = .{
+                .total_decoded_tokens = total_decoded_tokens,
+                .finished_requests = finished_requests,
+                .scheduler_workers = scheduler_workers,
+            },
         };
     }
 
