@@ -338,12 +338,13 @@ fn runBatchRun(stdout: anytype, args: BatchPlanArgs) !void {
     try stdout.print("batches: {d}\n", .{report.batches.len});
 
     for (report.batches, 0..) |batch, batch_index| {
-        try stdout.print("batch[{d}]: size={d} accepted={d} execution={s} batching={s} indices=", .{
+        try stdout.print("batch[{d}]: size={d} accepted={d} execution={s} batching={s} path={s} indices=", .{
             batch_index,
             batch.len(),
             batch.acceptedCount(),
             @tagName(batch.execution),
             boolText(batch.supports_batching),
+            @tagName(batch.submit_path),
         });
         for (batch.request_results, 0..) |result, result_index| {
             if (result_index != 0) try stdout.writeAll(",");

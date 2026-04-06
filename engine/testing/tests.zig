@@ -293,6 +293,7 @@ test "batch executor submits planned requests through shared adapter interface" 
     try std.testing.expectEqual(@as(usize, 1), report.batches.len);
     try std.testing.expectEqual(@as(usize, 2), report.totalRequests());
     try std.testing.expectEqual(@as(usize, 2), report.totalAccepted());
+    try std.testing.expectEqual(adapter_mod.BatchSubmitPath.adapter_batch, report.batches[0].submit_path);
     try std.testing.expectEqual(@as(usize, 0), state.submit_count);
     try std.testing.expectEqual(@as(usize, 1), state.submit_batch_count);
 }

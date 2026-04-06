@@ -13,6 +13,7 @@ pub const ExecutedBatch = struct {
     adapter_id: []const u8,
     execution: task.ExecutionMode,
     supports_batching: bool,
+    submit_path: adapter_mod.BatchSubmitPath,
     request_results: []RequestExecutionResult,
 
     pub fn len(self: ExecutedBatch) usize {
@@ -89,6 +90,7 @@ pub fn execute(
             .adapter_id = dispatch_batch.adapter_id,
             .execution = dispatch_batch.execution,
             .supports_batching = dispatch_batch.supports_batching,
+            .submit_path = entry.adapter.batchSubmitPath(batch_requests.len),
             .request_results = results,
         };
     }

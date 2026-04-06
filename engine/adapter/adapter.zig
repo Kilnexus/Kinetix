@@ -32,6 +32,11 @@ pub const Submission = struct {
     execution: task.ExecutionMode,
 };
 
+pub const BatchSubmitPath = enum {
+    adapter_batch,
+    per_request_fallback,
+};
+
 pub const VTable = struct {
     submit: *const fn (ctx: *anyopaque, request: task.TaskRequest) anyerror!Submission,
     submit_batch: ?*const fn (ctx: *anyopaque, allocator: std.mem.Allocator, requests: []const task.TaskRequest) anyerror![]Submission = null,
@@ -50,10 +55,8 @@ pub const Adapter = struct {
     pub fn submitBatch(self: Adapter, allocator: std.mem.Allocator, requests: []const task.TaskRequest) ![]Submission {
         for (requests) |request| try self.validateRequest(request);
 
-        if (requests.len > 1) {
-            if (self.vtable.submit_batch) |submit_batch| {
-                return try submit_batch(self.ctx, allocator, requests);
-            }
+        if (self.batchSubmitPath(requests.len) == .adapter_batch) {
+            return try self.vtable.submit_batch.?(self.ctx, allocator, requests);
         }
 
         const submissions = try allocator.alloc(Submission, requests.len);
@@ -64,6 +67,11 @@ pub const Adapter = struct {
         }
 
         return submissions;
+    }
+
+    pub fn batchSubmitPath(self: Adapter, request_count: usize) BatchSubmitPath {
+        if (request_count > 1 and self.vtable.submit_batch != null) return .adapter_batch;
+        return .per_request_fallback;
     }
 
     fn validateRequest(self: Adapter, request: task.TaskRequest) !void {
