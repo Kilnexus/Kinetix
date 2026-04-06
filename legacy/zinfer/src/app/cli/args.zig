@@ -88,6 +88,29 @@ pub const ParsedBenchContinuousInvocation = struct {
     }
 };
 
+pub fn defaultSamplingConfig(mode: decoder_family.ThinkingMode) sampler.SamplingConfig {
+    return switch (mode) {
+        .enabled => .{
+            .temperature = 0.6,
+            .top_k = 20,
+            .top_p = 0.95,
+            .min_p = 0.0,
+            .presence_penalty = 0.0,
+            .frequency_penalty = 0.0,
+            .repetition_penalty = 1.1,
+        },
+        .disabled => .{
+            .temperature = 0.7,
+            .top_k = 20,
+            .top_p = 0.8,
+            .min_p = 0.0,
+            .presence_penalty = 0.0,
+            .frequency_penalty = 0.0,
+            .repetition_penalty = 1.1,
+        },
+    };
+}
+
 pub fn parseGenerateInvocation(
     allocator: std.mem.Allocator,
     args: []const []const u8,
@@ -346,29 +369,6 @@ pub fn parseBenchContinuousInvocation(
         .batch_size = batch_size,
         .total_requests = total_requests,
         .options = options,
-    };
-}
-
-pub fn defaultSamplingConfig(mode: decoder_family.ThinkingMode) sampler.SamplingConfig {
-    return switch (mode) {
-        .enabled => .{
-            .temperature = 0.6,
-            .top_k = 20,
-            .top_p = 0.95,
-            .min_p = 0.0,
-            .presence_penalty = 0.0,
-            .frequency_penalty = 0.0,
-            .repetition_penalty = 1.1,
-        },
-        .disabled => .{
-            .temperature = 0.7,
-            .top_k = 20,
-            .top_p = 0.8,
-            .min_p = 0.0,
-            .presence_penalty = 0.0,
-            .frequency_penalty = 0.0,
-            .repetition_penalty = 1.1,
-        },
     };
 }
 

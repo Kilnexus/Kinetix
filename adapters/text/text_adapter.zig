@@ -8,7 +8,8 @@ const adapter_mod = kinetix.adapter;
 const legacy_command = @import("../legacy_command.zig");
 const registry_mod = kinetix.registry;
 const task = kinetix.core.task;
-const zinfer_batch_bridge = if (builtin.is_test) struct {
+const text_native_dispatch = kinetix.runtime.text.native_dispatch;
+const native_batch_bridge = if (builtin.is_test) struct {
     pub fn executeQwenSingle(
         allocator: std.mem.Allocator,
         model_dir: []const u8,
@@ -44,7 +45,7 @@ const zinfer_batch_bridge = if (builtin.is_test) struct {
         _ = requests;
         return error.NativeBatchBridgeUnavailableInTests;
     }
-} else @import("zinfer_batch_bridge.zig");
+} else text_native_dispatch.NativeBatchBridge;
 
 pub const ModelFamily = enum {
     qwen3,
@@ -62,7 +63,7 @@ pub const ModelFamily = enum {
 
 const qwen3_operations = [_][]const u8{ "generate", "chat", "embed" };
 const bert_operations = [_][]const u8{ "fill-mask", "embed" };
-const unknown_operations = [_][]const u8{ "infer-text" };
+const unknown_operations = [_][]const u8{"infer-text"};
 
 pub const TextAdapter = struct {
     allocator: std.mem.Allocator,
@@ -142,17 +143,14 @@ pub const TextAdapter = struct {
                     const max_tokens_text = try std.fmt.allocPrint(allocator, "{d}", .{max_tokens});
                     defer allocator.free(max_tokens_text);
                     break :blk try legacy_command.init(allocator, project_dir, &.{
-                        "zig", "build", "run", "--", "generate",
-                        self.catalog.model_dir,
-                        input,
-                        max_tokens_text,
+                        "zig",                  "build", "run",           "--", "generate",
+                        self.catalog.model_dir, input,   max_tokens_text,
                     });
                 }
                 if (std.mem.eql(u8, options.operation, "embed")) {
                     break :blk try legacy_command.init(allocator, project_dir, &.{
-                        "zig", "build", "run", "--", "embed-text",
-                        self.catalog.model_dir,
-                        input,
+                        "zig",                  "build", "run", "--", "embed-text",
+                        self.catalog.model_dir, input,
                     });
                 }
                 return error.UnsupportedLegacyOperation;
@@ -160,16 +158,14 @@ pub const TextAdapter = struct {
             .bert => blk: {
                 if (std.mem.eql(u8, options.operation, "fill-mask")) {
                     break :blk try legacy_command.init(allocator, project_dir, &.{
-                        "zig", "build", "run", "--", "fill-mask",
-                        self.catalog.model_dir,
-                        input,
+                        "zig",                  "build", "run", "--", "fill-mask",
+                        self.catalog.model_dir, input,
                     });
                 }
                 if (std.mem.eql(u8, options.operation, "embed")) {
                     break :blk try legacy_command.init(allocator, project_dir, &.{
-                        "zig", "build", "run", "--", "embed-text",
-                        self.catalog.model_dir,
-                        input,
+                        "zig",                  "build", "run", "--", "embed-text",
+                        self.catalog.model_dir, input,
                     });
                 }
                 return error.UnsupportedLegacyOperation;
@@ -205,55 +201,48 @@ pub const TextAdapter = struct {
 
     fn execute(ctx: *anyopaque, allocator: std.mem.Allocator, request: task.TaskRequest) !adapter_mod.ExecutionResult {
         const self: *TextAdapter = @ptrCast(@alignCast(ctx));
-        const use_native = canUseNativeQwenSingle(self, request);
-        const output = if (use_native)
-            adapter_mod.OutputPayload{ .text = try zinfer_batch_bridge.executeQwenSingle(
-                allocator,
-                self.catalog.model_dir,
-                self.plan.weight_scheme orelse .auto,
-                request,
-            ) }
-        else
-            .none;
-        return .{
-            .submission = try submit(ctx, request),
-            .origin = if (use_native) .native_single_bridge else .shared_adapter,
-            .note = if (use_native) .text_native_qwen_single else .text_request_ready,
-            .output = output,
-        };
+        if (self.family != .qwen3) {
+            return .{
+                .submission = try submit(ctx, request),
+                .origin = .shared_adapter,
+                .note = .text_request_ready,
+            };
+        }
+
+        return try text_native_dispatch.executeSingle(
+            allocator,
+            native_batch_bridge,
+            self.catalog.model_dir,
+            self.plan.weight_scheme orelse .auto,
+            try submit(ctx, request),
+            request,
+        );
     }
 
     fn executeBatch(ctx: *anyopaque, allocator: std.mem.Allocator, requests: []const task.TaskRequest) ![]adapter_mod.ExecutionResult {
         const self: *TextAdapter = @ptrCast(@alignCast(ctx));
-        const use_native = canUseNativeQwenBatch(self, requests);
-        var native_output: ?zinfer_batch_bridge.NativeBatchOutput = null;
-        defer if (native_output) |*output| output.deinit(allocator);
+        if (self.family != .qwen3) {
+            const results = try allocator.alloc(adapter_mod.ExecutionResult, requests.len);
+            errdefer allocator.free(results);
 
-        if (use_native) {
-            native_output = try zinfer_batch_bridge.executeQwenBatch(
-                allocator,
-                self.catalog.model_dir,
-                self.plan.weight_scheme orelse .auto,
-                requests,
-            );
+            for (requests, results) |request, *result| {
+                result.* = .{
+                    .submission = buildSubmission(self, request),
+                    .origin = .shared_adapter,
+                    .note = .text_request_ready,
+                };
+            }
+            return results;
         }
 
-        const results = try allocator.alloc(adapter_mod.ExecutionResult, requests.len);
-        errdefer allocator.free(results);
-
-        for (requests, results, 0..) |request, *result, index| {
-            result.* = .{
-                .submission = buildSubmission(self, request),
-                .origin = if (use_native) .native_batch_bridge else .shared_adapter,
-                .note = if (use_native) .text_native_qwen_batch else .text_request_ready,
-                .output = if (use_native)
-                    .{ .text = try allocator.dupe(u8, native_output.?.texts[index]) }
-                else
-                    .none,
-            };
-        }
-
-        return results;
+        return try text_native_dispatch.executeBatch(
+            allocator,
+            native_batch_bridge,
+            self.catalog.model_dir,
+            self.plan.weight_scheme orelse .auto,
+            self.descriptor.id,
+            requests,
+        );
     }
 };
 
@@ -313,35 +302,5 @@ fn buildSubmission(self: *const TextAdapter, request: task.TaskRequest) adapter_
         .adapter_id = self.descriptor.id,
         .accepted = true,
         .execution = request.spec.execution,
-    };
-}
-
-fn canUseNativeQwenBatch(self: *const TextAdapter, requests: []const task.TaskRequest) bool {
-    if (self.family != .qwen3) return false;
-    if (requests.len <= 1) return false;
-
-    for (requests, 0..) |request, index| {
-        if (!request.generation.native_execution) return false;
-        if (request.spec.execution != .sync) return false;
-        if (!std.mem.eql(u8, request.spec.operation, "generate") and !std.mem.eql(u8, request.spec.operation, "chat")) return false;
-        switch (request.input) {
-            .text => {},
-            else => return false,
-        }
-
-        if (index != 0 and request.generation.max_tokens != requests[0].generation.max_tokens) return false;
-    }
-
-    return true;
-}
-
-fn canUseNativeQwenSingle(self: *const TextAdapter, request: task.TaskRequest) bool {
-    if (self.family != .qwen3) return false;
-    if (!request.generation.native_execution) return false;
-    if (request.spec.execution != .sync) return false;
-    if (!std.mem.eql(u8, request.spec.operation, "generate") and !std.mem.eql(u8, request.spec.operation, "chat")) return false;
-    return switch (request.input) {
-        .none, .text => true,
-        else => false,
     };
 }

@@ -1,13 +1,13 @@
 const std = @import("std");
-const backend = @import("../../engine/artifacts/backend/backend.zig");
-const task = @import("../../engine/core/task.zig");
-const zinfer_prompts = @import("../../legacy/zinfer/src/app/cli/prompts.zig");
-const zinfer_args = @import("../../legacy/zinfer/src/app/cli/args.zig");
-const zinfer_runtime = @import("../../legacy/zinfer/src/app/cli/runtime.zig");
-const zinfer_decoder_family = @import("../../legacy/zinfer/src/model/runtime/decoder_family.zig");
-const zinfer_kv_cache = @import("../../legacy/zinfer/src/model/runtime/optimized_kv_cache.zig");
-const zinfer_optimized_decoder = @import("../../legacy/zinfer/src/model/runtime/optimized_decoder.zig");
-const zinfer_tensor_backend = @import("../../legacy/zinfer/src/tensor/backends/backend.zig");
+const backend = @import("../../artifacts/backend/backend.zig");
+const task = @import("../../core/task.zig");
+const text_prompts = @import("prompts.zig");
+const text_options = @import("generate_options.zig");
+const text_runtime = @import("generator_runtime.zig");
+const zinfer_decoder_family = @import("../../../legacy/zinfer/src/model/runtime/decoder_family.zig");
+const zinfer_kv_cache = @import("../../../legacy/zinfer/src/model/runtime/optimized_kv_cache.zig");
+const zinfer_optimized_decoder = @import("../../../legacy/zinfer/src/model/runtime/optimized_decoder.zig");
+const zinfer_tensor_backend = @import("../../../legacy/zinfer/src/tensor/backends/backend.zig");
 
 pub const NativeBatchOutput = struct {
     texts: [][]u8,
@@ -21,6 +21,32 @@ pub const NativeBatchOutput = struct {
     }
 };
 
+pub fn generateSingleUserText(
+    allocator: std.mem.Allocator,
+    model_dir: []const u8,
+    user_text: []const u8,
+    options: text_options.GenerateOptions,
+) ![]u8 {
+    var runtime = try text_runtime.GeneratorRuntime.init(
+        allocator,
+        model_dir,
+        options.backend_scheme,
+        options.thread_count,
+    );
+    defer runtime.deinit();
+
+    const prompt = try text_prompts.buildSingleUserPromptAlloc(
+        allocator,
+        runtime.model.cfg.architecture,
+        user_text,
+        options.system_prompt,
+        options.thinking_mode,
+    );
+    defer allocator.free(prompt);
+
+    return try runtime.generateFromPrompt(prompt, options);
+}
+
 pub fn executeQwenSingle(
     allocator: std.mem.Allocator,
     model_dir: []const u8,
@@ -33,28 +59,11 @@ pub fn executeQwenSingle(
         else => return error.InvalidInputPayload,
     };
 
-    var runtime = try zinfer_runtime.GeneratorRuntime.init(
-        allocator,
-        model_dir,
-        mapBackendScheme(preferred_weights),
-        0,
-    );
-    defer runtime.deinit();
-
-    const prompt = try zinfer_prompts.buildSingleUserPromptAlloc(
-        allocator,
-        runtime.model.cfg.architecture,
-        input,
-        null,
-        .disabled,
-    );
-    defer allocator.free(prompt);
-
-    const options = zinfer_args.GenerateOptions{
+    const options = text_options.GenerateOptions{
         .max_new_tokens = request.generation.max_tokens orelse 64,
         .thinking_mode = .disabled,
         .system_prompt = null,
-        .sampling = zinfer_args.defaultSamplingConfig(.disabled),
+        .sampling = text_options.defaultSamplingConfig(.disabled),
         .seed = 0,
         .stream_output = false,
         .stop_sequences = &.{},
@@ -64,7 +73,7 @@ pub fn executeQwenSingle(
         .thread_count = 0,
     };
 
-    return try runtime.generateFromPrompt(prompt, options);
+    return try generateSingleUserText(allocator, model_dir, input, options);
 }
 
 pub fn executeQwenBatch(
@@ -78,7 +87,7 @@ pub fn executeQwenBatch(
     const resolved_max_tokens = resolveMaxTokens(requests);
     if (resolvedMaxTokensMismatch(requests, resolved_max_tokens)) return error.InconsistentBatchGenerationOptions;
 
-    var runtime = try zinfer_runtime.GeneratorRuntime.init(
+    var runtime = try text_runtime.GeneratorRuntime.init(
         allocator,
         model_dir,
         mapBackendScheme(preferred_weights),
@@ -108,7 +117,7 @@ pub fn executeQwenBatch(
             else => return error.InvalidInputPayload,
         };
 
-        prompt.* = try zinfer_prompts.buildSingleUserPromptAlloc(
+        prompt.* = try text_prompts.buildSingleUserPromptAlloc(
             allocator,
             runtime.model.cfg.architecture,
             text,
