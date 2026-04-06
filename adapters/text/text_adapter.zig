@@ -177,8 +177,22 @@ pub const TextAdapter = struct {
         if (self.plan.weights_path == null) return error.MissingWeightArtifacts;
         if (self.plan.config_path == null) return error.MissingConfigArtifact;
         if (self.plan.tokenizer_path == null) return error.MissingTokenizerArtifact;
+        return try buildSubmissions(self, allocator, requests);
+    }
 
-        if (canUseNativeQwenBatch(self, requests)) {
+    fn execute(ctx: *anyopaque, allocator: std.mem.Allocator, request: task.TaskRequest) !adapter_mod.ExecutionResult {
+        _ = allocator;
+        return .{
+            .submission = try submit(ctx, request),
+            .origin = .shared_adapter,
+            .note = .text_request_ready,
+        };
+    }
+
+    fn executeBatch(ctx: *anyopaque, allocator: std.mem.Allocator, requests: []const task.TaskRequest) ![]adapter_mod.ExecutionResult {
+        const self: *TextAdapter = @ptrCast(@alignCast(ctx));
+        const use_native = canUseNativeQwenBatch(self, requests);
+        if (use_native) {
             try zinfer_batch_bridge.executeQwenBatch(
                 allocator,
                 self.catalog.model_dir,
@@ -187,29 +201,26 @@ pub const TextAdapter = struct {
             );
         }
 
-        const submissions = try allocator.alloc(adapter_mod.Submission, requests.len);
-        errdefer allocator.free(submissions);
+        const results = try allocator.alloc(adapter_mod.ExecutionResult, requests.len);
+        errdefer allocator.free(results);
 
-        for (requests, submissions) |request, *submission| {
-            switch (request.input) {
-                .none, .text => {},
-                else => return error.InvalidInputPayload,
-            }
-
-            submission.* = .{
-                .adapter_id = self.descriptor.id,
-                .accepted = true,
-                .execution = request.spec.execution,
+        for (requests, results) |request, *result| {
+            result.* = .{
+                .submission = buildSubmission(self, request),
+                .origin = if (use_native) .native_batch_bridge else .shared_adapter,
+                .note = if (use_native) .text_native_qwen_batch else .text_request_ready,
             };
         }
 
-        return submissions;
+        return results;
     }
 };
 
 const vtable = adapter_mod.VTable{
     .submit = TextAdapter.submit,
     .submit_batch = TextAdapter.submitBatch,
+    .execute = TextAdapter.execute,
+    .execute_batch = TextAdapter.executeBatch,
 };
 
 fn operationsForFamily(family: ModelFamily) []const []const u8 {
@@ -238,6 +249,30 @@ fn detectModelFamily(allocator: std.mem.Allocator, config_path: []const u8) !Mod
 fn defaultTextInput(family: ModelFamily, operation: []const u8) []const u8 {
     if (family == .bert and std.mem.eql(u8, operation, "fill-mask")) return "Hello [MASK]";
     return "Hello from Kinetix";
+}
+
+fn buildSubmissions(self: *const TextAdapter, allocator: std.mem.Allocator, requests: []const task.TaskRequest) ![]adapter_mod.Submission {
+    const submissions = try allocator.alloc(adapter_mod.Submission, requests.len);
+    errdefer allocator.free(submissions);
+
+    for (requests, submissions) |request, *submission| {
+        switch (request.input) {
+            .none, .text => {},
+            else => return error.InvalidInputPayload,
+        }
+
+        submission.* = buildSubmission(self, request);
+    }
+
+    return submissions;
+}
+
+fn buildSubmission(self: *const TextAdapter, request: task.TaskRequest) adapter_mod.Submission {
+    return .{
+        .adapter_id = self.descriptor.id,
+        .accepted = true,
+        .execution = request.spec.execution,
+    };
 }
 
 fn canUseNativeQwenBatch(self: *const TextAdapter, requests: []const task.TaskRequest) bool {

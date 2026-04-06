@@ -53,6 +53,11 @@ pub const PreparedExecution = struct {
         self.* = undefined;
     }
 
+    pub fn execute(self: *const PreparedExecution) !engine.adapter.ExecutionResult {
+        const entry = self.registry.findById(self.plan.adapter_id) orelse return error.AdapterNotFound;
+        return try entry.adapter.execute(self.allocator, self.request);
+    }
+
     pub fn prepareLegacyCommand(self: *const PreparedExecution, options: LegacyOptions) !legacy_command.LegacyCommand {
         const resolved_input = options.input orelse self.request.input.asString();
         const resolved_max_tokens = options.max_tokens orelse self.request.generation.max_tokens;
@@ -222,6 +227,10 @@ test "prepared execution resolves text adapter through shared executor" {
     try std.testing.expectEqual(@as(?usize, 32), prepared.request.generation.max_tokens);
     try std.testing.expectEqual(task.ExecutionMode.stream, prepared.plan.execution);
     try std.testing.expect(prepared.plan.supports_streaming);
+
+    const result = try prepared.execute();
+    try std.testing.expect(result.submission.accepted);
+    try std.testing.expectEqual(engine.adapter.ExecutionNote.text_request_ready, result.note);
 }
 
 test "prepared batch execution groups compatible text requests" {

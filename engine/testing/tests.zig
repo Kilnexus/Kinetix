@@ -17,6 +17,8 @@ const MockState = struct {
     adapter_id: []const u8,
     submit_count: usize = 0,
     submit_batch_count: usize = 0,
+    execute_count: usize = 0,
+    execute_batch_count: usize = 0,
 };
 
 fn submitMock(ctx: *anyopaque, request: task.TaskRequest) !adapter_mod.Submission {
@@ -47,9 +49,48 @@ fn submitMockBatch(ctx: *anyopaque, allocator: std.mem.Allocator, requests: []co
     return submissions;
 }
 
+fn executeMock(ctx: *anyopaque, allocator: std.mem.Allocator, request: task.TaskRequest) !adapter_mod.ExecutionResult {
+    _ = allocator;
+    const state: *MockState = @ptrCast(@alignCast(ctx));
+    state.execute_count += 1;
+    return .{
+        .submission = .{
+            .adapter_id = state.adapter_id,
+            .accepted = true,
+            .execution = request.spec.execution,
+        },
+        .origin = .shared_adapter,
+        .note = .validated_only,
+    };
+}
+
+fn executeMockBatch(ctx: *anyopaque, allocator: std.mem.Allocator, requests: []const task.TaskRequest) ![]adapter_mod.ExecutionResult {
+    const state: *MockState = @ptrCast(@alignCast(ctx));
+    state.execute_batch_count += 1;
+
+    const results = try allocator.alloc(adapter_mod.ExecutionResult, requests.len);
+    errdefer allocator.free(results);
+
+    for (requests, results) |request, *result| {
+        result.* = .{
+            .submission = .{
+                .adapter_id = state.adapter_id,
+                .accepted = true,
+                .execution = request.spec.execution,
+            },
+            .origin = .shared_adapter,
+            .note = .validated_only,
+        };
+    }
+
+    return results;
+}
+
 const mock_vtable = adapter_mod.VTable{
     .submit = submitMock,
     .submit_batch = submitMockBatch,
+    .execute = executeMock,
+    .execute_batch = executeMockBatch,
 };
 
 test "registry resolves task to matching modality adapter" {
@@ -341,9 +382,11 @@ test "batch executor submits planned requests through shared adapter interface" 
     try std.testing.expectEqual(@as(usize, 1), report.batches.len);
     try std.testing.expectEqual(@as(usize, 2), report.totalRequests());
     try std.testing.expectEqual(@as(usize, 2), report.totalAccepted());
-    try std.testing.expectEqual(adapter_mod.BatchSubmitPath.adapter_batch, report.batches[0].submit_path);
+    try std.testing.expectEqual(adapter_mod.BatchExecutionPath.adapter_batch, report.batches[0].execute_path);
     try std.testing.expectEqual(@as(usize, 0), state.submit_count);
-    try std.testing.expectEqual(@as(usize, 1), state.submit_batch_count);
+    try std.testing.expectEqual(@as(usize, 0), state.submit_batch_count);
+    try std.testing.expectEqual(@as(usize, 0), state.execute_count);
+    try std.testing.expectEqual(@as(usize, 1), state.execute_batch_count);
 }
 
 test "text adapter resolves qwen3 model and integrates with scheduler" {

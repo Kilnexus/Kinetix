@@ -6,14 +6,14 @@ const task = @import("../core/task.zig");
 
 pub const RequestExecutionResult = struct {
     request_index: usize,
-    submission: adapter_mod.Submission,
+    result: adapter_mod.ExecutionResult,
 };
 
 pub const ExecutedBatch = struct {
     adapter_id: []const u8,
     execution: task.ExecutionMode,
     supports_batching: bool,
-    submit_path: adapter_mod.BatchSubmitPath,
+    execute_path: adapter_mod.BatchExecutionPath,
     request_results: []RequestExecutionResult,
 
     pub fn len(self: ExecutedBatch) usize {
@@ -23,9 +23,29 @@ pub const ExecutedBatch = struct {
     pub fn acceptedCount(self: ExecutedBatch) usize {
         var accepted: usize = 0;
         for (self.request_results) |result| {
-            accepted += @intFromBool(result.submission.accepted);
+            accepted += @intFromBool(result.result.submission.accepted);
         }
         return accepted;
+    }
+
+    pub fn commonOrigin(self: ExecutedBatch) ?adapter_mod.ExecutionOrigin {
+        if (self.request_results.len == 0) return null;
+
+        const origin = self.request_results[0].result.origin;
+        for (self.request_results[1..]) |result| {
+            if (result.result.origin != origin) return null;
+        }
+        return origin;
+    }
+
+    pub fn commonNote(self: ExecutedBatch) ?adapter_mod.ExecutionNote {
+        if (self.request_results.len == 0) return null;
+
+        const note = self.request_results[0].result.note;
+        for (self.request_results[1..]) |result| {
+            if (result.result.note != note) return null;
+        }
+        return note;
     }
 };
 
@@ -75,14 +95,14 @@ pub fn execute(
             request.* = requests[request_index];
         }
 
-        const submissions = try entry.adapter.submitBatch(allocator, batch_requests);
-        defer allocator.free(submissions);
-        if (submissions.len != dispatch_batch.request_indices.len) return error.InvalidBatchSubmissionCount;
+        const results_batch = try entry.adapter.executeBatch(allocator, batch_requests);
+        defer allocator.free(results_batch);
+        if (results_batch.len != dispatch_batch.request_indices.len) return error.InvalidBatchSubmissionCount;
 
-        for (dispatch_batch.request_indices, submissions, results) |request_index, submission, *result| {
+        for (dispatch_batch.request_indices, results_batch, results) |request_index, execution_result, *result| {
             result.* = .{
                 .request_index = request_index,
-                .submission = submission,
+                .result = execution_result,
             };
         }
 
@@ -90,7 +110,7 @@ pub fn execute(
             .adapter_id = dispatch_batch.adapter_id,
             .execution = dispatch_batch.execution,
             .supports_batching = dispatch_batch.supports_batching,
-            .submit_path = entry.adapter.batchSubmitPath(batch_requests.len),
+            .execute_path = entry.adapter.batchExecutePath(batch_requests.len),
             .request_results = results,
         };
     }

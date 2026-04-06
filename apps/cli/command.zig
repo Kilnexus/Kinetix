@@ -289,6 +289,12 @@ fn runCommand(stdout: anytype, args: RunArgs) !void {
 
         const term = try execution.executeLegacyCommand(legacy);
         try stdout.print("legacy_exit: {s}\n", .{termText(term)});
+    } else {
+        const result = try prepared.execute();
+        try stdout.print("execution_origin: {s}\n", .{@tagName(result.origin)});
+        if (result.note != .none) {
+            try stdout.print("execution_note: {s}\n", .{@tagName(result.note)});
+        }
     }
 }
 
@@ -354,14 +360,21 @@ fn runBatchRun(stdout: anytype, args: BatchPlanArgs) !void {
     try stdout.print("batches: {d}\n", .{report.batches.len});
 
     for (report.batches, 0..) |batch, batch_index| {
-        try stdout.print("batch[{d}]: size={d} accepted={d} execution={s} batching={s} path={s} indices=", .{
+        try stdout.print("batch[{d}]: size={d} accepted={d} execution={s} batching={s} path={s}", .{
             batch_index,
             batch.len(),
             batch.acceptedCount(),
             @tagName(batch.execution),
             boolText(batch.supports_batching),
-            @tagName(batch.submit_path),
+            @tagName(batch.execute_path),
         });
+        if (batch.commonOrigin()) |origin| {
+            try stdout.print(" origin={s}", .{@tagName(origin)});
+        }
+        if (batch.commonNote()) |note| {
+            if (note != .none) try stdout.print(" note={s}", .{@tagName(note)});
+        }
+        try stdout.writeAll(" indices=");
         for (batch.request_results, 0..) |result, result_index| {
             if (result_index != 0) try stdout.writeAll(",");
             try stdout.print("{d}", .{result.request_index});

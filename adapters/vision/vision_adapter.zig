@@ -137,10 +137,20 @@ pub const VisionAdapter = struct {
             .execution = request.spec.execution,
         };
     }
+
+    fn execute(ctx: *anyopaque, allocator: std.mem.Allocator, request: task.TaskRequest) !adapter_mod.ExecutionResult {
+        _ = allocator;
+        return .{
+            .submission = try submit(ctx, request),
+            .origin = .shared_adapter,
+            .note = .vision_graph_ready,
+        };
+    }
 };
 
 const vtable = adapter_mod.VTable{
     .submit = VisionAdapter.submit,
+    .execute = VisionAdapter.execute,
 };
 
 fn operationsForFamily(family: ModelFamily) []const []const u8 {

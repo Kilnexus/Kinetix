@@ -32,7 +32,27 @@ pub const Submission = struct {
     execution: task.ExecutionMode,
 };
 
-pub const BatchSubmitPath = enum {
+pub const ExecutionOrigin = enum {
+    shared_adapter,
+    native_batch_bridge,
+};
+
+pub const ExecutionNote = enum {
+    none,
+    validated_only,
+    text_request_ready,
+    text_native_qwen_batch,
+    vision_graph_ready,
+    ocr_model_ready,
+};
+
+pub const ExecutionResult = struct {
+    submission: Submission,
+    origin: ExecutionOrigin = .shared_adapter,
+    note: ExecutionNote = .none,
+};
+
+pub const BatchExecutionPath = enum {
     adapter_batch,
     per_request_fallback,
 };
@@ -40,6 +60,8 @@ pub const BatchSubmitPath = enum {
 pub const VTable = struct {
     submit: *const fn (ctx: *anyopaque, request: task.TaskRequest) anyerror!Submission,
     submit_batch: ?*const fn (ctx: *anyopaque, allocator: std.mem.Allocator, requests: []const task.TaskRequest) anyerror![]Submission = null,
+    execute: ?*const fn (ctx: *anyopaque, allocator: std.mem.Allocator, request: task.TaskRequest) anyerror!ExecutionResult = null,
+    execute_batch: ?*const fn (ctx: *anyopaque, allocator: std.mem.Allocator, requests: []const task.TaskRequest) anyerror![]ExecutionResult = null,
 };
 
 pub const Adapter = struct {
@@ -69,8 +91,44 @@ pub const Adapter = struct {
         return submissions;
     }
 
-    pub fn batchSubmitPath(self: Adapter, request_count: usize) BatchSubmitPath {
+    pub fn execute(self: Adapter, allocator: std.mem.Allocator, request: task.TaskRequest) !ExecutionResult {
+        try self.validateRequest(request);
+
+        if (self.vtable.execute) |execute_fn| {
+            return try execute_fn(self.ctx, allocator, request);
+        }
+
+        return .{
+            .submission = try self.vtable.submit(self.ctx, request),
+            .origin = .shared_adapter,
+            .note = .validated_only,
+        };
+    }
+
+    pub fn executeBatch(self: Adapter, allocator: std.mem.Allocator, requests: []const task.TaskRequest) ![]ExecutionResult {
+        for (requests) |request| try self.validateRequest(request);
+
+        if (self.batchExecutePath(requests.len) == .adapter_batch) {
+            return try self.vtable.execute_batch.?(self.ctx, allocator, requests);
+        }
+
+        const results = try allocator.alloc(ExecutionResult, requests.len);
+        errdefer allocator.free(results);
+
+        for (requests, results) |request, *result| {
+            result.* = try self.execute(allocator, request);
+        }
+
+        return results;
+    }
+
+    pub fn batchSubmitPath(self: Adapter, request_count: usize) BatchExecutionPath {
         if (request_count > 1 and self.vtable.submit_batch != null) return .adapter_batch;
+        return .per_request_fallback;
+    }
+
+    pub fn batchExecutePath(self: Adapter, request_count: usize) BatchExecutionPath {
+        if (request_count > 1 and self.vtable.execute_batch != null) return .adapter_batch;
         return .per_request_fallback;
     }
 

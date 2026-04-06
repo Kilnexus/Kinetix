@@ -89,8 +89,18 @@ pub const OCRAdapter = struct {
             .execution = request.spec.execution,
         };
     }
+
+    fn execute(ctx: *anyopaque, allocator: std.mem.Allocator, request: task.TaskRequest) !adapter_mod.ExecutionResult {
+        _ = allocator;
+        return .{
+            .submission = try submit(ctx, request),
+            .origin = .shared_adapter,
+            .note = .ocr_model_ready,
+        };
+    }
 };
 
 const vtable = adapter_mod.VTable{
     .submit = OCRAdapter.submit,
+    .execute = OCRAdapter.execute,
 };
