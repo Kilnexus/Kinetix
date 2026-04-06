@@ -7,23 +7,23 @@ const memory = @import("../core/memory/memory.zig");
 const registry_mod = @import("../registry/registry.zig");
 const load_plan = @import("../runtime/load_plan.zig");
 const scheduler_mod = @import("../scheduler/scheduler.zig");
-const adapter_factory_mod = @import("root").adapters.factory;
-const ocr_adapter_mod = @import("root").adapters.ocr;
-const text_adapter_mod = @import("root").adapters.text;
-const vision_adapter_mod = @import("root").adapters.vision;
+const adapter_factory_mod = @import("../../adapters/factory.zig");
+const ocr_adapter_mod = @import("../../adapters/ocr/ocr.zig");
+const text_adapter_mod = @import("../../adapters/text/text.zig");
+const vision_adapter_mod = @import("../../adapters/vision/vision.zig");
 
 const MockState = struct {
     adapter_id: []const u8,
     submit_count: usize = 0,
 };
 
-fn submitMock(ctx: *anyopaque, spec: task.TaskSpec) !adapter_mod.Submission {
+fn submitMock(ctx: *anyopaque, request: task.TaskRequest) !adapter_mod.Submission {
     const state: *MockState = @ptrCast(@alignCast(ctx));
     state.submit_count += 1;
     return .{
         .adapter_id = state.adapter_id,
         .accepted = true,
-        .execution = spec.execution,
+        .execution = request.spec.execution,
     };
 }
 
@@ -102,7 +102,7 @@ test "scheduler plans and submits through explicit adapter id" {
     try std.testing.expectEqual(task.ExecutionMode.stream, plan.execution);
     try std.testing.expect(plan.supports_streaming);
 
-    const submission = try scheduler.submit(spec);
+    const submission = try scheduler.submit(.{ .spec = spec });
     try std.testing.expect(submission.accepted);
     try std.testing.expectEqualStrings("text.qwen3", submission.adapter_id);
     try std.testing.expectEqual(@as(usize, 1), state.submit_count);
@@ -150,13 +150,13 @@ test "text adapter resolves qwen3 model and integrates with scheduler" {
     try text_adapter.registerInto(&registry);
 
     const scheduler = scheduler_mod.Scheduler.init(&registry);
-    const submission = try scheduler.submit(.{
+    const submission = try scheduler.submit(.{ .spec = .{
         .modality = .text,
         .operation = "generate",
         .model_family = "qwen3",
         .adapter_id = text_adapter.descriptor.id,
         .execution = .stream,
-    });
+    } });
 
     try std.testing.expect(submission.accepted);
     try std.testing.expectEqual(task.ExecutionMode.stream, submission.execution);
@@ -186,12 +186,12 @@ test "text adapter restricts bert model to bert-compatible operations" {
     try text_adapter.registerInto(&registry);
 
     const scheduler = scheduler_mod.Scheduler.init(&registry);
-    try std.testing.expectError(error.NoMatchingAdapter, scheduler.submit(.{
+    try std.testing.expectError(error.NoMatchingAdapter, scheduler.submit(.{ .spec = .{
         .modality = .text,
         .operation = "generate",
         .model_family = "bert",
         .execution = .sync,
-    }));
+    } }));
 }
 
 test "vision adapter resolves yolo artifacts and integrates with scheduler" {
@@ -239,12 +239,12 @@ test "vision adapter resolves yolo artifacts and integrates with scheduler" {
     try vision_adapter.registerInto(&registry);
 
     const scheduler = scheduler_mod.Scheduler.init(&registry);
-    const submission = try scheduler.submit(.{
+    const submission = try scheduler.submit(.{ .spec = .{
         .modality = .vision,
         .operation = "detect",
         .model_family = "yolo",
         .execution = .sync,
-    });
+    } });
 
     try std.testing.expect(submission.accepted);
     try std.testing.expectEqual(task.ExecutionMode.sync, submission.execution);
@@ -312,15 +312,46 @@ test "ocr adapter resolves swiftocr model and integrates with scheduler" {
     try ocr_adapter.registerInto(&registry);
 
     const scheduler = scheduler_mod.Scheduler.init(&registry);
-    const submission = try scheduler.submit(.{
+    const submission = try scheduler.submit(.{ .spec = .{
         .modality = .ocr,
         .operation = "infer-ocr",
         .model_family = "swiftocr",
         .execution = .sync,
-    });
+    } });
 
     try std.testing.expect(submission.accepted);
     try std.testing.expectEqual(task.ExecutionMode.sync, submission.execution);
+}
+
+test "text adapter rejects image payloads in shared request path" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "config.json", "{\"model_type\":\"qwen3\"}");
+    try writeTmpFile(tmp.dir, "tokenizer.json", "{}");
+    try writeTmpFile(tmp.dir, "model.q8.zinfer", "q8");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var text_adapter = try text_adapter_mod.TextAdapter.init(std.testing.allocator, root_path, .auto);
+    defer text_adapter.deinit();
+
+    var registry = registry_mod.Registry.init(std.testing.allocator);
+    defer registry.deinit();
+    try text_adapter.registerInto(&registry);
+
+    const scheduler = scheduler_mod.Scheduler.init(&registry);
+    try std.testing.expectError(error.InvalidInputPayload, scheduler.submit(.{
+        .spec = .{
+            .modality = .text,
+            .operation = "generate",
+            .model_family = "qwen3",
+            .execution = .sync,
+        },
+        .input = .{ .image_path = "demo.png" },
+    }));
+
 }
 
 test "adapter factory auto-detects text model directories" {

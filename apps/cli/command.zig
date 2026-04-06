@@ -1,11 +1,8 @@
 const std = @import("std");
 const kinetix = @import("../../kinetix.zig");
 
-const factory = kinetix.adapters.factory;
 const backend = kinetix.artifacts.backend;
-const legacy_command = kinetix.adapters.legacy_command;
-const registry_mod = kinetix.registry;
-const scheduler_mod = kinetix.scheduler;
+const execution = kinetix.execution;
 const task = kinetix.core.task;
 
 pub const Command = union(enum) {
@@ -62,7 +59,7 @@ pub fn parse(allocator: std.mem.Allocator) !ParsedCommand {
     var model_dir: ?[]const u8 = null;
     var operation: ?[]const u8 = null;
     var input: ?[]const u8 = null;
-    var execution: task.ExecutionMode = .sync;
+    var execution_mode: task.ExecutionMode = .sync;
     var preferred_weights: backend.WeightScheme = .auto;
     var legacy_exec = false;
     var max_tokens: ?usize = null;
@@ -90,7 +87,7 @@ pub fn parse(allocator: std.mem.Allocator) !ParsedCommand {
         if (std.mem.eql(u8, args[i], "--execution")) {
             i += 1;
             if (i >= args.len) return error.MissingExecutionMode;
-            execution = try parseExecutionMode(args[i]);
+            execution_mode = try parseExecutionMode(args[i]);
             continue;
         }
         if (std.mem.eql(u8, args[i], "--weights")) {
@@ -119,7 +116,7 @@ pub fn parse(allocator: std.mem.Allocator) !ParsedCommand {
             .model_dir = model_dir.?,
             .operation = operation,
             .input = input,
-            .execution = execution,
+            .execution = execution_mode,
             .preferred_weights = preferred_weights,
             .legacy_exec = legacy_exec,
             .max_tokens = max_tokens,
@@ -153,44 +150,27 @@ pub fn printUsage(writer: anytype) !void {
 }
 
 fn runCommand(stdout: anytype, args: RunArgs) !void {
-    var registry = registry_mod.Registry.init(std.heap.page_allocator);
-    defer registry.deinit();
-
-    var managed = try factory.initAuto(std.heap.page_allocator, args.model_dir, args.preferred_weights);
-    defer managed.deinit();
-    try managed.registerInto(&registry);
-
-    const descriptor = managed.descriptor();
-    const operation = args.operation orelse defaultOperation(descriptor);
-    const model_family = descriptor.bound_model_family orelse return error.MissingModelFamilyBinding;
-    const scheduler = scheduler_mod.Scheduler.init(&registry);
-
-    const spec = task.TaskSpec{
-        .modality = descriptor.modality,
-        .operation = operation,
-        .model_family = model_family,
-        .adapter_id = descriptor.id,
+    var prepared = try execution.prepare(std.heap.page_allocator, .{
+        .model_dir = args.model_dir,
+        .operation = args.operation,
+        .input = args.input,
         .execution = args.execution,
-    };
+        .preferred_weights = args.preferred_weights,
+        .max_tokens = args.max_tokens,
+    });
+    defer prepared.deinit();
 
-    const plan = try scheduler.plan(spec);
-    const submission = try scheduler.submit(spec);
-
-    try stdout.print("adapter: {s}\n", .{descriptor.id});
-    try stdout.print("modality: {s}\n", .{@tagName(descriptor.modality)});
-    try stdout.print("model_family: {s}\n", .{model_family});
-    try stdout.print("operation: {s}\n", .{operation});
-    try stdout.print("execution: {s}\n", .{@tagName(plan.execution)});
-    try stdout.print("supports_batching: {s}\n", .{boolText(plan.supports_batching)});
-    try stdout.print("supports_streaming: {s}\n", .{boolText(plan.supports_streaming)});
-    try stdout.print("accepted: {s}\n", .{boolText(submission.accepted)});
+    try stdout.print("adapter: {s}\n", .{prepared.descriptor.id});
+    try stdout.print("modality: {s}\n", .{@tagName(prepared.descriptor.modality)});
+    try stdout.print("model_family: {s}\n", .{prepared.request.spec.model_family});
+    try stdout.print("operation: {s}\n", .{prepared.request.spec.operation});
+    try stdout.print("execution: {s}\n", .{@tagName(prepared.plan.execution)});
+    try stdout.print("supports_batching: {s}\n", .{boolText(prepared.plan.supports_batching)});
+    try stdout.print("supports_streaming: {s}\n", .{boolText(prepared.plan.supports_streaming)});
+    try stdout.print("accepted: {s}\n", .{boolText(prepared.submission.accepted)});
 
     if (args.legacy_exec) {
-        var legacy = try managed.buildLegacyCommand(std.heap.page_allocator, .{
-            .operation = operation,
-            .input = args.input,
-            .max_tokens = args.max_tokens,
-        });
+        var legacy = try prepared.prepareLegacyCommand(.{});
         defer legacy.deinit();
 
         try stdout.print("legacy_workdir: {s}\n", .{legacy.workdir});
@@ -201,20 +181,9 @@ fn runCommand(stdout: anytype, args: RunArgs) !void {
         }
         try stdout.writeAll("\n");
 
-        var child = std.process.Child.init(legacy.argv, std.heap.page_allocator);
-        child.cwd = legacy.workdir;
-        child.stdin_behavior = .Inherit;
-        child.stdout_behavior = .Inherit;
-        child.stderr_behavior = .Inherit;
-        try child.spawn();
-        const term = try child.wait();
+        const term = try execution.executeLegacyCommand(legacy);
         try stdout.print("legacy_exit: {s}\n", .{termText(term)});
     }
-}
-
-fn defaultOperation(descriptor: kinetix.adapter.Descriptor) []const u8 {
-    if (descriptor.supported_operations.len == 0) return "infer";
-    return descriptor.supported_operations[0];
 }
 
 fn boolText(value: bool) []const u8 {

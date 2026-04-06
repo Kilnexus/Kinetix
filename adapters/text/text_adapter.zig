@@ -1,10 +1,10 @@
 const std = @import("std");
-const kinetix = @import("../../kinetix.zig");
+const kinetix = @import("../../engine/kinetix.zig");
 
 const backend = kinetix.artifacts.backend;
 const load_plan = kinetix.runtime.load_plan;
 const adapter_mod = kinetix.adapter;
-const legacy_command = kinetix.adapters.legacy_command;
+const legacy_command = @import("../legacy_command.zig");
 const registry_mod = kinetix.registry;
 const task = kinetix.core.task;
 
@@ -140,16 +140,20 @@ pub const TextAdapter = struct {
         };
     }
 
-    fn submit(ctx: *anyopaque, spec: task.TaskSpec) !adapter_mod.Submission {
+    fn submit(ctx: *anyopaque, request: task.TaskRequest) !adapter_mod.Submission {
         const self: *TextAdapter = @ptrCast(@alignCast(ctx));
         if (self.plan.weights_path == null) return error.MissingWeightArtifacts;
         if (self.plan.config_path == null) return error.MissingConfigArtifact;
         if (self.plan.tokenizer_path == null) return error.MissingTokenizerArtifact;
+        switch (request.input) {
+            .none, .text => {},
+            else => return error.InvalidInputPayload,
+        }
 
         return .{
             .adapter_id = self.descriptor.id,
             .accepted = true,
-            .execution = spec.execution,
+            .execution = request.spec.execution,
         };
     }
 };

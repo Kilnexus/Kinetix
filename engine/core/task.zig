@@ -27,6 +27,34 @@ pub const TaskSpec = struct {
     priority: u8 = 0,
 };
 
+pub const InputPayload = union(enum) {
+    none,
+    text: []const u8,
+    image_path: []const u8,
+    audio_path: []const u8,
+    video_path: []const u8,
+
+    pub fn asString(self: InputPayload) ?[]const u8 {
+        return switch (self) {
+            .none => null,
+            .text => |value| value,
+            .image_path => |value| value,
+            .audio_path => |value| value,
+            .video_path => |value| value,
+        };
+    }
+};
+
+pub const GenerationOptions = struct {
+    max_tokens: ?usize = null,
+};
+
+pub const TaskRequest = struct {
+    spec: TaskSpec,
+    input: InputPayload = .none,
+    generation: GenerationOptions = .{},
+};
+
 test "task spec defaults are stable" {
     const spec = TaskSpec{
         .modality = .text,
@@ -37,4 +65,19 @@ test "task spec defaults are stable" {
     try std.testing.expectEqual(ExecutionMode.sync, spec.execution);
     try std.testing.expect(spec.allows_batching);
     try std.testing.expectEqual(@as(u8, 0), spec.priority);
+}
+
+test "task request carries typed payload and generation options" {
+    const request = TaskRequest{
+        .spec = .{
+            .modality = .text,
+            .operation = "generate",
+            .model_family = "qwen3",
+        },
+        .input = .{ .text = "hello" },
+        .generation = .{ .max_tokens = 128 },
+    };
+
+    try std.testing.expectEqualStrings("hello", request.input.asString().?);
+    try std.testing.expectEqual(@as(?usize, 128), request.generation.max_tokens);
 }

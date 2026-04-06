@@ -1,8 +1,8 @@
 const std = @import("std");
-const kinetix = @import("../kinetix.zig");
+const kinetix = @import("../engine/kinetix.zig");
 
 const backend = kinetix.artifacts.backend;
-const legacy_command = kinetix.adapters.legacy_command;
+const legacy_command = @import("legacy_command.zig");
 const registry_mod = kinetix.registry;
 const ocr_mod = @import("ocr/ocr.zig");
 const text_mod = @import("text/text.zig");

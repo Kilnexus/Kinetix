@@ -1,11 +1,11 @@
 const std = @import("std");
-const kinetix = @import("../../kinetix.zig");
+const kinetix = @import("../../engine/kinetix.zig");
 
 const adapter_mod = kinetix.adapter;
 const graph = kinetix.artifacts.graph;
 const backend = kinetix.artifacts.backend;
 const load_plan = kinetix.runtime.load_plan;
-const legacy_command = kinetix.adapters.legacy_command;
+const legacy_command = @import("../legacy_command.zig");
 const registry_mod = kinetix.registry;
 const task = kinetix.core.task;
 
@@ -122,15 +122,19 @@ pub const VisionAdapter = struct {
         return error.UnsupportedLegacyOperation;
     }
 
-    fn submit(ctx: *anyopaque, spec: task.TaskSpec) !adapter_mod.Submission {
+    fn submit(ctx: *anyopaque, request: task.TaskRequest) !adapter_mod.Submission {
         const self: *VisionAdapter = @ptrCast(@alignCast(ctx));
         if (self.plan.graph_path == null) return error.MissingGraphArtifact;
         if (self.plan.binary_weights_path == null) return error.MissingBinaryWeightsArtifact;
+        switch (request.input) {
+            .none, .image_path => {},
+            else => return error.InvalidInputPayload,
+        }
 
         return .{
             .adapter_id = self.descriptor.id,
             .accepted = true,
-            .execution = spec.execution,
+            .execution = request.spec.execution,
         };
     }
 };

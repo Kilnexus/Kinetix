@@ -46,9 +46,17 @@ pub const Scheduler = struct {
         };
     }
 
-    pub fn submit(self: *const Scheduler, spec: task.TaskSpec) !adapter_mod.Submission {
-        const entry = self.registry.matchTask(spec) orelse return error.NoMatchingAdapter;
-        _ = try self.plan(spec);
-        return try entry.adapter.submit(spec);
+    pub fn planRequest(self: *const Scheduler, request: task.TaskRequest) !DispatchPlan {
+        return try self.plan(request.spec);
+    }
+
+    pub fn submit(self: *const Scheduler, request: task.TaskRequest) !adapter_mod.Submission {
+        const entry = self.registry.matchTask(request.spec) orelse return error.NoMatchingAdapter;
+        _ = try self.planRequest(request);
+        return try entry.adapter.submit(request);
+    }
+
+    pub fn submitSpec(self: *const Scheduler, spec: task.TaskSpec) !adapter_mod.Submission {
+        return try self.submit(.{ .spec = spec });
     }
 };

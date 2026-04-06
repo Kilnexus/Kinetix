@@ -33,7 +33,7 @@ pub const Submission = struct {
 };
 
 pub const VTable = struct {
-    submit: *const fn (ctx: *anyopaque, spec: task.TaskSpec) anyerror!Submission,
+    submit: *const fn (ctx: *anyopaque, request: task.TaskRequest) anyerror!Submission,
 };
 
 pub const Adapter = struct {
@@ -41,11 +41,12 @@ pub const Adapter = struct {
     descriptor: Descriptor,
     vtable: *const VTable,
 
-    pub fn submit(self: Adapter, spec: task.TaskSpec) !Submission {
+    pub fn submit(self: Adapter, request: task.TaskRequest) !Submission {
+        const spec = request.spec;
         if (spec.modality != self.descriptor.modality) return error.ModalityMismatch;
         if (!self.descriptor.supportsModelFamily(spec.model_family)) return error.ModelFamilyMismatch;
         if (!self.descriptor.supportsOperation(spec.operation)) return error.OperationNotSupported;
         if (spec.execution == .stream and !self.descriptor.supports_streaming) return error.StreamingNotSupported;
-        return try self.vtable.submit(self.ctx, spec);
+        return try self.vtable.submit(self.ctx, request);
     }
 };
