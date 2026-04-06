@@ -5,8 +5,8 @@ This repository is the integration root for the Kinetix unified inference framew
 ## Phase 1
 
 - Import the full git history of `Axionyx`, `SwiftOCR`, and `Zinfer` into `legacy/`.
-- Keep the original repositories untouched on disk during the migration.
 - Establish clean top-level ownership for shared runtime code.
+- Move local model and dataset assets into shared top-level homes outside the legacy history trees.
 
 ## Target Layout
 
@@ -15,6 +15,8 @@ This repository is the integration root for the Kinetix unified inference framew
 - `adapters/`: modality-specific runtimes built on top of `engine/`
 - `apps/`: CLI and service entrypoints
 - `docs/`: migration and architecture notes
+- `models/`: local model artifacts organized by modality (`text/`, `ocr/`, `vision/`)
+- `datasets/`: local datasets and evaluation assets organized by modality
 
 ## Extraction Order
 

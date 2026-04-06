@@ -246,11 +246,11 @@ pub fn printUsage(writer: anytype) !void {
         \\  kinetix --help
         \\
         \\Examples:
-        \\  kinetix run --model-dir .\\legacy\\axionyx\\artifacts --operation detect --legacy-exec --input data\\archive\\images\\000_0001.png
-        \\  kinetix run --model-dir .\\models\\Qwen3-0.6B --execution stream --input "Hello from Kinetix"
-        \\  kinetix run --model-dir .\\ocr-demo --operation infer-ocr --legacy-exec --input input.ppm
-        \\  kinetix batch-plan --model-dir .\\models\\Qwen3-0.6B --requests-file requests.json
-        \\  kinetix batch-run --model-dir .\\models\\Qwen3-0.6B --requests-file requests.json --native-exec
+        \\  kinetix run --model-dir .\\legacy\\axionyx\\artifacts --operation detect --legacy-exec --input .\\datasets\\vision\\archive\\images\\000_0001.png
+        \\  kinetix run --model-dir .\\models\\text\\Qwen3-0.6B --execution stream --input "Hello from Kinetix"
+        \\  kinetix run --model-dir .\\models\\ocr\\PP-OCRv5_server_det_infer --operation infer-ocr --legacy-exec --input input.ppm
+        \\  kinetix batch-plan --model-dir .\\models\\text\\Qwen3-0.6B --requests-file requests.json
+        \\  kinetix batch-run --model-dir .\\models\\text\\Qwen3-0.6B --requests-file requests.json --native-exec
         \\
     );
 }
