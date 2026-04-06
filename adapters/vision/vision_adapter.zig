@@ -5,6 +5,7 @@ const adapter_mod = kinetix.adapter;
 const graph = kinetix.artifacts.graph;
 const backend = kinetix.artifacts.backend;
 const load_plan = kinetix.runtime.load_plan;
+const legacy_command = kinetix.adapters.legacy_command;
 const registry_mod = kinetix.registry;
 const task = kinetix.core.task;
 
@@ -87,6 +88,40 @@ pub const VisionAdapter = struct {
         try registry.register(self.asAdapter());
     }
 
+    pub fn buildLegacyCommand(self: *const VisionAdapter, allocator: std.mem.Allocator, options: legacy_command.BuildOptions) !legacy_command.LegacyCommand {
+        const project_dir = try legacy_command.legacyProjectDirAlloc(allocator, "legacy/axionyx");
+        defer allocator.free(project_dir);
+
+        const input = options.input orelse defaultImagePath(self.catalog.model_dir);
+        if (std.mem.eql(u8, options.operation, "detect")) {
+            return try legacy_command.init(allocator, project_dir, &.{
+                "zig", "build", "run", "--",
+                self.plan.graph_path.?,
+                self.plan.binary_weights_path.?,
+                input,
+            });
+        }
+        if (std.mem.eql(u8, options.operation, "profile")) {
+            return try legacy_command.init(allocator, project_dir, &.{
+                "zig", "build", "run", "--",
+                self.plan.graph_path.?,
+                self.plan.binary_weights_path.?,
+                "profile",
+                input,
+            });
+        }
+        if (std.mem.eql(u8, options.operation, "benchmark")) {
+            return try legacy_command.init(allocator, project_dir, &.{
+                "zig", "build", "run", "--",
+                self.plan.graph_path.?,
+                self.plan.binary_weights_path.?,
+                "bench",
+                input,
+            });
+        }
+        return error.UnsupportedLegacyOperation;
+    }
+
     fn submit(ctx: *anyopaque, spec: task.TaskSpec) !adapter_mod.Submission {
         const self: *VisionAdapter = @ptrCast(@alignCast(ctx));
         if (self.plan.graph_path == null) return error.MissingGraphArtifact;
@@ -119,4 +154,9 @@ fn detectModelFamily(allocator: std.mem.Allocator, graph_path: []const u8) !Mode
         if (std.mem.eql(u8, node.kind, "Detect")) return .yolo;
     }
     return .unknown;
+}
+
+fn defaultImagePath(model_dir: []const u8) []const u8 {
+    _ = model_dir;
+    return "data/archive/images/000_0001.png";
 }

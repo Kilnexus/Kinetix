@@ -2,6 +2,7 @@ const std = @import("std");
 const kinetix = @import("../kinetix.zig");
 
 const backend = kinetix.artifacts.backend;
+const legacy_command = kinetix.adapters.legacy_command;
 const registry_mod = kinetix.registry;
 const ocr_mod = @import("ocr/ocr.zig");
 const text_mod = @import("text/text.zig");
@@ -41,6 +42,14 @@ pub const ManagedAdapter = union(enum) {
             .text => |adapter| adapter.descriptor,
             .vision => |adapter| adapter.descriptor,
             .ocr => |adapter| adapter.descriptor,
+        };
+    }
+
+    pub fn buildLegacyCommand(self: *const ManagedAdapter, allocator: std.mem.Allocator, options: legacy_command.BuildOptions) !legacy_command.LegacyCommand {
+        return switch (self.*) {
+            .text => |adapter| try adapter.buildLegacyCommand(allocator, options),
+            .vision => |adapter| try adapter.buildLegacyCommand(allocator, options),
+            .ocr => |adapter| try adapter.buildLegacyCommand(allocator, options),
         };
     }
 };

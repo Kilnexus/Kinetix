@@ -4,6 +4,7 @@ const kinetix = @import("../../kinetix.zig");
 const adapter_mod = kinetix.adapter;
 const backend = kinetix.artifacts.backend;
 const load_plan = kinetix.runtime.load_plan;
+const legacy_command = kinetix.adapters.legacy_command;
 const registry_mod = kinetix.registry;
 const task = kinetix.core.task;
 
@@ -61,6 +62,17 @@ pub const OCRAdapter = struct {
 
     pub fn registerInto(self: *OCRAdapter, registry: *registry_mod.Registry) !void {
         try registry.register(self.asAdapter());
+    }
+
+    pub fn buildLegacyCommand(self: *const OCRAdapter, allocator: std.mem.Allocator, options: legacy_command.BuildOptions) !legacy_command.LegacyCommand {
+        const project_dir = try legacy_command.legacyProjectDirAlloc(allocator, "legacy/swiftocr");
+        defer allocator.free(project_dir);
+
+        return try legacy_command.init(allocator, project_dir, &.{
+            "zig", "build", "run", "--", "infer",
+            "--model", self.plan.ocr_model_path.?,
+            "--image", options.input orelse "input.ppm",
+        });
     }
 
     fn submit(ctx: *anyopaque, spec: task.TaskSpec) !adapter_mod.Submission {
