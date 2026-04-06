@@ -43,12 +43,14 @@ pub const Registry = struct {
         if (spec.adapter_id) |adapter_id| {
             const entry = self.findById(adapter_id) orelse return null;
             if (entry.adapter.descriptor.modality != spec.modality) return null;
+            if (!entry.adapter.descriptor.supportsModelFamily(spec.model_family)) return null;
             if (!entry.adapter.descriptor.supportsOperation(spec.operation)) return null;
             return entry;
         }
 
         for (self.entries.items) |*entry| {
             if (entry.adapter.descriptor.modality != spec.modality) continue;
+            if (!entry.adapter.descriptor.supportsModelFamily(spec.model_family)) continue;
             if (!entry.adapter.descriptor.supportsOperation(spec.operation)) continue;
             return entry;
         }

@@ -5,6 +5,7 @@ pub const Descriptor = struct {
     id: []const u8,
     modality: task.Modality,
     version: []const u8 = "0.1.0",
+    bound_model_family: ?[]const u8 = null,
     supports_batching: bool = false,
     supports_streaming: bool = false,
     supported_operations: []const []const u8 = &.{},
@@ -15,6 +16,13 @@ pub const Descriptor = struct {
             if (std.mem.eql(u8, supported, operation)) return true;
         }
         return false;
+    }
+
+    pub fn supportsModelFamily(self: Descriptor, model_family: []const u8) bool {
+        if (self.bound_model_family) |bound| {
+            return std.mem.eql(u8, bound, model_family);
+        }
+        return true;
     }
 };
 
@@ -35,6 +43,7 @@ pub const Adapter = struct {
 
     pub fn submit(self: Adapter, spec: task.TaskSpec) !Submission {
         if (spec.modality != self.descriptor.modality) return error.ModalityMismatch;
+        if (!self.descriptor.supportsModelFamily(spec.model_family)) return error.ModelFamilyMismatch;
         if (!self.descriptor.supportsOperation(spec.operation)) return error.OperationNotSupported;
         if (spec.execution == .stream and !self.descriptor.supports_streaming) return error.StreamingNotSupported;
         return try self.vtable.submit(self.ctx, spec);

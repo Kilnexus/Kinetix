@@ -7,6 +7,7 @@ const memory = @import("../core/memory/memory.zig");
 const registry_mod = @import("../registry/registry.zig");
 const load_plan = @import("../runtime/load_plan.zig");
 const scheduler_mod = @import("../scheduler/scheduler.zig");
+const text_adapter_mod = @import("root").adapters.text;
 
 const MockState = struct {
     adapter_id: []const u8,
@@ -37,6 +38,7 @@ test "registry resolves task to matching modality adapter" {
         .descriptor = .{
             .id = "text.qwen3",
             .modality = .text,
+            .bound_model_family = "qwen3",
             .supports_batching = true,
             .supports_streaming = true,
             .supported_operations = &.{ "generate", "embed" },
@@ -75,6 +77,7 @@ test "scheduler plans and submits through explicit adapter id" {
         .descriptor = .{
             .id = "text.qwen3",
             .modality = .text,
+            .bound_model_family = "qwen3",
             .supports_batching = true,
             .supports_streaming = true,
             .supported_operations = &.{ "generate", "embed" },
@@ -119,6 +122,73 @@ test "registry rejects duplicate adapter ids" {
 
     try registry.register(adapter);
     try std.testing.expectError(error.AdapterAlreadyRegistered, registry.register(adapter));
+}
+
+test "text adapter resolves qwen3 model and integrates with scheduler" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "config.json", "{\"model_type\":\"qwen3\"}");
+    try writeTmpFile(tmp.dir, "tokenizer.json", "{}");
+    try writeTmpFile(tmp.dir, "model.q8.zinfer", "q8");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var text_adapter = try text_adapter_mod.TextAdapter.init(std.testing.allocator, root_path, .auto);
+    defer text_adapter.deinit();
+
+    try std.testing.expectEqualStrings("qwen3", text_adapter.descriptor.bound_model_family.?);
+    try std.testing.expect(text_adapter.descriptor.supports_streaming);
+    try std.testing.expect(text_adapter.descriptor.supportsOperation("generate"));
+
+    var registry = registry_mod.Registry.init(std.testing.allocator);
+    defer registry.deinit();
+    try text_adapter.registerInto(&registry);
+
+    const scheduler = scheduler_mod.Scheduler.init(&registry);
+    const submission = try scheduler.submit(.{
+        .modality = .text,
+        .operation = "generate",
+        .model_family = "qwen3",
+        .adapter_id = text_adapter.descriptor.id,
+        .execution = .stream,
+    });
+
+    try std.testing.expect(submission.accepted);
+    try std.testing.expectEqual(task.ExecutionMode.stream, submission.execution);
+}
+
+test "text adapter restricts bert model to bert-compatible operations" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "config.json", "{\"model_type\":\"bert\"}");
+    try writeTmpFile(tmp.dir, "tokenizer.json", "{}");
+    try writeTmpFile(tmp.dir, "model.safetensors", "bf16");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var text_adapter = try text_adapter_mod.TextAdapter.init(std.testing.allocator, root_path, .auto);
+    defer text_adapter.deinit();
+
+    try std.testing.expectEqualStrings("bert", text_adapter.descriptor.bound_model_family.?);
+    try std.testing.expect(!text_adapter.descriptor.supports_streaming);
+    try std.testing.expect(text_adapter.descriptor.supportsOperation("fill-mask"));
+    try std.testing.expect(!text_adapter.descriptor.supportsOperation("generate"));
+
+    var registry = registry_mod.Registry.init(std.testing.allocator);
+    defer registry.deinit();
+    try text_adapter.registerInto(&registry);
+
+    const scheduler = scheduler_mod.Scheduler.init(&registry);
+    try std.testing.expectError(error.NoMatchingAdapter, scheduler.submit(.{
+        .modality = .text,
+        .operation = "generate",
+        .model_family = "bert",
+        .execution = .sync,
+    }));
 }
 
 test "runtime pool acquires and releases owned items" {
