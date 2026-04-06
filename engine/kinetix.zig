@@ -1,5 +1,6 @@
 pub const core = @import("core/core.zig");
 pub const artifacts = @import("artifacts/artifacts.zig");
+pub const runtime = @import("runtime/runtime.zig");
 
 pub const adapter = @import("adapter/adapter.zig");
 pub const registry = @import("registry/registry.zig");

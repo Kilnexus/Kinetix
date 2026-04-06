@@ -1,9 +1,11 @@
 const std = @import("std");
 const task = @import("../core/task.zig");
 const adapter_mod = @import("../adapter/adapter.zig");
+const backend = @import("../artifacts/backend/backend.zig");
 const graph = @import("../artifacts/graph/graph.zig");
 const memory = @import("../core/memory/memory.zig");
 const registry_mod = @import("../registry/registry.zig");
+const load_plan = @import("../runtime/load_plan.zig");
 const scheduler_mod = @import("../scheduler/scheduler.zig");
 
 const MockState = struct {
@@ -251,4 +253,106 @@ test "generic plan graph preserves compatibility with Axionyx execution path map
     try std.testing.expect(parsed.execution_components[0] != null);
     try std.testing.expectEqualStrings("model.model.0", parsed.execution_components[0].?.path);
     try std.testing.expectEqualStrings("Conv", parsed.execution_components[0].?.kind);
+}
+
+test "model catalog discovers common artifacts and prefers fastest quantized weights" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "config.json", "{}");
+    try writeTmpFile(tmp.dir, "tokenizer.json", "{}");
+    try writeTmpFile(tmp.dir, "model.safetensors", "bf16");
+    try writeTmpFile(tmp.dir, "model.q6.zinfer", "q6");
+    try writeTmpFile(tmp.dir, "model.q8.zinfer", "q8");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var catalog = try backend.ModelCatalog.discover(std.testing.allocator, root_path);
+    defer catalog.deinit();
+
+    try std.testing.expect(catalog.has(.config));
+    try std.testing.expect(catalog.has(.tokenizer_json));
+    try std.testing.expect(catalog.has(.safetensors));
+    try std.testing.expect(catalog.has(.q6_weights));
+    try std.testing.expect(catalog.has(.q8_weights));
+    try std.testing.expectEqual(backend.WeightScheme.q8, catalog.resolveAutoScheme());
+
+    const selection = try catalog.resolveWeights(.auto);
+    try std.testing.expectEqual(backend.WeightScheme.q8, selection.scheme);
+    try std.testing.expect(std.mem.endsWith(u8, selection.path, "model.q8.zinfer"));
+}
+
+test "model catalog can discover vision graph and binary weight artifacts" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "graph.json", "{}");
+    try writeTmpFile(tmp.dir, "weights.bin", "weights");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var catalog = try backend.ModelCatalog.discover(std.testing.allocator, root_path);
+    defer catalog.deinit();
+
+    try std.testing.expect(catalog.has(.graph_json));
+    try std.testing.expect(catalog.has(.weights_bin));
+    try std.testing.expectEqual(@as(usize, 2), catalog.artifactCount());
+    try std.testing.expectError(error.WeightArtifactNotFound, catalog.resolveWeights(.bf16));
+}
+
+test "load plan resolves text model artifacts from shared catalog" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "config.json", "{}");
+    try writeTmpFile(tmp.dir, "tokenizer.json", "{}");
+    try writeTmpFile(tmp.dir, "model.safetensors", "bf16");
+    try writeTmpFile(tmp.dir, "model.q4.zinfer", "q4");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var catalog = try backend.ModelCatalog.discover(std.testing.allocator, root_path);
+    defer catalog.deinit();
+
+    const plan = try load_plan.resolve(&catalog, .{
+        .model_dir = root_path,
+        .preferred_weights = .auto,
+    });
+
+    try std.testing.expect(plan.config_path != null);
+    try std.testing.expect(plan.tokenizer_path != null);
+    try std.testing.expectEqual(backend.WeightScheme.q4, plan.weight_scheme.?);
+    try std.testing.expect(std.mem.endsWith(u8, plan.weights_path.?, "model.q4.zinfer"));
+}
+
+test "load plan resolves vision graph and binary weights without tensor backend" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "graph.json", "{}");
+    try writeTmpFile(tmp.dir, "weights.bin", "vision");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var catalog = try backend.ModelCatalog.discover(std.testing.allocator, root_path);
+    defer catalog.deinit();
+
+    const plan = try load_plan.resolve(&catalog, .{
+        .model_dir = root_path,
+    });
+
+    try std.testing.expect(plan.graph_path != null);
+    try std.testing.expect(plan.binary_weights_path != null);
+    try std.testing.expect(plan.weight_scheme == null);
+    try std.testing.expect(plan.weights_path == null);
+}
+
+fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {
+    var file = try dir.createFile(relative_path, .{});
+    defer file.close();
+    try file.writeAll(contents);
 }
