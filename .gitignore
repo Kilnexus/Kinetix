@@ -1,0 +1,9 @@
+/Axionyx/
+/SwiftOCR/
+/Zinfer/
+
+/.zig-cache/
+/zig-out/
+
+*.log
+*.tmp
