@@ -1,18 +1,17 @@
 const std = @import("std");
-const parser = @import("graph/parser.zig");
-const types = @import("graph/types.zig");
+const shared = @import("engine_vision_graph");
 
-pub const AttrEntry = types.AttrEntry;
-pub const AttrValue = types.AttrValue;
-pub const ModuleNode = types.ModuleNode;
-pub const TensorMeta = types.TensorMeta;
-pub const ExecutionNode = types.ExecutionNode;
-pub const Graph = types.Graph;
-pub const Summary = types.Summary;
+pub const AttrEntry = shared.AttrEntry;
+pub const AttrValue = shared.AttrValue;
+pub const ModuleNode = shared.ModuleNode;
+pub const TensorMeta = shared.TensorMeta;
+pub const ExecutionNode = shared.ExecutionNode;
+pub const Graph = shared.Graph;
+pub const Summary = shared.Summary;
 
-pub const load = parser.load;
-pub const loadSummary = parser.loadSummary;
-pub const parseGraph = parser.parseGraph;
+pub const load = shared.load;
+pub const loadSummary = shared.loadSummary;
+pub const parseGraph = shared.parseGraph;
 
 test "parseGraph exposes module tree and attrs" {
     const testing = std.testing;

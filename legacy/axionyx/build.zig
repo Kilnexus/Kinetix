@@ -8,6 +8,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const engine_vision_graph_mod = b.createModule(.{
+        .root_source_file = b.path("../../engine/artifacts/vision_graph.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    graph_mod.addImport("engine_vision_graph", engine_vision_graph_mod);
     const tensor_mod = b.createModule(.{
         .root_source_file = b.path("src/nn/tensor.zig"),
         .target = target,
