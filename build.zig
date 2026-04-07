@@ -41,6 +41,8 @@ const LegacyImports = struct {
     engine_vision_inspect: *std.Build.Module,
     engine_vision_base: *std.Build.Module,
     engine_vision_modules: *std.Build.Module,
+    engine_vision_reuse_allocator: *std.Build.Module,
+    engine_vision_engine: *std.Build.Module,
     tensor: *std.Build.Module,
     ops: *std.Build.Module,
     weights: *std.Build.Module,
@@ -141,6 +143,23 @@ fn addLegacyImports(
     engine_vision_modules.addImport("tensor", tensor);
     engine_vision_modules.addImport("engine_global_thread_pool", global_thread_pool);
     engine_vision_modules.addImport("engine_vision_base", engine_vision_base);
+    const engine_vision_reuse_allocator = b.createModule(.{
+        .root_source_file = b.path("engine/runtime/vision/reuse_allocator.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const engine_vision_engine = b.createModule(.{
+        .root_source_file = b.path("engine/runtime/vision/engine.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    engine_vision_engine.addImport("graph", graph);
+    engine_vision_engine.addImport("weights", weights);
+    engine_vision_engine.addImport("ops", ops);
+    engine_vision_engine.addImport("tensor", tensor);
+    engine_vision_engine.addImport("engine_vision_base", engine_vision_base);
+    engine_vision_engine.addImport("engine_vision_modules", engine_vision_modules);
+    engine_vision_engine.addImport("engine_vision_reuse_allocator", engine_vision_reuse_allocator);
 
     const runtime = b.createModule(.{
         .root_source_file = b.path("legacy/axionyx/src/runtime/runtime.zig"),
@@ -155,6 +174,7 @@ fn addLegacyImports(
     runtime.addImport("engine_vision_inspect", engine_vision_inspect);
     runtime.addImport("engine_vision_base", engine_vision_base);
     runtime.addImport("engine_vision_modules", engine_vision_modules);
+    runtime.addImport("engine_vision_engine", engine_vision_engine);
 
     const legacy_vision = b.createModule(.{
         .root_source_file = b.path("engine/runtime/vision/preprocess.zig"),
@@ -171,6 +191,8 @@ fn addLegacyImports(
         .engine_vision_inspect = engine_vision_inspect,
         .engine_vision_base = engine_vision_base,
         .engine_vision_modules = engine_vision_modules,
+        .engine_vision_reuse_allocator = engine_vision_reuse_allocator,
+        .engine_vision_engine = engine_vision_engine,
         .tensor = tensor,
         .ops = ops,
         .weights = weights,
@@ -187,6 +209,8 @@ fn addImportsToRoot(root: *std.Build.Module, imports: LegacyImports) void {
     root.addImport("engine_vision_inspect", imports.engine_vision_inspect);
     root.addImport("engine_vision_base", imports.engine_vision_base);
     root.addImport("engine_vision_modules", imports.engine_vision_modules);
+    root.addImport("engine_vision_reuse_allocator", imports.engine_vision_reuse_allocator);
+    root.addImport("engine_vision_engine", imports.engine_vision_engine);
     root.addImport("tensor", imports.tensor);
     root.addImport("ops", imports.ops);
     root.addImport("weights", imports.weights);

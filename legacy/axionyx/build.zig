@@ -63,6 +63,23 @@ pub fn build(b: *std.Build) void {
     engine_vision_modules_mod.addImport("tensor", tensor_mod);
     engine_vision_modules_mod.addImport("engine_global_thread_pool", global_thread_pool_mod);
     engine_vision_modules_mod.addImport("engine_vision_base", engine_vision_base_mod);
+    const engine_vision_reuse_allocator_mod = b.createModule(.{
+        .root_source_file = b.path("../../engine/runtime/vision/reuse_allocator.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const engine_vision_engine_mod = b.createModule(.{
+        .root_source_file = b.path("../../engine/runtime/vision/engine.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    engine_vision_engine_mod.addImport("graph", graph_mod);
+    engine_vision_engine_mod.addImport("weights", weights_mod);
+    engine_vision_engine_mod.addImport("ops", ops_mod);
+    engine_vision_engine_mod.addImport("tensor", tensor_mod);
+    engine_vision_engine_mod.addImport("engine_vision_base", engine_vision_base_mod);
+    engine_vision_engine_mod.addImport("engine_vision_modules", engine_vision_modules_mod);
+    engine_vision_engine_mod.addImport("engine_vision_reuse_allocator", engine_vision_reuse_allocator_mod);
     const pixio_dep = b.dependency("Pixio", .{
         .target = target,
         .optimize = optimize,
@@ -82,6 +99,7 @@ pub fn build(b: *std.Build) void {
     runtime_mod.addImport("engine_vision_inspect", engine_vision_inspect_mod);
     runtime_mod.addImport("engine_vision_base", engine_vision_base_mod);
     runtime_mod.addImport("engine_vision_modules", engine_vision_modules_mod);
+    runtime_mod.addImport("engine_vision_engine", engine_vision_engine_mod);
     const vision_mod = b.createModule(.{
         .root_source_file = b.path("../../engine/runtime/vision/preprocess.zig"),
         .target = target,
@@ -107,6 +125,8 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("engine_vision_inspect", engine_vision_inspect_mod);
     exe.root_module.addImport("engine_vision_base", engine_vision_base_mod);
     exe.root_module.addImport("engine_vision_modules", engine_vision_modules_mod);
+    exe.root_module.addImport("engine_vision_reuse_allocator", engine_vision_reuse_allocator_mod);
+    exe.root_module.addImport("engine_vision_engine", engine_vision_engine_mod);
 
     b.installArtifact(exe);
 
@@ -134,6 +154,8 @@ pub fn build(b: *std.Build) void {
     unit_tests.root_module.addImport("engine_vision_inspect", engine_vision_inspect_mod);
     unit_tests.root_module.addImport("engine_vision_base", engine_vision_base_mod);
     unit_tests.root_module.addImport("engine_vision_modules", engine_vision_modules_mod);
+    unit_tests.root_module.addImport("engine_vision_reuse_allocator", engine_vision_reuse_allocator_mod);
+    unit_tests.root_module.addImport("engine_vision_engine", engine_vision_engine_mod);
 
     const run_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run Zig unit tests");
