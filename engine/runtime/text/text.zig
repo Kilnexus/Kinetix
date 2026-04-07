@@ -19,6 +19,7 @@ pub const streaming = @import("streaming.zig");
 pub const generator_runtime = @import("generator_runtime.zig");
 pub const parallel_rows = @import("../../core/threading/parallel_rows.zig");
 pub const families = @import("families/families.zig");
+pub const family_registry = families.registry;
 pub const qwen3 = families.qwen3;
 pub const native_dispatch = families.qwen3.native_dispatch;
 pub const qwen_native = families.qwen3.native_runtime;

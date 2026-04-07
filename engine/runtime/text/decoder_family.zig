@@ -1,10 +1,8 @@
 const std = @import("std");
 const chat_types = @import("chat_types.zig");
 const decoder_types = @import("decoder_types.zig");
-const generic_block = @import("block_layout.zig");
 const logits_util = @import("logits.zig");
-const weights_layout = @import("weights_layout.zig");
-const bert_family = @import("families/bert/family.zig");
+const family_registry = @import("families/registry.zig");
 const qwen3_family = @import("families/qwen3/family.zig");
 
 pub const Architecture = decoder_types.Architecture;
@@ -13,8 +11,8 @@ pub const Role = chat_types.Role;
 pub const ToolCall = chat_types.ToolCall;
 pub const Message = chat_types.Message;
 pub const TopLogit = logits_util.TopLogit;
-pub const CommonWeights = weights_layout.CommonWeights;
-pub const LayerTensorKind = weights_layout.LayerTensorKind;
+pub const CommonWeights = family_registry.CommonWeights;
+pub const LayerTensorKind = family_registry.LayerTensorKind;
 pub const DecoderConfig = decoder_types.DecoderConfig;
 pub const ParsedConfig = decoder_types.ParsedConfig;
 
@@ -61,17 +59,11 @@ pub const argMaxLogit = logits_util.argMaxLogit;
 pub const topKLogitsAlloc = logits_util.topKLogitsAlloc;
 
 pub fn detectArchitecture(model_type: []const u8) ?Architecture {
-    if (std.mem.eql(u8, model_type, qwen3_family.model_type)) return .qwen3;
-    if (std.mem.eql(u8, model_type, bert_family.model_type)) return .bert;
-    return null;
+    return family_registry.detectArchitecture(model_type);
 }
 
 pub fn loadConfigFromFile(backing_allocator: std.mem.Allocator, path: []const u8) !ParsedConfig {
-    const architecture = try detectArchitectureFromConfigFile(backing_allocator, path);
-    return switch (architecture) {
-        .qwen3 => try qwen3_family.loadParsedConfig(backing_allocator, path),
-        .bert => try bert_family.loadParsedConfig(backing_allocator, path),
-    };
+    return try family_registry.loadParsedConfig(backing_allocator, path);
 }
 
 pub fn loadTokenizerFromModelDir(
@@ -83,10 +75,7 @@ pub fn loadTokenizerFromModelDir(
 }
 
 pub fn eosTokenIds(architecture: Architecture) []const u32 {
-    return switch (architecture) {
-        .qwen3 => qwen3_family.eos_token_ids,
-        .bert => &.{},
-    };
+    return family_registry.eosTokenIds(architecture);
 }
 
 pub fn isEosToken(architecture: Architecture, token_id: usize) bool {
@@ -97,10 +86,7 @@ pub fn isEosToken(architecture: Architecture, token_id: usize) bool {
 }
 
 pub fn defaultStopSequences(architecture: Architecture) []const []const u8 {
-    return switch (architecture) {
-        .qwen3 => qwen3_family.default_stop_sequences,
-        .bert => &.{},
-    };
+    return family_registry.defaultStopSequences(architecture);
 }
 
 pub fn effectiveStopSequencesAlloc(
@@ -136,21 +122,11 @@ pub fn effectiveStopSequencesAlloc(
 }
 
 pub fn commonWeights(architecture: Architecture) CommonWeights {
-    return switch (architecture) {
-        .qwen3 => qwen3_family.common_weights,
-        .bert => .{
-            .embed_tokens_weight = "",
-            .final_norm_weight = "",
-            .lm_head_weight = "",
-        },
-    };
+    return family_registry.commonWeights(architecture);
 }
 
-pub fn layerLayout(architecture: Architecture) generic_block.LayerLayout {
-    return switch (architecture) {
-        .qwen3 => qwen3_family.layer_layout,
-        .bert => .{},
-    };
+pub fn layerLayout(architecture: Architecture) @TypeOf(family_registry.layerLayout(.qwen3)) {
+    return family_registry.layerLayout(architecture);
 }
 
 pub fn layerTensorNameAlloc(
@@ -159,10 +135,7 @@ pub fn layerTensorNameAlloc(
     layer_index: usize,
     kind: LayerTensorKind,
 ) ![]u8 {
-    return switch (architecture) {
-        .qwen3 => try qwen3_family.layerTensorNameAlloc(allocator, layer_index, kind),
-        .bert => error.UnsupportedArchitectureForDecoderRuntime,
-    };
+    return try family_registry.layerTensorNameAlloc(allocator, architecture, layer_index, kind);
 }
 
 pub fn renderMessagesPromptAlloc(
@@ -171,10 +144,7 @@ pub fn renderMessagesPromptAlloc(
     messages: []const Message,
     mode: ThinkingMode,
 ) ![]u8 {
-    return switch (architecture) {
-        .qwen3 => try qwen3_family.renderMessagesPromptAlloc(allocator, messages, mode),
-        .bert => error.UnsupportedArchitectureForGeneration,
-    };
+    return try family_registry.renderMessagesPromptAlloc(allocator, architecture, messages, mode);
 }
 
 pub fn renderSingleUserPromptAlloc(
@@ -183,34 +153,22 @@ pub fn renderSingleUserPromptAlloc(
     user_text: []const u8,
     mode: ThinkingMode,
 ) ![]u8 {
-    return switch (architecture) {
-        .qwen3 => try qwen3_family.renderSingleUserPromptAlloc(allocator, user_text, mode),
-        .bert => error.UnsupportedArchitectureForGeneration,
-    };
+    return try family_registry.renderSingleUserPromptAlloc(allocator, architecture, user_text, mode);
 }
 
 pub fn assistantHistoryContent(
     architecture: Architecture,
     content: []const u8,
 ) []const u8 {
-    return switch (architecture) {
-        .qwen3 => qwen3_family.assistantHistoryContent(content),
-        .bert => content,
-    };
+    return family_registry.assistantHistoryContent(architecture, content);
 }
 
 pub fn inspectSampleTensorNames(architecture: Architecture) []const []const u8 {
-    return switch (architecture) {
-        .qwen3 => &qwen3_family.inspect_sample_tensors,
-        .bert => &bert_family.inspect_sample_tensors,
-    };
+    return family_registry.inspectSampleTensorNames(architecture);
 }
 
 pub fn supportsGeneration(architecture: Architecture) bool {
-    return switch (architecture) {
-        .qwen3 => qwen3_family.supportsGeneration(),
-        .bert => bert_family.supportsGeneration(),
-    };
+    return family_registry.supportsGeneration(architecture);
 }
 
 fn containsStopSequence(haystack: []const []const u8, needle: []const u8) bool {
@@ -218,35 +176,6 @@ fn containsStopSequence(haystack: []const []const u8, needle: []const u8) bool {
         if (std.mem.eql(u8, existing, needle)) return true;
     }
     return false;
-}
-
-fn detectArchitectureFromConfigFile(
-    backing_allocator: std.mem.Allocator,
-    path: []const u8,
-) !Architecture {
-    var arena = std.heap.ArenaAllocator.init(backing_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    const bytes = try readFileAllocAtPath(allocator, path, 1024 * 1024);
-    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, bytes, .{});
-    const model_type_value = parsed.value.object.get("model_type") orelse return error.MissingModelType;
-    if (model_type_value != .string) return error.InvalidModelType;
-
-    return detectArchitecture(model_type_value.string) orelse error.UnsupportedModelType;
-}
-
-fn readFileAllocAtPath(
-    allocator: std.mem.Allocator,
-    path: []const u8,
-    max_bytes: usize,
-) ![]u8 {
-    if (std.fs.path.isAbsolute(path)) {
-        const file = try std.fs.openFileAbsolute(path, .{});
-        defer file.close();
-        return file.readToEndAlloc(allocator, max_bytes);
-    }
-    return std.fs.cwd().readFileAlloc(allocator, path, max_bytes);
 }
 
 test "family detects qwen3 model type" {
