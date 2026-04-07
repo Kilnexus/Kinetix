@@ -1,7 +1,7 @@
 const std = @import("std");
-const bfloat16 = @import("../../../tensor/formats/bfloat16.zig");
+const bfloat16 = @import("../../../../legacy/zinfer/src/tensor/formats/bfloat16.zig");
 const quantize = @import("quantize.zig");
-const types = @import("../../../../../../engine/runtime/text/kv_cache_types.zig");
+const types = @import("../kv_cache_types.zig");
 
 pub const LayerKVCache = struct {
     allocator: std.mem.Allocator,

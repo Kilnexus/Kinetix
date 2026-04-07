@@ -34,11 +34,11 @@ test {
     _ = @import("../../../../engine/runtime/text/weights_layout.zig");
     _ = @import("../../../../engine/runtime/text/block_layout.zig");
     _ = @import("../../../../engine/runtime/text/gqa_attention.zig");
+    _ = @import("../../../../engine/runtime/text/kv_cache/quantize.zig");
+    _ = @import("../../../../engine/runtime/text/kv_cache/cache.zig");
     _ = @import("model/runtime/optimized_decoder/runtime.zig");
     _ = @import("model/runtime/optimized_decoder/batch.zig");
     _ = @import("model/runtime/optimized_decoder/workspace.zig");
-    _ = @import("model/runtime/optimized_kv_cache/cache.zig");
-    _ = @import("model/runtime/optimized_kv_cache/quantize.zig");
     _ = @import("tensor/backends/backend.zig");
     _ = @import("../../../../engine/runtime/text/bpe.zig");
     _ = @import("tensor/formats/quantized.zig");
