@@ -34,7 +34,7 @@ pub fn generateSingleUserText(
         options.thread_count,
     );
     defer runtime.deinit();
-    const architecture = decoder_family.architectureFromLegacy(runtime.model.cfg.architecture);
+    const architecture = runtime.model.cfg.architecture;
 
     const prompt = try text_prompts.buildSingleUserPromptAlloc(
         allocator,
@@ -95,7 +95,7 @@ pub fn executeQwenBatch(
         0,
     );
     defer runtime.deinit();
-    const architecture = decoder_family.architectureFromLegacy(runtime.model.cfg.architecture);
+    const architecture = runtime.model.cfg.architecture;
 
     const resolved_kv_cache_scheme = kv_cache.resolveScheme(.auto, runtime.model.backendName());
 

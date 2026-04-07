@@ -1,6 +1,6 @@
 const std = @import("std");
 const cpu = @import("../../../kernel/core/cpu.zig");
-const decoder_family = @import("../decoder_family.zig");
+const decoder_family = @import("../../../../../../engine/runtime/text/decoder_family.zig");
 const generic_block = @import("../../layers/rmsnorm_gqa_swiglu_block.zig");
 const kv_cache_cache = @import("../optimized_kv_cache/cache.zig");
 const layer_mod = @import("layer.zig");

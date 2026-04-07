@@ -14,7 +14,6 @@ test {
     _ = @import("kernel/core/cpu.zig");
     _ = @import("kernel/attention/attention.zig");
     _ = @import("../../../../engine/runtime/text/chat_types.zig");
-    _ = @import("model/runtime/decoder_registry.zig");
     _ = @import("model/layers/logits.zig");
     _ = @import("model/layers/gqa_attention.zig");
     _ = @import("model/layers/rmsnorm_gqa_swiglu_block.zig");
@@ -23,7 +22,6 @@ test {
     _ = @import("model/families/qwen3/family.zig");
     _ = @import("model/families/qwen3/generation_policy.zig");
     _ = @import("../../../../engine/runtime/text/decoder_types.zig");
-    _ = @import("model/runtime/decoder_family.zig");
     _ = @import("model/runtime/optimized_decoder/runtime.zig");
     _ = @import("model/runtime/optimized_decoder/batch.zig");
     _ = @import("model/runtime/optimized_decoder/workspace.zig");

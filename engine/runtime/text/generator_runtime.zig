@@ -69,7 +69,7 @@ pub const GeneratorRuntime = struct {
         }
 
         const cfg = self.model.cfg;
-        const architecture = decoder_family.architectureFromLegacy(cfg.architecture);
+        const architecture = cfg.architecture;
         const resolved_kv_cache_scheme = kv_cache.resolveScheme(options.kv_cache_scheme, self.model.backendName());
         var cache = try kv_cache.ModelCache.initWithLayout(
             self.allocator,
