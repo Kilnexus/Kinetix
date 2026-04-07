@@ -57,15 +57,6 @@ pub const Tokenizer = union(Architecture) {
     }
 };
 
-const qwen3_inspect_sample_tensors = [_][]const u8{
-    "model.embed_tokens.weight",
-    "model.layers.0.self_attn.q_proj.weight",
-    "model.layers.0.self_attn.k_proj.weight",
-    "model.layers.0.mlp.gate_proj.weight",
-    "model.norm.weight",
-    "lm_head.weight",
-};
-
 pub const argMaxLogit = logits_util.argMaxLogit;
 pub const topKLogitsAlloc = logits_util.topKLogitsAlloc;
 
@@ -210,14 +201,14 @@ pub fn assistantHistoryContent(
 
 pub fn inspectSampleTensorNames(architecture: Architecture) []const []const u8 {
     return switch (architecture) {
-        .qwen3 => &qwen3_inspect_sample_tensors,
+        .qwen3 => &qwen3_family.inspect_sample_tensors,
         .bert => &bert_family.inspect_sample_tensors,
     };
 }
 
 pub fn supportsGeneration(architecture: Architecture) bool {
     return switch (architecture) {
-        .qwen3 => true,
+        .qwen3 => qwen3_family.supportsGeneration(),
         .bert => bert_family.supportsGeneration(),
     };
 }

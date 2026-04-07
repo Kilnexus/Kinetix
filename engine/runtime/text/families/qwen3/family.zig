@@ -25,6 +25,14 @@ pub const layerTensorNameAlloc = weights.layerTensorNameAlloc;
 pub const renderMessagesPromptAlloc = chat_template.renderMessagesPromptAlloc;
 pub const renderSingleUserPromptAlloc = chat_template.renderSingleUserPromptAlloc;
 pub const assistantHistoryContent = chat_template.assistantHistoryContent;
+pub const inspect_sample_tensors = [_][]const u8{
+    "model.embed_tokens.weight",
+    "model.layers.0.self_attn.q_proj.weight",
+    "model.layers.0.self_attn.k_proj.weight",
+    "model.layers.0.mlp.gate_proj.weight",
+    "model.norm.weight",
+    "lm_head.weight",
+};
 
 pub fn loadParsedConfig(backing_allocator: std.mem.Allocator, path: []const u8) !decoder_types.ParsedConfig {
     var parsed = try config.loadFromFile(backing_allocator, path);
@@ -53,6 +61,10 @@ pub fn loadParsedConfig(backing_allocator: std.mem.Allocator, path: []const u8) 
 
 pub fn loadTokenizerFromModelDir(backing_allocator: std.mem.Allocator, model_dir: []const u8) !TokenizerImpl {
     return try bpe_tokenizer.Tokenizer.loadFromModelDir(backing_allocator, model_dir);
+}
+
+pub fn supportsGeneration() bool {
+    return true;
 }
 
 test "adapter family loads parsed config into shared decoder config" {
