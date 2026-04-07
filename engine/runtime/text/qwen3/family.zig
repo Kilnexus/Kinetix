@@ -1,7 +1,7 @@
 const std = @import("std");
-const decoder_types = @import("../../../../../../engine/runtime/text/decoder_types.zig");
-const chat_types = @import("../../../../../../engine/runtime/text/chat_types.zig");
-const bpe_tokenizer = @import("../../../tokenizer/bpe.zig");
+const decoder_types = @import("../decoder_types.zig");
+const chat_types = @import("../chat_types.zig");
+const bpe_tokenizer = @import("../../../../legacy/zinfer/src/tokenizer/bpe.zig");
 const config = @import("config.zig");
 const generation_policy = @import("generation_policy.zig");
 const layout = @import("layout.zig");
@@ -58,7 +58,7 @@ pub fn loadTokenizerFromModelDir(backing_allocator: std.mem.Allocator, model_dir
 test "adapter family loads parsed config into shared decoder config" {
     const testing = std.testing;
 
-    var parsed = try loadParsedConfig(testing.allocator, "models/Qwen3-0.6B/config.json");
+    var parsed = try loadParsedConfig(testing.allocator, "models/text/Qwen3-0.6B/config.json");
     defer parsed.deinit();
 
     try testing.expectEqual(decoder_types.Architecture.qwen3, parsed.value.architecture);

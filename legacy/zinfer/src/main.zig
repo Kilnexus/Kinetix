@@ -29,13 +29,8 @@ test {
     _ = @import("kernel/core/cpu.zig");
     _ = @import("kernel/attention/attention.zig");
     _ = @import("../../../../engine/runtime/text/chat_types.zig");
-    _ = @import("model/layers/logits.zig");
     _ = @import("model/layers/gqa_attention.zig");
     _ = @import("model/layers/rmsnorm_gqa_swiglu_block.zig");
-    _ = @import("model/families/qwen3/weights.zig");
-    _ = @import("model/families/qwen3/layout.zig");
-    _ = @import("model/families/qwen3/family.zig");
-    _ = @import("model/families/qwen3/generation_policy.zig");
     _ = @import("../../../../engine/runtime/text/decoder_types.zig");
     _ = @import("model/runtime/optimized_decoder/runtime.zig");
     _ = @import("model/runtime/optimized_decoder/batch.zig");
@@ -43,7 +38,6 @@ test {
     _ = @import("model/runtime/optimized_kv_cache/cache.zig");
     _ = @import("model/runtime/optimized_kv_cache/quantize.zig");
     _ = @import("model/layers/weights_layout.zig");
-    _ = @import("model/families/qwen3/chat_template.zig");
     _ = @import("tensor/backends/backend.zig");
     _ = @import("tokenizer/bpe.zig");
     _ = @import("tensor/formats/quantized.zig");

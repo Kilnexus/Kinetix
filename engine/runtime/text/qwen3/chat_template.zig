@@ -1,6 +1,6 @@
 const std = @import("std");
-const bpe_tokenizer = @import("../../../tokenizer/bpe.zig");
-const chat_types = @import("../../../../../../engine/runtime/text/chat_types.zig");
+const bpe_tokenizer = @import("../../../../legacy/zinfer/src/tokenizer/bpe.zig");
+const chat_types = @import("../chat_types.zig");
 
 pub const ThinkingMode = chat_types.ThinkingMode;
 pub const Role = chat_types.Role;
@@ -133,7 +133,7 @@ test "single user prompt matches adapter thinking template" {
         prompt,
     );
 
-    var tokenizer = try bpe_tokenizer.Tokenizer.loadFromModelDir(testing.allocator, "models/Qwen3-0.6B");
+    var tokenizer = try bpe_tokenizer.Tokenizer.loadFromModelDir(testing.allocator, "models/text/Qwen3-0.6B");
     defer tokenizer.deinit();
 
     const ids = try tokenizer.encodeAlloc(testing.allocator, prompt);
@@ -151,7 +151,7 @@ test "single user prompt matches adapter non-thinking template" {
         prompt,
     );
 
-    var tokenizer = try bpe_tokenizer.Tokenizer.loadFromModelDir(testing.allocator, "models/Qwen3-0.6B");
+    var tokenizer = try bpe_tokenizer.Tokenizer.loadFromModelDir(testing.allocator, "models/text/Qwen3-0.6B");
     defer tokenizer.deinit();
 
     const ids = try tokenizer.encodeAlloc(testing.allocator, prompt);

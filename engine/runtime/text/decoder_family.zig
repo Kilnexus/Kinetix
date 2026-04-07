@@ -4,7 +4,7 @@ const decoder_types = @import("decoder_types.zig");
 const generic_block = @import("../../../legacy/zinfer/src/model/layers/rmsnorm_gqa_swiglu_block.zig");
 const logits_util = @import("../../../legacy/zinfer/src/model/layers/logits.zig");
 const weights_layout = @import("../../../legacy/zinfer/src/model/layers/weights_layout.zig");
-const qwen3_family = @import("../../../legacy/zinfer/src/model/families/qwen3/family.zig");
+const qwen3_family = @import("qwen3/family.zig");
 
 pub const Architecture = decoder_types.Architecture;
 pub const ThinkingMode = chat_types.ThinkingMode;
