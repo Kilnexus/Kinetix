@@ -5,18 +5,6 @@ pub fn printUsage() !void {
     try stdout.writeAll(
         \\Usage:
         \\  zinfer
-        \\  zinfer inspect-config [model_dir]
-        \\  zinfer inspect-weights [model_dir]
-        \\  zinfer inspect-tensor <tensor_name>
-        \\  zinfer inspect-tensor [model_dir] <tensor_name> [count]
-        \\  zinfer probe-linear <tensor_name> [input_index] [rows_to_print]
-        \\  zinfer probe-linear [model_dir] <tensor_name> <input_index> <rows_to_print>
-        \\  zinfer probe-block [layer_index] [input_index] [count]
-        \\  zinfer probe-block [model_dir] <layer_index> <input_index> <count>
-        \\  zinfer probe-model [token_id] [top_k]
-        \\  zinfer probe-model [model_dir] <token_id> <top_k>
-        \\  zinfer generate-token-ids [seed_ids_csv] [steps]
-        \\  zinfer generate-token-ids [model_dir] <seed_ids_csv> <steps>
         \\  zinfer quantize <q8|q6|q4>
         \\  zinfer quantize <q8|q6|q4> [model_dir]
         \\  zinfer tokenize <text>

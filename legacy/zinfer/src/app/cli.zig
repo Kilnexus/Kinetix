@@ -4,7 +4,6 @@ const cli_chat = @import("cli/chat.zig");
 const cli_generate = @import("cli/generate.zig");
 const cli_embed_text = @import("cli/embed_text.zig");
 const cli_fill_mask = @import("cli/fill_mask.zig");
-const cli_inspect = @import("cli/inspect.zig");
 const cli_serve_bert = @import("cli/serve_bert.zig");
 const cli_tools = @import("cli/tools.zig");
 const cli_usage = @import("cli/usage.zig");
@@ -18,146 +17,11 @@ pub fn run(allocator: std.mem.Allocator) !void {
     defer std.process.argsFree(allocator, args);
 
     if (args.len == 1) {
-        try cli_inspect.inspectConfig(allocator, default_model_dir);
-        return;
+        try printUsage();
+        return error.InvalidCommand;
     }
 
     const command = args[1];
-    if (std.mem.eql(u8, command, "inspect-config")) {
-        const model_dir = if (args.len >= 3) args[2] else default_model_dir;
-        try cli_inspect.inspectConfig(allocator, model_dir);
-        return;
-    }
-
-    if (std.mem.eql(u8, command, "inspect-weights")) {
-        const model_dir = if (args.len >= 3) args[2] else default_model_dir;
-        try cli_inspect.inspectWeights(allocator, model_dir);
-        return;
-    }
-
-    if (std.mem.eql(u8, command, "inspect-tensor")) {
-        if (args.len == 3) {
-            try cli_inspect.inspectTensor(allocator, default_model_dir, args[2], 8);
-            return;
-        }
-        if (args.len >= 4) {
-            const count = if (args.len >= 5) try std.fmt.parseInt(usize, args[4], 10) else 8;
-            try cli_inspect.inspectTensor(allocator, args[2], args[3], count);
-            return;
-        }
-        try printUsage();
-        return error.InvalidCommand;
-    }
-
-    if (std.mem.eql(u8, command, "probe-linear")) {
-        if (args.len == 3) {
-            try cli_inspect.probeLinear(allocator, default_model_dir, args[2], 0, 8);
-            return;
-        }
-        if (args.len == 4) {
-            const input_index = try std.fmt.parseInt(usize, args[3], 10);
-            try cli_inspect.probeLinear(allocator, default_model_dir, args[2], input_index, 8);
-            return;
-        }
-        if (args.len == 5) {
-            const input_index = try std.fmt.parseInt(usize, args[3], 10);
-            const rows_to_print = try std.fmt.parseInt(usize, args[4], 10);
-            try cli_inspect.probeLinear(allocator, default_model_dir, args[2], input_index, rows_to_print);
-            return;
-        }
-        if (args.len >= 6) {
-            const input_index = try std.fmt.parseInt(usize, args[4], 10);
-            const rows_to_print = try std.fmt.parseInt(usize, args[5], 10);
-            try cli_inspect.probeLinear(allocator, args[2], args[3], input_index, rows_to_print);
-            return;
-        }
-        try printUsage();
-        return error.InvalidCommand;
-    }
-
-    if (std.mem.eql(u8, command, "probe-block")) {
-        if (args.len == 2) {
-            try cli_inspect.probeBlock(allocator, default_model_dir, 0, 0, 8);
-            return;
-        }
-        if (args.len == 3) {
-            const layer_index = try std.fmt.parseInt(usize, args[2], 10);
-            try cli_inspect.probeBlock(allocator, default_model_dir, layer_index, 0, 8);
-            return;
-        }
-        if (args.len == 4) {
-            const layer_index = try std.fmt.parseInt(usize, args[2], 10);
-            const input_index = try std.fmt.parseInt(usize, args[3], 10);
-            try cli_inspect.probeBlock(allocator, default_model_dir, layer_index, input_index, 8);
-            return;
-        }
-        if (args.len == 5) {
-            const layer_index = try std.fmt.parseInt(usize, args[2], 10);
-            const input_index = try std.fmt.parseInt(usize, args[3], 10);
-            const count = try std.fmt.parseInt(usize, args[4], 10);
-            try cli_inspect.probeBlock(allocator, default_model_dir, layer_index, input_index, count);
-            return;
-        }
-        if (args.len >= 6) {
-            const layer_index = try std.fmt.parseInt(usize, args[3], 10);
-            const input_index = try std.fmt.parseInt(usize, args[4], 10);
-            const count = try std.fmt.parseInt(usize, args[5], 10);
-            try cli_inspect.probeBlock(allocator, args[2], layer_index, input_index, count);
-            return;
-        }
-        try printUsage();
-        return error.InvalidCommand;
-    }
-
-    if (std.mem.eql(u8, command, "probe-model")) {
-        if (args.len == 2) {
-            try cli_inspect.probeModel(allocator, default_model_dir, 0, 8);
-            return;
-        }
-        if (args.len == 3) {
-            const token_id = try std.fmt.parseInt(usize, args[2], 10);
-            try cli_inspect.probeModel(allocator, default_model_dir, token_id, 8);
-            return;
-        }
-        if (args.len == 4) {
-            const token_id = try std.fmt.parseInt(usize, args[2], 10);
-            const top_k = try std.fmt.parseInt(usize, args[3], 10);
-            try cli_inspect.probeModel(allocator, default_model_dir, token_id, top_k);
-            return;
-        }
-        if (args.len >= 5) {
-            const token_id = try std.fmt.parseInt(usize, args[3], 10);
-            const top_k = try std.fmt.parseInt(usize, args[4], 10);
-            try cli_inspect.probeModel(allocator, args[2], token_id, top_k);
-            return;
-        }
-        try printUsage();
-        return error.InvalidCommand;
-    }
-
-    if (std.mem.eql(u8, command, "generate-token-ids")) {
-        if (args.len == 2) {
-            try cli_inspect.generateTokenIds(allocator, default_model_dir, "0", 5);
-            return;
-        }
-        if (args.len == 3) {
-            try cli_inspect.generateTokenIds(allocator, default_model_dir, args[2], 5);
-            return;
-        }
-        if (args.len == 4) {
-            const steps = try std.fmt.parseInt(usize, args[3], 10);
-            try cli_inspect.generateTokenIds(allocator, default_model_dir, args[2], steps);
-            return;
-        }
-        if (args.len >= 5) {
-            const steps = try std.fmt.parseInt(usize, args[4], 10);
-            try cli_inspect.generateTokenIds(allocator, args[2], args[3], steps);
-            return;
-        }
-        try printUsage();
-        return error.InvalidCommand;
-    }
-
     if (std.mem.eql(u8, command, "quantize")) {
         if (args.len == 3) {
             try cli_tools.quantizeModelDir(allocator, default_model_dir, args[2]);
