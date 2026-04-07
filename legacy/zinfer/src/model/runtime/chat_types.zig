@@ -1,31 +1,6 @@
-pub const ThinkingMode = enum {
-    enabled,
-    disabled,
-};
+const shared = @import("../../../../../engine/runtime/text/chat_types.zig");
 
-pub const Role = enum {
-    system,
-    user,
-    assistant,
-    tool,
-
-    pub fn name(self: Role) []const u8 {
-        return switch (self) {
-            .system => "system",
-            .user => "user",
-            .assistant => "assistant",
-            .tool => "tool",
-        };
-    }
-};
-
-pub const ToolCall = struct {
-    name: []const u8,
-    arguments_json: []const u8,
-};
-
-pub const Message = struct {
-    role: Role,
-    content: []const u8,
-    tool_calls: []const ToolCall = &.{},
-};
+pub const ThinkingMode = shared.ThinkingMode;
+pub const Role = shared.Role;
+pub const ToolCall = shared.ToolCall;
+pub const Message = shared.Message;
