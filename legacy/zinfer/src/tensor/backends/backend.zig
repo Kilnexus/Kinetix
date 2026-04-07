@@ -3,24 +3,9 @@ const parallel_rows = @import("../parallel/parallel_rows.zig");
 const quantized = @import("../formats/quantized.zig");
 const safetensors = @import("../../format/safetensors.zig");
 const tensor_store = @import("../storage/store.zig");
+const shared = @import("../../../../../engine/runtime/text/backend_scheme.zig");
 
-pub const Scheme = enum {
-    auto,
-    bf16,
-    q6,
-    q8,
-    q4,
-
-    pub fn name(self: Scheme) []const u8 {
-        return switch (self) {
-            .auto => "auto",
-            .bf16 => "bf16",
-            .q6 => "q6",
-            .q8 => "q8",
-            .q4 => "q4",
-        };
-    }
-};
+pub const Scheme = shared.Scheme;
 
 pub const Backend = union(Scheme) {
     auto: void,
