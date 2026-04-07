@@ -29,11 +29,11 @@ test {
     _ = @import("kernel/core/cpu.zig");
     _ = @import("kernel/attention/attention.zig");
     _ = @import("../../../../engine/runtime/text/chat_types.zig");
-    _ = @import("model/layers/gqa_attention.zig");
     _ = @import("../../../../engine/runtime/text/decoder_types.zig");
     _ = @import("../../../../engine/runtime/text/logits.zig");
     _ = @import("../../../../engine/runtime/text/weights_layout.zig");
     _ = @import("../../../../engine/runtime/text/block_layout.zig");
+    _ = @import("../../../../engine/runtime/text/gqa_attention.zig");
     _ = @import("model/runtime/optimized_decoder/runtime.zig");
     _ = @import("model/runtime/optimized_decoder/batch.zig");
     _ = @import("model/runtime/optimized_decoder/workspace.zig");

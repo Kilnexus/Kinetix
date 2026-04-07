@@ -1,5 +1,5 @@
 const std = @import("std");
-const gqa_attention = @import("../../../legacy/zinfer/src/model/layers/gqa_attention.zig");
+const gqa_attention = @import("gqa_attention.zig");
 const weights_layout = @import("weights_layout.zig");
 
 pub const LayerTensorNameFn = *const fn (std.mem.Allocator, usize, weights_layout.LayerTensorKind) anyerror![]u8;

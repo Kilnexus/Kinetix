@@ -1,4 +1,4 @@
-const attention = @import("../../../kernel/attention/attention.zig");
+const attention = @import("../../../../legacy/zinfer/src/kernel/attention/attention.zig");
 const spec_mod = @import("spec.zig");
 
 pub fn applyRoPEToProjectedHeadsInPlace(
