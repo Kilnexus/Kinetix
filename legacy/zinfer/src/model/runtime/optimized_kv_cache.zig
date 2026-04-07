@@ -1,6 +1,6 @@
 const cache = @import("optimized_kv_cache/cache.zig");
 const quantize = @import("optimized_kv_cache/quantize.zig");
-const types = @import("optimized_kv_cache/types.zig");
+const types = @import("../../../../../engine/runtime/text/kv_cache_types.zig");
 
 pub const Scheme = types.Scheme;
 pub const resolveScheme = types.resolveScheme;

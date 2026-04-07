@@ -3,7 +3,7 @@ const cpu = @import("../../kernel/core/cpu.zig");
 const attention = @import("../../kernel/attention/basic.zig");
 const logits_util = @import("../layers/logits.zig");
 const bert_family = @import("../families/bert/family.zig");
-const decoder_types = @import("decoder_types.zig");
+const decoder_types = @import("../../../../../engine/runtime/text/decoder_types.zig");
 const tensor_backend = @import("../../tensor/backends/backend.zig");
 const parallel_rows = @import("../../tensor/parallel/parallel_rows.zig");
 

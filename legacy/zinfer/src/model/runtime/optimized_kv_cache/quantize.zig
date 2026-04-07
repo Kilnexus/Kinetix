@@ -1,6 +1,6 @@
 const std = @import("std");
 const bfloat16 = @import("../../../tensor/formats/bfloat16.zig");
-const types = @import("types.zig");
+const types = @import("../../../../../../engine/runtime/text/kv_cache_types.zig");
 
 pub fn quantizeQ8Slice(output: []i8, input: []const f32) u16 {
     var max_abs: f32 = 0.0;

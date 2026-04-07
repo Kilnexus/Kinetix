@@ -1,6 +1,6 @@
 const std = @import("std");
-const chat_types = @import("chat_types.zig");
-const decoder_types = @import("decoder_types.zig");
+const chat_types = @import("../../../../../engine/runtime/text/chat_types.zig");
+const decoder_types = @import("../../../../../engine/runtime/text/decoder_types.zig");
 const generic_block = @import("../layers/rmsnorm_gqa_swiglu_block.zig");
 const weights_layout = @import("../layers/weights_layout.zig");
 
