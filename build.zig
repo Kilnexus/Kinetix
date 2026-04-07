@@ -40,6 +40,7 @@ const LegacyImports = struct {
     engine_vision_graph: *std.Build.Module,
     engine_vision_inspect: *std.Build.Module,
     engine_vision_base: *std.Build.Module,
+    engine_vision_modules: *std.Build.Module,
     tensor: *std.Build.Module,
     ops: *std.Build.Module,
     weights: *std.Build.Module,
@@ -129,6 +130,17 @@ fn addLegacyImports(
         .optimize = optimize,
     });
     ops.addImport("engine_global_thread_pool", global_thread_pool);
+    const engine_vision_modules = b.createModule(.{
+        .root_source_file = b.path("engine/runtime/vision/modules/modules.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    engine_vision_modules.addImport("graph", graph);
+    engine_vision_modules.addImport("weights", weights);
+    engine_vision_modules.addImport("ops", ops);
+    engine_vision_modules.addImport("tensor", tensor);
+    engine_vision_modules.addImport("engine_global_thread_pool", global_thread_pool);
+    engine_vision_modules.addImport("engine_vision_base", engine_vision_base);
 
     const runtime = b.createModule(.{
         .root_source_file = b.path("legacy/axionyx/src/runtime/runtime.zig"),
@@ -142,6 +154,7 @@ fn addLegacyImports(
     runtime.addImport("engine_global_thread_pool", global_thread_pool);
     runtime.addImport("engine_vision_inspect", engine_vision_inspect);
     runtime.addImport("engine_vision_base", engine_vision_base);
+    runtime.addImport("engine_vision_modules", engine_vision_modules);
 
     const legacy_vision = b.createModule(.{
         .root_source_file = b.path("engine/runtime/vision/preprocess.zig"),
@@ -157,6 +170,7 @@ fn addLegacyImports(
         .engine_vision_graph = engine_vision_graph,
         .engine_vision_inspect = engine_vision_inspect,
         .engine_vision_base = engine_vision_base,
+        .engine_vision_modules = engine_vision_modules,
         .tensor = tensor,
         .ops = ops,
         .weights = weights,
@@ -172,6 +186,7 @@ fn addImportsToRoot(root: *std.Build.Module, imports: LegacyImports) void {
     root.addImport("engine_vision_graph", imports.engine_vision_graph);
     root.addImport("engine_vision_inspect", imports.engine_vision_inspect);
     root.addImport("engine_vision_base", imports.engine_vision_base);
+    root.addImport("engine_vision_modules", imports.engine_vision_modules);
     root.addImport("tensor", imports.tensor);
     root.addImport("ops", imports.ops);
     root.addImport("weights", imports.weights);
