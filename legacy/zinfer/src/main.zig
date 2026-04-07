@@ -40,7 +40,7 @@ test {
     _ = @import("model/runtime/optimized_kv_cache/cache.zig");
     _ = @import("model/runtime/optimized_kv_cache/quantize.zig");
     _ = @import("tensor/backends/backend.zig");
-    _ = @import("tokenizer/bpe.zig");
+    _ = @import("../../../../engine/runtime/text/bpe.zig");
     _ = @import("tensor/formats/quantized.zig");
     _ = @import("sampling/sampler.zig");
 }

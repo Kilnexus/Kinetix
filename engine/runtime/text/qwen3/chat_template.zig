@@ -1,5 +1,5 @@
 const std = @import("std");
-const bpe_tokenizer = @import("../../../../legacy/zinfer/src/tokenizer/bpe.zig");
+const bpe_tokenizer = @import("../bpe.zig");
 const chat_types = @import("../chat_types.zig");
 
 pub const ThinkingMode = chat_types.ThinkingMode;

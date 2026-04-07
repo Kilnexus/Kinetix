@@ -177,7 +177,7 @@ fn utf8LossyAlloc(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
 
 test "bpe tokenizer encodes known samples" {
     const testing = std.testing;
-    var tokenizer = try Tokenizer.loadFromModelDir(testing.allocator, "models/Qwen3-0.6B");
+    var tokenizer = try Tokenizer.loadFromModelDir(testing.allocator, "models/text/Qwen3-0.6B");
     defer tokenizer.deinit();
 
     {
@@ -204,7 +204,7 @@ test "bpe tokenizer encodes known samples" {
 
 test "bpe tokenizer decodes known samples" {
     const testing = std.testing;
-    var tokenizer = try Tokenizer.loadFromModelDir(testing.allocator, "models/Qwen3-0.6B");
+    var tokenizer = try Tokenizer.loadFromModelDir(testing.allocator, "models/text/Qwen3-0.6B");
     defer tokenizer.deinit();
 
     const text = try tokenizer.decodeAlloc(testing.allocator, &[_]u32{ 151644, 872, 198, 9707, 151645, 198 });
