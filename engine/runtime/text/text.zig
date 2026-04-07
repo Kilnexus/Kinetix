@@ -1,8 +1,11 @@
 pub const backend_scheme = @import("backend_scheme.zig");
+pub const chat_types = @import("chat_types.zig");
+pub const decoder_types = @import("decoder_types.zig");
 pub const decoder_family = @import("decoder_family.zig");
 pub const decoder_runtime = @import("decoder_runtime.zig");
 pub const generate_options = @import("generate_options.zig");
 pub const kv_cache = @import("kv_cache.zig");
+pub const kv_cache_types = @import("kv_cache_types.zig");
 pub const sampler = @import("sampler.zig");
 pub const prompts = @import("prompts.zig");
 pub const streaming = @import("streaming.zig");

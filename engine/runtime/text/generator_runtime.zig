@@ -69,6 +69,7 @@ pub const GeneratorRuntime = struct {
         }
 
         const cfg = self.model.cfg;
+        const architecture = decoder_family.architectureFromLegacy(cfg.architecture);
         const resolved_kv_cache_scheme = kv_cache.resolveScheme(options.kv_cache_scheme, self.model.backendName());
         var cache = try kv_cache.ModelCache.initWithLayout(
             self.allocator,
@@ -85,7 +86,7 @@ pub const GeneratorRuntime = struct {
 
         const effective_stop_sequences = try decoder_family.effectiveStopSequencesAlloc(
             self.allocator,
-            cfg.architecture,
+            architecture,
             options.stop_sequences,
         );
         defer self.allocator.free(effective_stop_sequences);
@@ -103,7 +104,7 @@ pub const GeneratorRuntime = struct {
         var prng = std.Random.DefaultPrng.init(options.seed);
         for (0..options.max_new_tokens) |_| {
             const next_token = try sampler.sampleToken(self.allocator, prng.random(), current_logits, history_ids.items, options.sampling);
-            if (decoder_family.isEosToken(cfg.architecture, next_token)) {
+            if (decoder_family.isEosToken(architecture, next_token)) {
                 break;
             }
 

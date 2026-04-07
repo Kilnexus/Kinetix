@@ -2,6 +2,7 @@ const std = @import("std");
 const backend = @import("../../artifacts/backend/backend.zig");
 const task = @import("../../core/task.zig");
 const backend_scheme = @import("backend_scheme.zig");
+const decoder_family = @import("decoder_family.zig");
 const decoder_runtime = @import("decoder_runtime.zig");
 const kv_cache = @import("kv_cache.zig");
 const text_prompts = @import("prompts.zig");
@@ -33,10 +34,11 @@ pub fn generateSingleUserText(
         options.thread_count,
     );
     defer runtime.deinit();
+    const architecture = decoder_family.architectureFromLegacy(runtime.model.cfg.architecture);
 
     const prompt = try text_prompts.buildSingleUserPromptAlloc(
         allocator,
-        runtime.model.cfg.architecture,
+        architecture,
         user_text,
         options.system_prompt,
         options.thinking_mode,
@@ -93,6 +95,7 @@ pub fn executeQwenBatch(
         0,
     );
     defer runtime.deinit();
+    const architecture = decoder_family.architectureFromLegacy(runtime.model.cfg.architecture);
 
     const resolved_kv_cache_scheme = kv_cache.resolveScheme(.auto, runtime.model.backendName());
 
@@ -118,7 +121,7 @@ pub fn executeQwenBatch(
 
         prompt.* = try text_prompts.buildSingleUserPromptAlloc(
             allocator,
-            runtime.model.cfg.architecture,
+            architecture,
             text,
             null,
             .disabled,
