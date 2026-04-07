@@ -1,6 +1,6 @@
 const std = @import("std");
 const decoder_types = @import("../../decoder_types.zig");
-const chat_types = @import("../../chat_types.zig");
+const chat_types = @import("../common/chat_types.zig");
 const bpe_tokenizer = @import("../../bpe.zig");
 const config = @import("config.zig");
 const generation_policy = @import("generation_policy.zig");

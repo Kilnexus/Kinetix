@@ -1,5 +1,5 @@
 const std = @import("std");
-const chat_types = @import("../chat_types.zig");
+const chat_types = @import("common/chat_types.zig");
 const decoder_types = @import("../decoder_types.zig");
 const generic_block = @import("../block_layout.zig");
 const weights_layout = @import("../weights_layout.zig");

@@ -1,5 +1,5 @@
 const std = @import("std");
-const chat_types = @import("chat_types.zig");
+const chat_types = @import("families/common/chat_types.zig");
 const decoder_types = @import("decoder_types.zig");
 const logits_util = @import("logits.zig");
 const family_registry = @import("families/registry.zig");

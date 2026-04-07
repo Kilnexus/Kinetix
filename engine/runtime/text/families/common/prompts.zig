@@ -1,5 +1,5 @@
 const std = @import("std");
-const decoder_family = @import("decoder_family.zig");
+const decoder_family = @import("../../decoder_family.zig");
 
 pub fn buildSingleUserPromptAlloc(
     allocator: std.mem.Allocator,
