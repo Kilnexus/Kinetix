@@ -1,6 +1,6 @@
 const std = @import("std");
 const graph = @import("graph");
-const types = @import("../../base/types.zig");
+const types = @import("engine_vision_base").types;
 
 pub const Tensor = types.Tensor;
 pub const RuntimeError = types.RuntimeError;

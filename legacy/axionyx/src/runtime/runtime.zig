@@ -1,6 +1,7 @@
 const std = @import("std");
-const types = @import("base/types.zig");
-const spec = @import("base/spec.zig");
+const vision_base = @import("engine_vision_base");
+const types = vision_base.types;
+const spec = vision_base.spec;
 const blocks = @import("modules/blocks.zig");
 const psa = @import("modules/psa.zig");
 const detect = @import("modules/detect.zig");
@@ -8,7 +9,7 @@ const graph_exec = @import("engine/graph_exec.zig");
 const trace = @import("engine/trace.zig");
 const inspect = @import("engine_vision_inspect");
 const reuse_allocator = @import("base/reuse_allocator.zig");
-const tracking_allocator = @import("base/tracking_allocator.zig");
+const tracking_allocator = vision_base.tracking_allocator;
 
 pub const TensorDesc = types.TensorDesc;
 pub const Tensor = types.Tensor;
@@ -71,5 +72,5 @@ pub fn printRoadmap(writer: anytype) !void {
 
 test {
     _ = @import("base/reuse_allocator.zig");
-    _ = @import("base/tracking_allocator.zig");
+    _ = @import("engine_vision_base");
 }

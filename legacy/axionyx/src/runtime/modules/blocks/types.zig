@@ -1,7 +1,7 @@
 const std = @import("std");
 const graph = @import("graph");
 const weights_mod = @import("weights");
-const base_types = @import("../../base/types.zig");
+const base_types = @import("engine_vision_base").types;
 
 pub const Tensor = base_types.Tensor;
 pub const RuntimeError = base_types.RuntimeError;

@@ -2,7 +2,7 @@ const std = @import("std");
 const graph = @import("graph");
 const blocks = @import("../modules/blocks.zig");
 const graph_exec = @import("graph_exec.zig");
-const types = @import("../base/types.zig");
+const types = @import("engine_vision_base").types;
 const weights_mod = @import("weights");
 
 pub const Tensor = types.Tensor;

@@ -4,7 +4,7 @@ const ops = @import("ops");
 const detect = @import("../modules/detect.zig");
 const blocks = @import("../modules/blocks.zig");
 const reuse_allocator = @import("../base/reuse_allocator.zig");
-const types = @import("../base/types.zig");
+const types = @import("engine_vision_base").types;
 const weights_mod = @import("weights");
 
 pub const Tensor = types.Tensor;

@@ -3,8 +3,9 @@ const graph = @import("graph");
 const ops = @import("ops");
 const weights_mod = @import("weights");
 const blocks = @import("blocks.zig");
-const types = @import("../base/types.zig");
-const utils = @import("../base/utils.zig");
+const vision_base = @import("engine_vision_base");
+const types = vision_base.types;
+const utils = vision_base.utils;
 
 pub const Tensor = types.Tensor;
 pub const RuntimeError = types.RuntimeError;

@@ -2,7 +2,7 @@ const std = @import("std");
 const graph = @import("graph");
 const ops = @import("ops");
 const weights_mod = @import("weights");
-const spec = @import("../../base/spec.zig");
+const spec = @import("engine_vision_base").spec;
 const conv = @import("conv.zig");
 const types = @import("types.zig");
 

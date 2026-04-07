@@ -2,9 +2,10 @@ const std = @import("std");
 const graph = @import("graph");
 const ops = @import("ops");
 const weights_mod = @import("weights");
-const spec = @import("../../base/spec.zig");
+const vision_base = @import("engine_vision_base");
+const spec = vision_base.spec;
 const types = @import("types.zig");
-const utils = @import("../../base/utils.zig");
+const utils = vision_base.utils;
 
 pub const Tensor = types.Tensor;
 

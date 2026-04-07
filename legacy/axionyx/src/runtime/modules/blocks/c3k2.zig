@@ -6,7 +6,7 @@ const bottleneck = @import("bottleneck.zig");
 const c3k = @import("c3k.zig");
 const conv = @import("conv.zig");
 const types = @import("types.zig");
-const utils = @import("../../base/utils.zig");
+const utils = @import("engine_vision_base").utils;
 
 pub const Tensor = types.Tensor;
 const c3k2_stack_part_limit = 8;
