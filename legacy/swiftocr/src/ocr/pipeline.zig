@@ -1,7 +1,7 @@
 const std = @import("std");
-const MemoryPool = @import("../core/memory_pool.zig").MemoryPool;
-const Model = @import("../io/model.zig").Model;
-const Image = @import("../io/image.zig").Image;
+const MemoryPool = @import("engine_arena_pool").ArenaPool;
+const Model = @import("engine_ocr_model").Model;
+const Image = @import("engine_ocr_image").Image;
 
 pub const InferRequest = struct {
     model_path: []const u8,
