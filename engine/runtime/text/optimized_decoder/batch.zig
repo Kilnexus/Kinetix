@@ -1,7 +1,7 @@
 const std = @import("std");
-const decoder_family = @import("../../../../../../engine/runtime/text/decoder_family.zig");
-const kv_cache_types = @import("../../../../../../engine/runtime/text/kv_cache_types.zig");
-const kv_cache_cache = @import("../../../../../../engine/runtime/text/kv_cache/cache.zig");
+const decoder_family = @import("../decoder_family.zig");
+const kv_cache_types = @import("../kv_cache_types.zig");
+const kv_cache_cache = @import("../kv_cache/cache.zig");
 const runtime_mod = @import("runtime.zig");
 const workspace_mod = @import("workspace.zig");
 

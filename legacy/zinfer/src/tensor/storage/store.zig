@@ -1,5 +1,5 @@
 const std = @import("std");
-const kernel_registry = @import("../../kernel/registry.zig");
+const kernel_registry = @import("../../../../../engine/runtime/text/kernel_registry/registry.zig");
 const bfloat16 = @import("../formats/bfloat16.zig");
 const parallel_rows = @import("../parallel/parallel_rows.zig");
 const safetensors = @import("../../format/safetensors.zig");

@@ -1,5 +1,5 @@
-const types = @import("registry/types.zig");
-const resolve_mod = @import("registry/resolve.zig");
+const types = @import("types.zig");
+const resolve_mod = @import("resolve.zig");
 
 pub const ShapeTag = types.ShapeTag;
 pub const GemvOp = types.GemvOp;

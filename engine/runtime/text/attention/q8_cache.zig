@@ -1,6 +1,6 @@
 const std = @import("std");
 const bfloat16 = @import("../tensor/bfloat16.zig");
-const kernel_registry = @import("../../../../legacy/zinfer/src/kernel/registry.zig");
+const kernel_registry = @import("../kernel_registry/registry.zig");
 const basic = @import("basic.zig");
 
 pub const q8_cache_group_size: usize = 16;

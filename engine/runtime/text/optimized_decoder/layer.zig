@@ -1,12 +1,12 @@
 const std = @import("std");
-const cpu = @import("../../../kernel/core/cpu.zig");
-const decoder_family = @import("../../../../../../engine/runtime/text/decoder_family.zig");
-const generic_block = @import("../../../../../../engine/runtime/text/block_layout.zig");
-const gqa_attention = @import("../../../../../../engine/runtime/text/gqa_attention.zig");
-const kv_cache_cache = @import("../../../../../../engine/runtime/text/kv_cache/cache.zig");
+const cpu = @import("../core/cpu.zig");
+const decoder_family = @import("../decoder_family.zig");
+const generic_block = @import("../block_layout.zig");
+const gqa_attention = @import("../gqa_attention.zig");
+const kv_cache_cache = @import("../kv_cache/cache.zig");
 const optimized_decoder_support = @import("support.zig");
-const tensor_backend = @import("../../../tensor/backends/backend.zig");
-const parallel_rows = @import("../../../tensor/parallel/parallel_rows.zig");
+const tensor_backend = @import("../../../../legacy/zinfer/src/tensor/backends/backend.zig");
+const parallel_rows = @import("../../../../legacy/zinfer/src/tensor/parallel/parallel_rows.zig");
 const workspace_mod = @import("workspace.zig");
 
 pub const LayerWeights = struct {
