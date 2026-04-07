@@ -2,9 +2,9 @@ const std = @import("std");
 const file_impl = @import("file.zig");
 const kernels = @import("kernels.zig");
 const types = @import("types.zig");
-const parallel_rows = @import("../../../../../../engine/core/threading/parallel_rows.zig");
-const tensor_store = @import("../../storage/store.zig");
-const mapped_file = @import("../../storage/mapped_file.zig");
+const parallel_rows = @import("../../../core/threading/parallel_rows.zig");
+const tensor_store = @import("../storage/store.zig");
+const mapped_file = @import("../storage/mapped_file.zig");
 
 pub const Store = struct {
     allocator: std.mem.Allocator,

@@ -42,6 +42,6 @@ test {
     _ = @import("../../../../engine/runtime/text/optimized_decoder/workspace.zig");
     _ = @import("../../../../engine/runtime/text/backend/backend.zig");
     _ = @import("../../../../engine/runtime/text/bpe.zig");
-    _ = @import("tensor/formats/quantized.zig");
+    _ = @import("../../../../engine/runtime/text/quantized.zig");
     _ = @import("sampling/sampler.zig");
 }

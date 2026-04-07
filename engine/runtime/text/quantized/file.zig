@@ -1,6 +1,6 @@
 const std = @import("std");
-const safetensors = @import("../../../format/safetensors.zig");
-const tensor_store = @import("../../storage/store.zig");
+const safetensors = @import("../safetensors.zig");
+const tensor_store = @import("../storage/store.zig");
 const codec = @import("codec.zig");
 const types = @import("types.zig");
 

@@ -1,8 +1,8 @@
 const std = @import("std");
-const kernel_registry = @import("../../../../../engine/runtime/text/kernel_registry/registry.zig");
-const bfloat16 = @import("../formats/bfloat16.zig");
-const parallel_rows = @import("../../../../../engine/core/threading/parallel_rows.zig");
-const safetensors = @import("../../format/safetensors.zig");
+const kernel_registry = @import("../kernel_registry/registry.zig");
+const bfloat16 = @import("../tensor/bfloat16.zig");
+const parallel_rows = @import("../../../core/threading/parallel_rows.zig");
+const safetensors = @import("../safetensors.zig");
 const mapped_file = @import("mapped_file.zig");
 
 pub const TensorStore = struct {
