@@ -1,7 +1,7 @@
 const std = @import("std");
 const decoder_family = @import("../../../../../../engine/runtime/text/decoder_family.zig");
 const tensor_backend = @import("../../../tensor/backends/backend.zig");
-const weights_layout = @import("../../layers/weights_layout.zig");
+const weights_layout = @import("../../../../../../engine/runtime/text/weights_layout.zig");
 
 pub fn allocVector(
     backend: *tensor_backend.Backend,

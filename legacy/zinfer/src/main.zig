@@ -30,14 +30,15 @@ test {
     _ = @import("kernel/attention/attention.zig");
     _ = @import("../../../../engine/runtime/text/chat_types.zig");
     _ = @import("model/layers/gqa_attention.zig");
-    _ = @import("model/layers/rmsnorm_gqa_swiglu_block.zig");
     _ = @import("../../../../engine/runtime/text/decoder_types.zig");
+    _ = @import("../../../../engine/runtime/text/logits.zig");
+    _ = @import("../../../../engine/runtime/text/weights_layout.zig");
+    _ = @import("../../../../engine/runtime/text/block_layout.zig");
     _ = @import("model/runtime/optimized_decoder/runtime.zig");
     _ = @import("model/runtime/optimized_decoder/batch.zig");
     _ = @import("model/runtime/optimized_decoder/workspace.zig");
     _ = @import("model/runtime/optimized_kv_cache/cache.zig");
     _ = @import("model/runtime/optimized_kv_cache/quantize.zig");
-    _ = @import("model/layers/weights_layout.zig");
     _ = @import("tensor/backends/backend.zig");
     _ = @import("tokenizer/bpe.zig");
     _ = @import("tensor/formats/quantized.zig");
