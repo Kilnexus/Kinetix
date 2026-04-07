@@ -1,8 +1,10 @@
 const std = @import("std");
 const cli_token_ids = @import("token_ids.zig");
 const safetensors = @import("../../format/safetensors.zig");
-const kv_cache = @import("../../model/runtime/kv_cache.zig");
+const kv_cache_types = @import("../../../../../engine/runtime/text/kv_cache_types.zig");
 const decoder_family = @import("../../model/runtime/decoder_family.zig");
+const optimized_decoder_runtime = @import("../../model/runtime/optimized_decoder/runtime.zig");
+const optimized_kv_cache_cache = @import("../../model/runtime/optimized_kv_cache/cache.zig");
 const tensor_store = @import("../../tensor/storage/store.zig");
 
 pub fn inspectConfig(allocator: std.mem.Allocator, model_dir: []const u8) !void {
@@ -161,20 +163,21 @@ pub fn probeBlock(
     defer parsed_config.deinit();
     const cfg = parsed_config.value;
     if (!decoder_family.supportsGeneration(cfg.architecture)) return error.UnsupportedArchitectureForDecoderRuntime;
-
     if (input_index >= cfg.hidden_size) return error.InputIndexOutOfBounds;
+    if (layer_index >= cfg.num_hidden_layers) return error.LayerIndexOutOfBounds;
 
-    const weights_path = try std.fs.path.join(allocator, &.{ model_dir, "model.safetensors" });
-    defer allocator.free(weights_path);
-
-    var store = try tensor_store.TensorStore.open(allocator, weights_path);
-    defer store.deinit();
-
-    var cache = try kv_cache.LayerKVCache.init(
+    var runtime = try optimized_decoder_runtime.Runtime.init(allocator, model_dir, .auto, null);
+    defer runtime.deinit();
+    var workspace = try runtime.initWorkspace(1);
+    defer workspace.deinit();
+    var cache = try optimized_kv_cache_cache.ModelCache.initWithLayout(
         allocator,
+        cfg.num_hidden_layers,
         1,
         cfg.num_key_value_heads,
         cfg.head_dim,
+        kv_cache_types.resolveScheme(.auto, runtime.backendName()),
+        kv_cache_types.default_q8_layout,
     );
     defer cache.deinit();
 
@@ -186,13 +189,21 @@ pub fn probeBlock(
     const hidden_out = try allocator.alloc(f32, cfg.hidden_size);
     defer allocator.free(hidden_out);
 
-    try decoder_family.forwardSingleBlock(allocator, &store, cfg, layer_index, &cache, hidden_in, hidden_out);
+    try runtime.layers[layer_index].forward(
+        &runtime.backend,
+        runtime.thread_count,
+        &runtime.parallel_pool,
+        &workspace,
+        &cache.layers[layer_index],
+        hidden_in,
+        hidden_out,
+    );
 
     const stdout = std.fs.File.stdout().deprecatedWriter();
     try stdout.print("Zinfer block probe\n", .{});
     try stdout.print("layer_index: {d}\n", .{layer_index});
     try stdout.print("input_index: {d}\n", .{input_index});
-    try stdout.print("cache_len: {d}\n", .{cache.len});
+    try stdout.print("cache_len: {d}\n", .{cache.layers[layer_index].len});
     try stdout.print("first_outputs: [", .{});
     const limit = @min(count, hidden_out.len);
     for (hidden_out[0..limit], 0..) |value, idx| {
@@ -214,24 +225,24 @@ pub fn probeModel(
     defer parsed_config.deinit();
     const cfg = parsed_config.value;
     if (!decoder_family.supportsGeneration(cfg.architecture)) return error.UnsupportedArchitectureForDecoderRuntime;
+    if (token_id >= cfg.vocab_size) return error.TokenIdOutOfBounds;
 
-    const weights_path = try std.fs.path.join(allocator, &.{ model_dir, "model.safetensors" });
-    defer allocator.free(weights_path);
-
-    var store = try tensor_store.TensorStore.open(allocator, weights_path);
-    defer store.deinit();
-
-    var cache = try decoder_family.ModelCache.init(
+    var runtime = try optimized_decoder_runtime.Runtime.init(allocator, model_dir, .auto, null);
+    defer runtime.deinit();
+    var workspace = try runtime.initWorkspace(1);
+    defer workspace.deinit();
+    var cache = try optimized_kv_cache_cache.ModelCache.initWithLayout(
         allocator,
         cfg.num_hidden_layers,
         1,
         cfg.num_key_value_heads,
         cfg.head_dim,
+        kv_cache_types.resolveScheme(.auto, runtime.backendName()),
+        kv_cache_types.default_q8_layout,
     );
     defer cache.deinit();
 
-    const logits = try decoder_family.forwardTokenId(allocator, &store, cfg, &cache, token_id);
-    defer allocator.free(logits);
+    const logits = try runtime.forwardTokenId(&workspace, &cache, token_id);
     const top = try decoder_family.topKLogitsAlloc(allocator, logits, top_k);
     defer allocator.free(top);
 
@@ -260,18 +271,18 @@ pub fn generateTokenIds(
     const cfg = parsed_config.value;
     if (!decoder_family.supportsGeneration(cfg.architecture)) return error.UnsupportedArchitectureForGeneration;
 
-    const weights_path = try std.fs.path.join(allocator, &.{ model_dir, "model.safetensors" });
-    defer allocator.free(weights_path);
-
-    var store = try tensor_store.TensorStore.open(allocator, weights_path);
-    defer store.deinit();
-
-    var cache = try decoder_family.ModelCache.init(
+    var runtime = try optimized_decoder_runtime.Runtime.init(allocator, model_dir, .auto, null);
+    defer runtime.deinit();
+    var workspace = try runtime.initWorkspace(seed_ids.len + steps);
+    defer workspace.deinit();
+    var cache = try optimized_kv_cache_cache.ModelCache.initWithLayout(
         allocator,
         cfg.num_hidden_layers,
         seed_ids.len + steps,
         cfg.num_key_value_heads,
         cfg.head_dim,
+        kv_cache_types.resolveScheme(.auto, runtime.backendName()),
+        kv_cache_types.default_q8_layout,
     );
     defer cache.deinit();
 
@@ -283,12 +294,11 @@ pub fn generateTokenIds(
     var last_token = seed_ids[0];
     var last_logits: ?[]f32 = null;
     for (seed_ids) |token_id| {
-        const logits = try decoder_family.forwardTokenId(allocator, &store, cfg, &cache, token_id);
-        if (last_logits) |buffer| allocator.free(buffer);
+        const logits = try runtime.forwardTokenId(&workspace, &cache, token_id);
+        _ = last_logits;
         last_logits = logits;
         last_token = token_id;
     }
-    defer if (last_logits) |buffer| allocator.free(buffer);
 
     for (0..steps) |_| {
         const current_logits = last_logits orelse return error.MissingPromptLogits;
@@ -296,8 +306,7 @@ pub fn generateTokenIds(
         generated[generated_len] = next_token;
         generated_len += 1;
         last_token = next_token;
-        allocator.free(current_logits);
-        last_logits = try decoder_family.forwardTokenId(allocator, &store, cfg, &cache, last_token);
+        last_logits = try runtime.forwardTokenId(&workspace, &cache, last_token);
     }
 
     const stdout = std.fs.File.stdout().deprecatedWriter();

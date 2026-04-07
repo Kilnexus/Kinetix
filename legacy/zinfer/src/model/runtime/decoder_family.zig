@@ -1,8 +1,4 @@
 const std = @import("std");
-const tensor_store = @import("../../tensor/storage/store.zig");
-const kv_cache = @import("kv_cache.zig");
-const decoder_cache = @import("decoder_cache.zig");
-const decoder_only_stack = @import("../layers/decoder_only_stack.zig");
 const chat_types = @import("../../../../../engine/runtime/text/chat_types.zig");
 const decoder_registry = @import("decoder_registry.zig");
 const decoder_types = @import("../../../../../engine/runtime/text/decoder_types.zig");
@@ -20,7 +16,6 @@ pub const Message = chat_types.Message;
 pub const TopLogit = logits_util.TopLogit;
 pub const CommonWeights = weights_layout.CommonWeights;
 pub const LayerTensorKind = weights_layout.LayerTensorKind;
-pub const ModelCache = decoder_cache.ModelCache;
 pub const DecoderConfig = decoder_types.DecoderConfig;
 pub const ParsedConfig = decoder_types.ParsedConfig;
 
@@ -93,67 +88,6 @@ pub fn loadTokenizerFromModelDir(
     model_dir: []const u8,
 ) !Tokenizer {
     return Tokenizer.loadFromModelDir(backing_allocator, architecture, model_dir);
-}
-
-pub fn forwardTokenId(
-    allocator: std.mem.Allocator,
-    store: *const tensor_store.TensorStore,
-    cfg: DecoderConfig,
-    cache: *ModelCache,
-    token_id: usize,
-) ![]f32 {
-    return try decoder_only_stack.forwardTokenId(
-        allocator,
-        store,
-        decoder_only_stack.Config.fromDecoderConfig(cfg),
-        commonWeights(cfg.architecture),
-        entryForArchitecture(cfg.architecture).layer_layout,
-        entryForArchitecture(cfg.architecture).layer_tensor_name_alloc,
-        cache,
-        token_id,
-    );
-}
-
-pub fn prefillTokenIds(
-    allocator: std.mem.Allocator,
-    store: *const tensor_store.TensorStore,
-    cfg: DecoderConfig,
-    cache: *ModelCache,
-    token_ids: []const usize,
-) ![]f32 {
-    if (token_ids.len == 0) return error.EmptyPrompt;
-
-    var last_logits: ?[]f32 = null;
-    errdefer if (last_logits) |buffer| allocator.free(buffer);
-
-    for (token_ids) |token_id| {
-        const token_logits = try forwardTokenId(allocator, store, cfg, cache, token_id);
-        if (last_logits) |buffer| allocator.free(buffer);
-        last_logits = token_logits;
-    }
-
-    return last_logits orelse return error.MissingPromptLogits;
-}
-
-pub fn forwardSingleBlock(
-    allocator: std.mem.Allocator,
-    store: *const tensor_store.TensorStore,
-    cfg: DecoderConfig,
-    layer_index: usize,
-    cache: *kv_cache.LayerKVCache,
-    hidden_in: []const f32,
-    hidden_out: []f32,
-) !void {
-    return try generic_block.forwardSingleToken(
-        allocator,
-        store,
-        decoder_only_stack.Config.fromDecoderConfig(cfg).blockSpec(layer_index),
-        entryForArchitecture(cfg.architecture).layer_layout,
-        entryForArchitecture(cfg.architecture).layer_tensor_name_alloc,
-        cache,
-        hidden_in,
-        hidden_out,
-    );
 }
 
 pub fn topKLogitsAlloc(

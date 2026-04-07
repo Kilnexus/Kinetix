@@ -13,9 +13,6 @@ test {
     std.testing.refAllDecls(@This());
     _ = @import("kernel/core/cpu.zig");
     _ = @import("kernel/attention/attention.zig");
-    _ = @import("model/runtime/kv_cache.zig");
-    _ = @import("model/runtime/decoder_cache.zig");
-    _ = @import("model/layers/decoder_only_stack.zig");
     _ = @import("../../../../engine/runtime/text/chat_types.zig");
     _ = @import("model/runtime/decoder_registry.zig");
     _ = @import("model/layers/logits.zig");
