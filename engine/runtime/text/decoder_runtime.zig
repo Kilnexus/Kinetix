@@ -1,11 +1,13 @@
 const std = @import("std");
 const backend_scheme = @import("backend_scheme.zig");
-const legacy_runtime = @import("../../../legacy/zinfer/src/model/runtime/optimized_decoder.zig");
+const legacy_batch = @import("../../../legacy/zinfer/src/model/runtime/optimized_decoder/batch.zig");
+const legacy_runtime = @import("../../../legacy/zinfer/src/model/runtime/optimized_decoder/runtime.zig");
+const legacy_workspace = @import("../../../legacy/zinfer/src/model/runtime/optimized_decoder/workspace.zig");
 
-pub const BatchRuntime = legacy_runtime.BatchRuntime;
-pub const BatchDecodeStats = legacy_runtime.BatchDecodeStats;
+pub const BatchRuntime = legacy_batch.BatchRuntime;
+pub const BatchDecodeStats = legacy_batch.DecodeStats;
 pub const Runtime = legacy_runtime.Runtime;
-pub const Workspace = legacy_runtime.Workspace;
+pub const Workspace = legacy_workspace.Workspace;
 
 pub fn initRuntime(
     allocator: std.mem.Allocator,

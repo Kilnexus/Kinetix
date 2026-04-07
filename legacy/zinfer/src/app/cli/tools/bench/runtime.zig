@@ -4,8 +4,9 @@ const cli_prompts = @import("../../prompts.zig");
 const cli_runtime = @import("../../runtime.zig");
 const decoder_family = @import("../../../../model/runtime/decoder_family.zig");
 const kernel_registry = @import("../../../../kernel/registry.zig");
-const optimized_decoder = @import("../../../../model/runtime/optimized_decoder.zig");
-const optimized_kv_cache = @import("../../../../model/runtime/optimized_kv_cache.zig");
+const optimized_decoder_batch = @import("../../../../model/runtime/optimized_decoder/batch.zig");
+const kv_cache_types = @import("../../../../../../../engine/runtime/text/kv_cache_types.zig");
+const kv_cache_cache = @import("../../../../model/runtime/optimized_kv_cache/cache.zig");
 const tensor_backend = @import("../../../../tensor/backends/backend.zig");
 const support = @import("support.zig");
 
@@ -18,7 +19,7 @@ pub fn benchPrompt(
     var runtime = try cli_runtime.GeneratorRuntime.init(allocator, model_dir, options.backend_scheme, options.thread_count);
     defer runtime.deinit();
     const cfg = runtime.model.cfg;
-    const resolved_kv_cache_scheme = optimized_kv_cache.resolveScheme(options.kv_cache_scheme, runtime.model.backendName());
+    const resolved_kv_cache_scheme = kv_cache_types.resolveScheme(options.kv_cache_scheme, runtime.model.backendName());
 
     const prompt = try cli_prompts.buildSingleUserPromptAlloc(
         allocator,
@@ -41,7 +42,7 @@ pub fn benchPrompt(
         prompt_ids[idx] = token_id;
     }
 
-    var cache = try optimized_kv_cache.ModelCache.initWithLayout(
+    var cache = try kv_cache_cache.ModelCache.initWithLayout(
         allocator,
         cfg.num_hidden_layers,
         prompt_ids.len + options.max_new_tokens,
@@ -115,7 +116,7 @@ pub fn benchSuite(allocator: std.mem.Allocator, model_dir: []const u8) !void {
     try stdout.print("model_dir: {s}\n", .{model_dir});
     try stdout.print("threads: 1\n", .{});
     try stdout.print("kv_cache: auto\n", .{});
-    try stdout.print("q8_layout: {s}\n", .{optimized_kv_cache.default_q8_layout.name()});
+    try stdout.print("q8_layout: {s}\n", .{kv_cache_types.default_q8_layout.name()});
     try stdout.print("kernel_isa: {s}\n", .{kernel_registry.activeIsa().name()});
 
     for (profiles) |profile| {
@@ -142,7 +143,7 @@ pub fn benchBatchPrompt(
     var runtime = try cli_runtime.GeneratorRuntime.init(allocator, model_dir, options.backend_scheme, options.thread_count);
     defer runtime.deinit();
     const cfg = runtime.model.cfg;
-    const resolved_kv_cache_scheme = optimized_kv_cache.resolveScheme(options.kv_cache_scheme, runtime.model.backendName());
+    const resolved_kv_cache_scheme = kv_cache_types.resolveScheme(options.kv_cache_scheme, runtime.model.backendName());
 
     const prompt = try cli_prompts.buildSingleUserPromptAlloc(
         allocator,
@@ -165,7 +166,7 @@ pub fn benchBatchPrompt(
         prompt_ids[idx] = token_id;
     }
 
-    var batch = try optimized_decoder.BatchRuntime.init(
+    var batch = try optimized_decoder_batch.BatchRuntime.init(
         allocator,
         &runtime.model,
         batch_size,
@@ -234,7 +235,7 @@ pub fn benchContinuousPrompt(
     var runtime = try cli_runtime.GeneratorRuntime.init(allocator, model_dir, options.backend_scheme, options.thread_count);
     defer runtime.deinit();
     const cfg = runtime.model.cfg;
-    const resolved_kv_cache_scheme = optimized_kv_cache.resolveScheme(options.kv_cache_scheme, runtime.model.backendName());
+    const resolved_kv_cache_scheme = kv_cache_types.resolveScheme(options.kv_cache_scheme, runtime.model.backendName());
 
     const prompt = try cli_prompts.buildSingleUserPromptAlloc(
         allocator,
@@ -257,7 +258,7 @@ pub fn benchContinuousPrompt(
         prompt_ids[idx] = token_id;
     }
 
-    var batch = try optimized_decoder.BatchRuntime.init(
+    var batch = try optimized_decoder_batch.BatchRuntime.init(
         allocator,
         &runtime.model,
         batch_size,
@@ -332,7 +333,7 @@ fn initBenchSuiteOptions(
         .stop_sequences = try allocator.alloc([]const u8, 0),
         .backend_scheme = backend_scheme,
         .kv_cache_scheme = .auto,
-        .q8_layout = optimized_kv_cache.default_q8_layout,
+        .q8_layout = kv_cache_types.default_q8_layout,
         .thread_count = 1,
     };
 }

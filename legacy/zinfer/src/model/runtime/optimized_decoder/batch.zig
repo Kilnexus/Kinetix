@@ -1,12 +1,13 @@
 const std = @import("std");
 const decoder_family = @import("../decoder_family.zig");
-const optimized_kv_cache = @import("../optimized_kv_cache.zig");
+const kv_cache_types = @import("../../../../../../engine/runtime/text/kv_cache_types.zig");
+const kv_cache_cache = @import("../optimized_kv_cache/cache.zig");
 const runtime_mod = @import("runtime.zig");
 const workspace_mod = @import("workspace.zig");
 
 pub const RequestState = struct {
     workspace: workspace_mod.Workspace,
-    cache: optimized_kv_cache.ModelCache,
+    cache: kv_cache_cache.ModelCache,
     prompt_tokens: usize,
     decoded_tokens: usize,
     active: bool,
@@ -44,8 +45,8 @@ pub const BatchRuntime = struct {
         model: *runtime_mod.Runtime,
         batch_size: usize,
         max_seq_len: usize,
-        kv_cache_scheme: optimized_kv_cache.Scheme,
-        q8_layout: optimized_kv_cache.Q8Layout,
+        kv_cache_scheme: kv_cache_types.Scheme,
+        q8_layout: kv_cache_types.Q8Layout,
     ) !BatchRuntime {
         if (batch_size == 0) return error.InvalidBatchSize;
 
@@ -60,7 +61,7 @@ pub const BatchRuntime = struct {
         for (requests) |*request| {
             request.* = .{
                 .workspace = try model.initWorkspace(max_seq_len),
-                .cache = try optimized_kv_cache.ModelCache.initWithLayout(
+                .cache = try kv_cache_cache.ModelCache.initWithLayout(
                     allocator,
                     model.cfg.num_hidden_layers,
                     max_seq_len,

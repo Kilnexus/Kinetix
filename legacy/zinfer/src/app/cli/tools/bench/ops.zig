@@ -3,7 +3,7 @@ const attention = @import("../../../../kernel/attention/attention.zig");
 const cpu = @import("../../../../kernel/core/cpu.zig");
 const kernel_registry = @import("../../../../kernel/registry.zig");
 const bfloat16 = @import("../../../../tensor/formats/bfloat16.zig");
-const optimized_kv_cache = @import("../../../../model/runtime/optimized_kv_cache.zig");
+const kv_cache_types = @import("../../../../../../../engine/runtime/text/kv_cache_types.zig");
 const decoder_family = @import("../../../../model/runtime/decoder_family.zig");
 const quantized = @import("../../../../tensor/formats/quantized.zig");
 const tensor_store = @import("../../../../tensor/storage/store.zig");
@@ -29,7 +29,7 @@ pub fn benchHandwrittenOps(
     try stdout.print("head_dim: {d}\n", .{cfg.head_dim});
     try stdout.print("attention_heads: {d}\n", .{cfg.num_attention_heads});
     try stdout.print("kv_heads: {d}\n", .{cfg.num_key_value_heads});
-    try stdout.print("q8_layout: {s}\n", .{optimized_kv_cache.default_q8_layout.name()});
+    try stdout.print("q8_layout: {s}\n", .{kv_cache_types.default_q8_layout.name()});
     try stdout.print("kernel_isa: {s}\n", .{kernel_registry.activeIsa().name()});
     try stdout.print("iterations: {s}\n", .{if (requested_iterations == 0) "auto" else "manual"});
     try stdout.print("\n[gemv-row]\n", .{});
@@ -310,7 +310,7 @@ fn benchAttentionFullProfile(
     const total_scales = seq_len * cfg.num_key_value_heads * scale_groups_per_head;
     const head_data_stride = seq_len * cfg.head_dim;
     const head_scale_stride = seq_len * scale_groups_per_head;
-    const page_len = optimized_kv_cache.q8_page_len;
+    const page_len = kv_cache_types.q8_page_len;
     const pages_per_head = try std.math.divCeil(usize, seq_len, page_len);
     const page_data_stride = page_len * cfg.head_dim;
     const page_scale_stride = page_len * scale_groups_per_head;
@@ -393,7 +393,7 @@ fn benchAttentionFullProfile(
     var guard: f32 = 0.0;
     const warmup = @min(iterations, @as(usize, 4));
     for (0..warmup) |_| {
-        switch (optimized_kv_cache.default_q8_layout) {
+        switch (kv_cache_types.default_q8_layout) {
             .token_major_legacy => try attention.scaledDotProductAttentionSingleQueryQ8Cache(
                 output,
                 query,
@@ -447,7 +447,7 @@ fn benchAttentionFullProfile(
 
     var timer = try std.time.Timer.start();
     for (0..iterations) |_| {
-        switch (optimized_kv_cache.default_q8_layout) {
+        switch (kv_cache_types.default_q8_layout) {
             .token_major_legacy => try attention.scaledDotProductAttentionSingleQueryQ8Cache(
                 output,
                 query,

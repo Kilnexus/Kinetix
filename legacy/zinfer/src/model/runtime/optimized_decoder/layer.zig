@@ -3,7 +3,7 @@ const cpu = @import("../../../kernel/core/cpu.zig");
 const decoder_family = @import("../decoder_family.zig");
 const generic_block = @import("../../layers/rmsnorm_gqa_swiglu_block.zig");
 const gqa_attention = @import("../../layers/gqa_attention.zig");
-const optimized_kv_cache = @import("../optimized_kv_cache.zig");
+const kv_cache_cache = @import("../optimized_kv_cache/cache.zig");
 const optimized_decoder_support = @import("support.zig");
 const tensor_backend = @import("../../../tensor/backends/backend.zig");
 const parallel_rows = @import("../../../tensor/parallel/parallel_rows.zig");
@@ -101,7 +101,7 @@ pub const LayerWeights = struct {
         thread_count: usize,
         parallel_pool: *parallel_rows.Pool,
         workspace: *workspace_mod.Workspace,
-        cache: *optimized_kv_cache.LayerKVCache,
+        cache: *kv_cache_cache.LayerKVCache,
         hidden_in: []const f32,
         hidden_out: []f32,
     ) !void {

@@ -1,16 +1,17 @@
 const std = @import("std");
 const attention = @import("../../../../kernel/attention/attention.zig");
 const bfloat16 = @import("../../../../tensor/formats/bfloat16.zig");
-const optimized_kv_cache = @import("../../../../model/runtime/optimized_kv_cache.zig");
+const kv_cache_types = @import("../../../../../../../engine/runtime/text/kv_cache_types.zig");
+const kv_cache_cache = @import("../../../../model/runtime/optimized_kv_cache/cache.zig");
 const decoder_family = @import("../../../../model/runtime/decoder_family.zig");
 
 pub fn estimateKvCacheBytes(
     cfg: decoder_family.DecoderConfig,
     max_seq_len: usize,
-    kv_cache_scheme: optimized_kv_cache.Scheme,
-    q8_layout: optimized_kv_cache.Q8Layout,
+    kv_cache_scheme: kv_cache_types.Scheme,
+    q8_layout: kv_cache_types.Q8Layout,
 ) u64 {
-    return optimized_kv_cache.estimateBytesWithLayout(
+    return kv_cache_cache.estimateBytesWithLayout(
         cfg.num_hidden_layers,
         max_seq_len,
         cfg.num_key_value_heads,

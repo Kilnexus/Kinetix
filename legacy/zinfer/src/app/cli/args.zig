@@ -1,5 +1,5 @@
 const std = @import("std");
-const optimized_kv_cache = @import("../../model/runtime/optimized_kv_cache.zig");
+const kv_cache_types = @import("../../../../../engine/runtime/text/kv_cache_types.zig");
 const decoder_family = @import("../../model/runtime/decoder_family.zig");
 const tensor_backend = @import("../../tensor/backends/backend.zig");
 const sampler = @import("../../sampling/sampler.zig");
@@ -15,8 +15,8 @@ pub const GenerateOptions = struct {
     stream_output: bool,
     stop_sequences: [][]const u8,
     backend_scheme: tensor_backend.Scheme,
-    kv_cache_scheme: optimized_kv_cache.Scheme,
-    q8_layout: optimized_kv_cache.Q8Layout,
+    kv_cache_scheme: kv_cache_types.Scheme,
+    q8_layout: kv_cache_types.Q8Layout,
     thread_count: usize,
 
     pub fn deinit(self: *GenerateOptions, allocator: std.mem.Allocator) void {
@@ -383,7 +383,7 @@ fn initGenerateOptions(mode: decoder_family.ThinkingMode, max_new_tokens: usize)
         .stop_sequences = &.{},
         .backend_scheme = .auto,
         .kv_cache_scheme = .auto,
-        .q8_layout = optimized_kv_cache.default_q8_layout,
+        .q8_layout = kv_cache_types.default_q8_layout,
         .thread_count = 0,
     };
 }
@@ -509,14 +509,14 @@ fn parseBackendScheme(text: []const u8) !tensor_backend.Scheme {
     return error.InvalidBackendScheme;
 }
 
-fn parseKvCacheScheme(text: []const u8) !optimized_kv_cache.Scheme {
+fn parseKvCacheScheme(text: []const u8) !kv_cache_types.Scheme {
     if (std.mem.eql(u8, text, "auto")) return .auto;
     if (std.mem.eql(u8, text, "bf16")) return .bf16;
     if (std.mem.eql(u8, text, "q8")) return .q8;
     return error.InvalidKvCacheScheme;
 }
 
-fn parseQ8Layout(text: []const u8) !optimized_kv_cache.Q8Layout {
+fn parseQ8Layout(text: []const u8) !kv_cache_types.Q8Layout {
     if (std.mem.eql(u8, text, "token_major_legacy")) return .token_major_legacy;
     if (std.mem.eql(u8, text, "head_major")) return .head_major;
     if (std.mem.eql(u8, text, "paged_head_major")) return .paged_head_major;

@@ -27,8 +27,11 @@ test {
     _ = @import("model/families/qwen3/generation_policy.zig");
     _ = @import("../../../../engine/runtime/text/decoder_types.zig");
     _ = @import("model/runtime/decoder_family.zig");
-    _ = @import("model/runtime/optimized_decoder.zig");
-    _ = @import("model/runtime/optimized_kv_cache.zig");
+    _ = @import("model/runtime/optimized_decoder/runtime.zig");
+    _ = @import("model/runtime/optimized_decoder/batch.zig");
+    _ = @import("model/runtime/optimized_decoder/workspace.zig");
+    _ = @import("model/runtime/optimized_kv_cache/cache.zig");
+    _ = @import("model/runtime/optimized_kv_cache/quantize.zig");
     _ = @import("model/layers/weights_layout.zig");
     _ = @import("model/families/qwen3/chat_template.zig");
     _ = @import("tensor/backends/backend.zig");

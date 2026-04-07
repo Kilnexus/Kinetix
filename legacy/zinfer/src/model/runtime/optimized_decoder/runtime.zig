@@ -2,7 +2,7 @@ const std = @import("std");
 const cpu = @import("../../../kernel/core/cpu.zig");
 const decoder_family = @import("../decoder_family.zig");
 const generic_block = @import("../../layers/rmsnorm_gqa_swiglu_block.zig");
-const optimized_kv_cache = @import("../optimized_kv_cache.zig");
+const kv_cache_cache = @import("../optimized_kv_cache/cache.zig");
 const layer_mod = @import("layer.zig");
 const optimized_decoder_support = @import("support.zig");
 const workspace_mod = @import("workspace.zig");
@@ -103,7 +103,7 @@ pub const Runtime = struct {
     pub fn forwardTokenId(
         self: *Runtime,
         workspace: *workspace_mod.Workspace,
-        cache: *optimized_kv_cache.ModelCache,
+        cache: *kv_cache_cache.ModelCache,
         token_id: usize,
     ) ![]f32 {
         if (token_id >= self.cfg.vocab_size) return error.TokenIdOutOfBounds;
@@ -150,7 +150,7 @@ pub const Runtime = struct {
     pub fn prefillTokenIds(
         self: *Runtime,
         workspace: *workspace_mod.Workspace,
-        cache: *optimized_kv_cache.ModelCache,
+        cache: *kv_cache_cache.ModelCache,
         token_ids: []const usize,
     ) ![]f32 {
         if (token_ids.len == 0) return error.EmptyPrompt;

@@ -1,8 +1,9 @@
 const std = @import("std");
 const GenerateOptions = @import("../args.zig").GenerateOptions;
-const optimized_kv_cache = @import("../../../model/runtime/optimized_kv_cache.zig");
+const kv_cache_types = @import("../../../../../../engine/runtime/text/kv_cache_types.zig");
+const kv_cache_cache = @import("../../../model/runtime/optimized_kv_cache/cache.zig");
 const decoder_family = @import("../../../model/runtime/decoder_family.zig");
-const optimized_decoder = @import("../../../model/runtime/optimized_decoder.zig");
+const optimized_decoder_runtime = @import("../../../model/runtime/optimized_decoder/runtime.zig");
 const tensor_backend = @import("../../../tensor/backends/backend.zig");
 const sampler = @import("../../../sampling/sampler.zig");
 const streaming = @import("streaming.zig");
@@ -10,7 +11,7 @@ const streaming = @import("streaming.zig");
 pub const GeneratorRuntime = struct {
     allocator: std.mem.Allocator,
     tokenizer: decoder_family.Tokenizer,
-    model: optimized_decoder.Runtime,
+    model: optimized_decoder_runtime.Runtime,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -33,7 +34,7 @@ pub const GeneratorRuntime = struct {
         );
         errdefer tokenizer.deinit();
 
-        var model = try optimized_decoder.Runtime.init(
+        var model = try optimized_decoder_runtime.Runtime.init(
             allocator,
             model_dir,
             backend_scheme,
@@ -69,8 +70,8 @@ pub const GeneratorRuntime = struct {
         }
 
         const cfg = self.model.cfg;
-        const resolved_kv_cache_scheme = optimized_kv_cache.resolveScheme(options.kv_cache_scheme, self.model.backendName());
-        var cache = try optimized_kv_cache.ModelCache.initWithLayout(
+        const resolved_kv_cache_scheme = kv_cache_types.resolveScheme(options.kv_cache_scheme, self.model.backendName());
+        var cache = try kv_cache_cache.ModelCache.initWithLayout(
             self.allocator,
             cfg.num_hidden_layers,
             prompt_ids.len + options.max_new_tokens,
