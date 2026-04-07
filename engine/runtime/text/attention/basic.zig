@@ -1,6 +1,6 @@
 const std = @import("std");
-const bfloat16 = @import("../../tensor/formats/bfloat16.zig");
-const cpu = @import("../core/cpu.zig");
+const bfloat16 = @import("../tensor/bfloat16.zig");
+const cpu = @import("../../../../legacy/zinfer/src/kernel/core/cpu.zig");
 
 pub fn softmaxInPlace(values: []f32) !void {
     if (values.len == 0) return error.EmptyInput;

@@ -1,5 +1,5 @@
 const std = @import("std");
-const bfloat16 = @import("../../../../legacy/zinfer/src/tensor/formats/bfloat16.zig");
+const bfloat16 = @import("../tensor/bfloat16.zig");
 const quantize = @import("quantize.zig");
 const types = @import("../kv_cache_types.zig");
 

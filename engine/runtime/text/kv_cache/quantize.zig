@@ -1,5 +1,5 @@
 const std = @import("std");
-const bfloat16 = @import("../../../../legacy/zinfer/src/tensor/formats/bfloat16.zig");
+const bfloat16 = @import("../tensor/bfloat16.zig");
 const types = @import("../kv_cache_types.zig");
 
 pub fn quantizeQ8Slice(output: []i8, input: []const f32) u16 {

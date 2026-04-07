@@ -1,5 +1,5 @@
 const std = @import("std");
-const attention = @import("../../../kernel/attention/attention.zig");
+const attention = @import("../../../../../../engine/runtime/text/attention/attention.zig");
 const decoder_family = @import("../../../../../../engine/runtime/text/decoder_family.zig");
 
 pub const Workspace = struct {
