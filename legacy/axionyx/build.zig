@@ -4,16 +4,10 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const graph_mod = b.createModule(.{
-        .root_source_file = b.path("src/format/graph.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const engine_vision_graph_mod = b.createModule(.{
         .root_source_file = b.path("../../engine/artifacts/vision_graph.zig"),
         .target = target,
         .optimize = optimize,
     });
-    graph_mod.addImport("engine_vision_graph", engine_vision_graph_mod);
     const tensor_mod = b.createModule(.{
         .root_source_file = b.path("../../engine/runtime/vision/nn/tensor.zig"),
         .target = target,
@@ -87,7 +81,7 @@ pub fn build(b: *std.Build) void {
     const pixio_mod = pixio_dep.module("Pixio");
 
     const runtime_mod = b.createModule(.{
-        .root_source_file = b.path("src/runtime/runtime.zig"),
+        .root_source_file = b.path("../../engine/runtime/vision/runtime.zig"),
         .target = target,
         .optimize = optimize,
     });

@@ -37,7 +37,6 @@ pub fn build(b: *std.Build) void {
 const LegacyImports = struct {
     pixio: *std.Build.Module,
     graph: *std.Build.Module,
-    engine_vision_graph: *std.Build.Module,
     engine_vision_inspect: *std.Build.Module,
     engine_vision_base: *std.Build.Module,
     engine_vision_modules: *std.Build.Module,
@@ -84,16 +83,10 @@ fn addLegacyImports(
     }
 
     const graph = b.createModule(.{
-        .root_source_file = b.path("legacy/axionyx/src/format/graph.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const engine_vision_graph = b.createModule(.{
         .root_source_file = b.path("engine/artifacts/vision_graph.zig"),
         .target = target,
         .optimize = optimize,
     });
-    graph.addImport("engine_vision_graph", engine_vision_graph);
     const tensor = b.createModule(.{
         .root_source_file = b.path("engine/runtime/vision/nn/tensor.zig"),
         .target = target,
@@ -162,7 +155,7 @@ fn addLegacyImports(
     engine_vision_engine.addImport("engine_vision_reuse_allocator", engine_vision_reuse_allocator);
 
     const runtime = b.createModule(.{
-        .root_source_file = b.path("legacy/axionyx/src/runtime/runtime.zig"),
+        .root_source_file = b.path("engine/runtime/vision/runtime.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -187,7 +180,6 @@ fn addLegacyImports(
     return .{
         .pixio = pixio,
         .graph = graph,
-        .engine_vision_graph = engine_vision_graph,
         .engine_vision_inspect = engine_vision_inspect,
         .engine_vision_base = engine_vision_base,
         .engine_vision_modules = engine_vision_modules,
@@ -205,7 +197,6 @@ fn addLegacyImports(
 fn addImportsToRoot(root: *std.Build.Module, imports: LegacyImports) void {
     root.addImport("Pixio", imports.pixio);
     root.addImport("graph", imports.graph);
-    root.addImport("engine_vision_graph", imports.engine_vision_graph);
     root.addImport("engine_vision_inspect", imports.engine_vision_inspect);
     root.addImport("engine_vision_base", imports.engine_vision_base);
     root.addImport("engine_vision_modules", imports.engine_vision_modules);
