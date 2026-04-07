@@ -6,7 +6,7 @@ const psa = @import("modules/psa.zig");
 const detect = @import("modules/detect.zig");
 const graph_exec = @import("engine/graph_exec.zig");
 const trace = @import("engine/trace.zig");
-const inspect = @import("model/inspect.zig");
+const inspect = @import("engine_vision_inspect");
 const reuse_allocator = @import("base/reuse_allocator.zig");
 const tracking_allocator = @import("base/tracking_allocator.zig");
 

@@ -38,6 +38,7 @@ const LegacyImports = struct {
     pixio: *std.Build.Module,
     graph: *std.Build.Module,
     engine_vision_graph: *std.Build.Module,
+    engine_vision_inspect: *std.Build.Module,
     tensor: *std.Build.Module,
     ops: *std.Build.Module,
     weights: *std.Build.Module,
@@ -94,6 +95,12 @@ fn addLegacyImports(
         .target = target,
         .optimize = optimize,
     });
+    const engine_vision_inspect = b.createModule(.{
+        .root_source_file = b.path("engine/runtime/vision/inspect.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    engine_vision_inspect.addImport("graph", graph);
     const ops = b.createModule(.{
         .root_source_file = b.path("legacy/axionyx/src/nn/ops.zig"),
         .target = target,
@@ -124,9 +131,10 @@ fn addLegacyImports(
     runtime.addImport("ops", ops);
     runtime.addImport("weights", weights);
     runtime.addImport("engine_global_thread_pool", global_thread_pool);
+    runtime.addImport("engine_vision_inspect", engine_vision_inspect);
 
     const legacy_vision = b.createModule(.{
-        .root_source_file = b.path("legacy/axionyx/src/vision/preprocess.zig"),
+        .root_source_file = b.path("engine/runtime/vision/preprocess.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -137,6 +145,7 @@ fn addLegacyImports(
         .pixio = pixio,
         .graph = graph,
         .engine_vision_graph = engine_vision_graph,
+        .engine_vision_inspect = engine_vision_inspect,
         .tensor = tensor,
         .ops = ops,
         .weights = weights,
@@ -150,6 +159,7 @@ fn addImportsToRoot(root: *std.Build.Module, imports: LegacyImports) void {
     root.addImport("Pixio", imports.pixio);
     root.addImport("graph", imports.graph);
     root.addImport("engine_vision_graph", imports.engine_vision_graph);
+    root.addImport("engine_vision_inspect", imports.engine_vision_inspect);
     root.addImport("tensor", imports.tensor);
     root.addImport("ops", imports.ops);
     root.addImport("weights", imports.weights);

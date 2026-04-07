@@ -19,6 +19,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const engine_vision_inspect_mod = b.createModule(.{
+        .root_source_file = b.path("../../engine/runtime/vision/inspect.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    engine_vision_inspect_mod.addImport("graph", graph_mod);
     const ops_mod = b.createModule(.{
         .root_source_file = b.path("src/nn/ops.zig"),
         .target = target,
@@ -54,8 +60,9 @@ pub fn build(b: *std.Build) void {
     runtime_mod.addImport("ops", ops_mod);
     runtime_mod.addImport("weights", weights_mod);
     runtime_mod.addImport("engine_global_thread_pool", global_thread_pool_mod);
+    runtime_mod.addImport("engine_vision_inspect", engine_vision_inspect_mod);
     const vision_mod = b.createModule(.{
-        .root_source_file = b.path("src/vision/preprocess.zig"),
+        .root_source_file = b.path("../../engine/runtime/vision/preprocess.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -76,6 +83,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("vision", vision_mod);
     exe.root_module.addImport("weights", weights_mod);
     exe.root_module.addImport("engine_global_thread_pool", global_thread_pool_mod);
+    exe.root_module.addImport("engine_vision_inspect", engine_vision_inspect_mod);
 
     b.installArtifact(exe);
 
@@ -100,6 +108,7 @@ pub fn build(b: *std.Build) void {
     unit_tests.root_module.addImport("runtime", runtime_mod);
     unit_tests.root_module.addImport("vision", vision_mod);
     unit_tests.root_module.addImport("engine_global_thread_pool", global_thread_pool_mod);
+    unit_tests.root_module.addImport("engine_vision_inspect", engine_vision_inspect_mod);
 
     const run_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run Zig unit tests");
