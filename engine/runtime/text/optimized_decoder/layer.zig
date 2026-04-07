@@ -5,8 +5,8 @@ const generic_block = @import("../block_layout.zig");
 const gqa_attention = @import("../gqa_attention.zig");
 const kv_cache_cache = @import("../kv_cache/cache.zig");
 const optimized_decoder_support = @import("support.zig");
-const tensor_backend = @import("../../../../legacy/zinfer/src/tensor/backends/backend.zig");
-const parallel_rows = @import("../../../../legacy/zinfer/src/tensor/parallel/parallel_rows.zig");
+const tensor_backend = @import("../backend/backend.zig");
+const parallel_rows = @import("../../../core/threading/parallel_rows.zig");
 const workspace_mod = @import("workspace.zig");
 
 pub const LayerWeights = struct {

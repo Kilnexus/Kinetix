@@ -1,4 +1,5 @@
 pub const backend_scheme = @import("backend_scheme.zig");
+pub const backend = @import("backend/backend.zig");
 pub const core_cpu = @import("core/cpu.zig");
 pub const chat_types = @import("chat_types.zig");
 pub const decoder_types = @import("decoder_types.zig");
@@ -14,4 +15,5 @@ pub const prompts = @import("prompts.zig");
 pub const streaming = @import("streaming.zig");
 pub const generator_runtime = @import("generator_runtime.zig");
 pub const native_dispatch = @import("native_dispatch.zig");
+pub const parallel_rows = @import("../../core/threading/parallel_rows.zig");
 pub const qwen_native = @import("qwen_native.zig");

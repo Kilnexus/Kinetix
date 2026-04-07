@@ -1,9 +1,9 @@
 const std = @import("std");
-const parallel_rows = @import("../parallel/parallel_rows.zig");
-const quantized = @import("../formats/quantized.zig");
-const safetensors = @import("../../format/safetensors.zig");
-const tensor_store = @import("../storage/store.zig");
-const shared = @import("../../../../../engine/runtime/text/backend_scheme.zig");
+const parallel_rows = @import("../../../core/threading/parallel_rows.zig");
+const quantized = @import("../../../../legacy/zinfer/src/tensor/formats/quantized.zig");
+const safetensors = @import("../../../../legacy/zinfer/src/format/safetensors.zig");
+const tensor_store = @import("../../../../legacy/zinfer/src/tensor/storage/store.zig");
+const shared = @import("../backend_scheme.zig");
 
 pub const Scheme = shared.Scheme;
 

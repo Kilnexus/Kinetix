@@ -6,8 +6,8 @@ const kv_cache_cache = @import("../kv_cache/cache.zig");
 const layer_mod = @import("layer.zig");
 const optimized_decoder_support = @import("support.zig");
 const workspace_mod = @import("workspace.zig");
-const tensor_backend = @import("../../../../legacy/zinfer/src/tensor/backends/backend.zig");
-const parallel_rows = @import("../../../../legacy/zinfer/src/tensor/parallel/parallel_rows.zig");
+const tensor_backend = @import("../backend/backend.zig");
+const parallel_rows = @import("../../../core/threading/parallel_rows.zig");
 
 pub const Runtime = struct {
     allocator: std.mem.Allocator,

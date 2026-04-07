@@ -27,7 +27,6 @@ pub fn main() !void {
 test {
     std.testing.refAllDecls(@This());
     _ = @import("../../../../engine/runtime/text/core/cpu.zig");
-    _ = @import("kernel/attention/attention.zig");
     _ = @import("../../../../engine/runtime/text/chat_types.zig");
     _ = @import("../../../../engine/runtime/text/decoder_types.zig");
     _ = @import("../../../../engine/runtime/text/logits.zig");
@@ -41,7 +40,7 @@ test {
     _ = @import("../../../../engine/runtime/text/optimized_decoder/runtime.zig");
     _ = @import("../../../../engine/runtime/text/optimized_decoder/batch.zig");
     _ = @import("../../../../engine/runtime/text/optimized_decoder/workspace.zig");
-    _ = @import("tensor/backends/backend.zig");
+    _ = @import("../../../../engine/runtime/text/backend/backend.zig");
     _ = @import("../../../../engine/runtime/text/bpe.zig");
     _ = @import("tensor/formats/quantized.zig");
     _ = @import("sampling/sampler.zig");

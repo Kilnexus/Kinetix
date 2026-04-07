@@ -1,6 +1,6 @@
 const std = @import("std");
 const decoder_family = @import("../decoder_family.zig");
-const tensor_backend = @import("../../../../legacy/zinfer/src/tensor/backends/backend.zig");
+const tensor_backend = @import("../backend/backend.zig");
 const weights_layout = @import("../weights_layout.zig");
 
 pub fn allocVector(
