@@ -1,5 +1,6 @@
 const std = @import("std");
 const chat_types = @import("common/chat_types.zig");
+const bpe_tokenizer = @import("../bpe.zig");
 const decoder_types = @import("../decoder_types.zig");
 const generic_block = @import("../block_layout.zig");
 const weights_layout = @import("../weights_layout.zig");
@@ -8,10 +9,50 @@ const qwen3_family = @import("qwen3/family.zig");
 
 pub const Architecture = decoder_types.Architecture;
 pub const ThinkingMode = chat_types.ThinkingMode;
+pub const Role = chat_types.Role;
+pub const ToolCall = chat_types.ToolCall;
 pub const Message = chat_types.Message;
 pub const ParsedConfig = decoder_types.ParsedConfig;
 pub const CommonWeights = weights_layout.CommonWeights;
 pub const LayerTensorKind = weights_layout.LayerTensorKind;
+pub const Tokenizer = union(Architecture) {
+    qwen3: bpe_tokenizer.Tokenizer,
+    bert: void,
+
+    pub fn loadFromModelDir(
+        backing_allocator: std.mem.Allocator,
+        architecture: Architecture,
+        model_dir: []const u8,
+    ) !Tokenizer {
+        return switch (architecture) {
+            .qwen3 => .{
+                .qwen3 = try qwen3_family.loadTokenizerFromModelDir(backing_allocator, model_dir),
+            },
+            .bert => error.UnsupportedArchitectureForGeneration,
+        };
+    }
+
+    pub fn deinit(self: *Tokenizer) void {
+        switch (self.*) {
+            .qwen3 => |*tokenizer| tokenizer.deinit(),
+            .bert => {},
+        }
+    }
+
+    pub fn encodeAlloc(self: *const Tokenizer, allocator: std.mem.Allocator, text: []const u8) ![]u32 {
+        return switch (self.*) {
+            .qwen3 => |*tokenizer| tokenizer.encodeAlloc(allocator, text),
+            .bert => error.UnsupportedArchitectureForGeneration,
+        };
+    }
+
+    pub fn decodeAlloc(self: *const Tokenizer, allocator: std.mem.Allocator, ids: []const u32) ![]u8 {
+        return switch (self.*) {
+            .qwen3 => |*tokenizer| tokenizer.decodeAlloc(allocator, ids),
+            .bert => error.UnsupportedArchitectureForGeneration,
+        };
+    }
+};
 
 pub fn detectArchitecture(model_type: []const u8) ?Architecture {
     if (std.mem.eql(u8, model_type, qwen3_family.model_type)) return .qwen3;
@@ -25,6 +66,14 @@ pub fn loadParsedConfig(backing_allocator: std.mem.Allocator, path: []const u8) 
         .qwen3 => try qwen3_family.loadParsedConfig(backing_allocator, path),
         .bert => try bert_family.loadParsedConfig(backing_allocator, path),
     };
+}
+
+pub fn loadTokenizerFromModelDir(
+    backing_allocator: std.mem.Allocator,
+    architecture: Architecture,
+    model_dir: []const u8,
+) !Tokenizer {
+    return try Tokenizer.loadFromModelDir(backing_allocator, architecture, model_dir);
 }
 
 pub fn eosTokenIds(architecture: Architecture) []const u32 {

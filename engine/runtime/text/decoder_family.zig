@@ -1,59 +1,19 @@
 const std = @import("std");
-const chat_types = @import("families/common/chat_types.zig");
 const decoder_types = @import("decoder_types.zig");
 const logits_util = @import("logits.zig");
 const family_registry = @import("families/registry.zig");
-const qwen3_family = @import("families/qwen3/family.zig");
 
 pub const Architecture = decoder_types.Architecture;
-pub const ThinkingMode = chat_types.ThinkingMode;
-pub const Role = chat_types.Role;
-pub const ToolCall = chat_types.ToolCall;
-pub const Message = chat_types.Message;
+pub const ThinkingMode = family_registry.ThinkingMode;
+pub const Role = family_registry.Role;
+pub const ToolCall = family_registry.ToolCall;
+pub const Message = family_registry.Message;
 pub const TopLogit = logits_util.TopLogit;
 pub const CommonWeights = family_registry.CommonWeights;
 pub const LayerTensorKind = family_registry.LayerTensorKind;
 pub const DecoderConfig = decoder_types.DecoderConfig;
 pub const ParsedConfig = decoder_types.ParsedConfig;
-
-pub const Tokenizer = union(Architecture) {
-    qwen3: qwen3_family.TokenizerImpl,
-    bert: void,
-
-    pub fn loadFromModelDir(
-        backing_allocator: std.mem.Allocator,
-        architecture: Architecture,
-        model_dir: []const u8,
-    ) !Tokenizer {
-        return switch (architecture) {
-            .qwen3 => .{
-                .qwen3 = try qwen3_family.loadTokenizerFromModelDir(backing_allocator, model_dir),
-            },
-            .bert => error.UnsupportedArchitectureForGeneration,
-        };
-    }
-
-    pub fn deinit(self: *Tokenizer) void {
-        switch (self.*) {
-            .qwen3 => |*tokenizer| tokenizer.deinit(),
-            .bert => {},
-        }
-    }
-
-    pub fn encodeAlloc(self: *const Tokenizer, allocator: std.mem.Allocator, text: []const u8) ![]u32 {
-        return switch (self.*) {
-            .qwen3 => |*tokenizer| tokenizer.encodeAlloc(allocator, text),
-            .bert => error.UnsupportedArchitectureForGeneration,
-        };
-    }
-
-    pub fn decodeAlloc(self: *const Tokenizer, allocator: std.mem.Allocator, ids: []const u32) ![]u8 {
-        return switch (self.*) {
-            .qwen3 => |*tokenizer| tokenizer.decodeAlloc(allocator, ids),
-            .bert => error.UnsupportedArchitectureForGeneration,
-        };
-    }
-};
+pub const Tokenizer = family_registry.Tokenizer;
 
 pub const argMaxLogit = logits_util.argMaxLogit;
 pub const topKLogitsAlloc = logits_util.topKLogitsAlloc;
@@ -71,7 +31,7 @@ pub fn loadTokenizerFromModelDir(
     architecture: Architecture,
     model_dir: []const u8,
 ) !Tokenizer {
-    return try Tokenizer.loadFromModelDir(backing_allocator, architecture, model_dir);
+    return try family_registry.loadTokenizerFromModelDir(backing_allocator, architecture, model_dir);
 }
 
 pub fn eosTokenIds(architecture: Architecture) []const u32 {
