@@ -4,6 +4,7 @@ const decoder_types = @import("decoder_types.zig");
 const generic_block = @import("block_layout.zig");
 const logits_util = @import("logits.zig");
 const weights_layout = @import("weights_layout.zig");
+const bert_family = @import("families/bert/family.zig");
 const qwen3_family = @import("families/qwen3/family.zig");
 
 pub const Architecture = decoder_types.Architecture;
@@ -65,33 +66,12 @@ const qwen3_inspect_sample_tensors = [_][]const u8{
     "lm_head.weight",
 };
 
-const bert_inspect_sample_tensors = [_][]const u8{
-    "bert.embeddings.word_embeddings.weight",
-    "bert.embeddings.position_embeddings.weight",
-    "bert.encoder.layer.0.attention.self.query.weight",
-    "bert.encoder.layer.0.attention.self.key.weight",
-    "bert.encoder.layer.0.intermediate.dense.weight",
-    "cls.predictions.transform.dense.weight",
-};
-
-const BertConfig = struct {
-    hidden_size: usize,
-    intermediate_size: usize,
-    layer_norm_eps: f64,
-    max_position_embeddings: usize,
-    model_type: []const u8,
-    num_attention_heads: usize,
-    num_hidden_layers: usize,
-    vocab_size: usize,
-    torch_dtype: []const u8 = "float32",
-};
-
 pub const argMaxLogit = logits_util.argMaxLogit;
 pub const topKLogitsAlloc = logits_util.topKLogitsAlloc;
 
 pub fn detectArchitecture(model_type: []const u8) ?Architecture {
     if (std.mem.eql(u8, model_type, qwen3_family.model_type)) return .qwen3;
-    if (std.mem.eql(u8, model_type, "bert")) return .bert;
+    if (std.mem.eql(u8, model_type, bert_family.model_type)) return .bert;
     return null;
 }
 
@@ -99,7 +79,7 @@ pub fn loadConfigFromFile(backing_allocator: std.mem.Allocator, path: []const u8
     const architecture = try detectArchitectureFromConfigFile(backing_allocator, path);
     return switch (architecture) {
         .qwen3 => try qwen3_family.loadParsedConfig(backing_allocator, path),
-        .bert => try loadBertConfigFromFile(backing_allocator, path),
+        .bert => try bert_family.loadParsedConfig(backing_allocator, path),
     };
 }
 
@@ -231,14 +211,14 @@ pub fn assistantHistoryContent(
 pub fn inspectSampleTensorNames(architecture: Architecture) []const []const u8 {
     return switch (architecture) {
         .qwen3 => &qwen3_inspect_sample_tensors,
-        .bert => &bert_inspect_sample_tensors,
+        .bert => &bert_family.inspect_sample_tensors,
     };
 }
 
 pub fn supportsGeneration(architecture: Architecture) bool {
     return switch (architecture) {
         .qwen3 => true,
-        .bert => false,
+        .bert => bert_family.supportsGeneration(),
     };
 }
 
@@ -276,37 +256,6 @@ fn readFileAllocAtPath(
         return file.readToEndAlloc(allocator, max_bytes);
     }
     return std.fs.cwd().readFileAlloc(allocator, path, max_bytes);
-}
-
-fn loadBertConfigFromFile(backing_allocator: std.mem.Allocator, path: []const u8) !ParsedConfig {
-    var arena = std.heap.ArenaAllocator.init(backing_allocator);
-    errdefer arena.deinit();
-
-    const allocator = arena.allocator();
-    const bytes = try readFileAllocAtPath(allocator, path, 1024 * 1024);
-    const config = try std.json.parseFromSliceLeaky(BertConfig, allocator, bytes, .{
-        .ignore_unknown_fields = true,
-    });
-
-    return .{
-        .arena = arena,
-        .value = .{
-            .architecture = .bert,
-            .model_type = config.model_type,
-            .hidden_size = config.hidden_size,
-            .intermediate_size = config.intermediate_size,
-            .num_hidden_layers = config.num_hidden_layers,
-            .num_attention_heads = config.num_attention_heads,
-            .num_key_value_heads = config.num_attention_heads,
-            .head_dim = config.hidden_size / config.num_attention_heads,
-            .vocab_size = config.vocab_size,
-            .max_position_embeddings = config.max_position_embeddings,
-            .rope_theta = 0.0,
-            .rms_norm_eps = config.layer_norm_eps,
-            .torch_dtype = config.torch_dtype,
-            .tie_word_embeddings = false,
-        },
-    };
 }
 
 test "family detects qwen3 model type" {

@@ -7,6 +7,7 @@ const load_plan = kinetix.runtime.load_plan;
 const adapter_mod = kinetix.adapter;
 const registry_mod = kinetix.registry;
 const task = kinetix.core.task;
+const decoder_family = kinetix.runtime.text.decoder_family;
 const text_native_dispatch = kinetix.runtime.text.native_dispatch;
 const native_batch_bridge = if (builtin.is_test) struct {
     pub fn executeQwenSingle(
@@ -229,9 +230,11 @@ fn detectModelFamily(allocator: std.mem.Allocator, config_path: []const u8) !Mod
     const model_type_value = parsed.value.object.get("model_type") orelse return .unknown;
     if (model_type_value != .string) return error.InvalidModelType;
 
-    if (std.mem.eql(u8, model_type_value.string, "qwen3")) return .qwen3;
-    if (std.mem.eql(u8, model_type_value.string, "bert")) return .bert;
-    return .unknown;
+    const architecture = decoder_family.detectArchitecture(model_type_value.string) orelse return .unknown;
+    return switch (architecture) {
+        .qwen3 => .qwen3,
+        .bert => .bert,
+    };
 }
 
 fn buildSubmissions(self: *const TextAdapter, allocator: std.mem.Allocator, requests: []const task.TaskRequest) ![]adapter_mod.Submission {
