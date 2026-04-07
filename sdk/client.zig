@@ -39,6 +39,38 @@ pub const OCROptions = struct {
     preferred_weights: backend.WeightScheme = .auto,
 };
 
+pub const OpenModelOptions = struct {
+    preferred_weights: backend.WeightScheme = .auto,
+};
+
+pub const TextModelGenerateOptions = struct {
+    execution: task.ExecutionMode = .sync,
+    max_tokens: ?usize = null,
+    native_exec: bool = false,
+};
+
+pub const TextModelBatchItem = struct {
+    input: []const u8,
+    execution: task.ExecutionMode = .sync,
+    max_tokens: ?usize = null,
+    native_exec: bool = false,
+    allows_batching: bool = true,
+};
+
+pub const TextModelChatOptions = struct {
+    execution: task.ExecutionMode = .sync,
+    max_tokens: ?usize = null,
+    native_exec: bool = false,
+};
+
+pub const VisionModelDetectOptions = struct {
+    execution: task.ExecutionMode = .sync,
+};
+
+pub const OCRModelInferOptions = struct {
+    execution: task.ExecutionMode = .sync,
+};
+
 pub const TextGenerationResult = struct {
     adapter_id: []u8,
     model_family: []u8,
@@ -172,11 +204,176 @@ const ParsedOCRReceipt = struct {
     image_height: ?usize,
 };
 
+const OpenedModelKind = enum {
+    text,
+    vision,
+    ocr,
+};
+
+pub const TextModel = struct {
+    allocator: std.mem.Allocator,
+    client: KinetixClient,
+    model_dir: []u8,
+    preferred_weights: backend.WeightScheme,
+
+    pub fn deinit(self: *TextModel) void {
+        self.allocator.free(self.model_dir);
+        self.* = undefined;
+    }
+
+    pub fn generate(self: *const TextModel, prompt: []const u8, options: TextModelGenerateOptions) !TextGenerationResult {
+        return try self.client.generateText(self.model_dir, prompt, .{
+            .operation = "generate",
+            .execution = options.execution,
+            .preferred_weights = self.preferred_weights,
+            .max_tokens = options.max_tokens,
+            .native_exec = options.native_exec,
+        });
+    }
+
+    pub fn chat(self: *const TextModel, prompt: []const u8, options: TextModelChatOptions) !TextGenerationResult {
+        return try self.client.generateText(self.model_dir, prompt, .{
+            .operation = "chat",
+            .execution = options.execution,
+            .preferred_weights = self.preferred_weights,
+            .max_tokens = options.max_tokens,
+            .native_exec = options.native_exec,
+        });
+    }
+
+    pub fn generateBatch(self: *const TextModel, items: []const TextModelBatchItem) !TextBatchGenerationResult {
+        if (items.len == 0) return error.EmptyBatch;
+
+        const batch_items = try self.allocator.alloc(TextBatchItem, items.len);
+        defer self.allocator.free(batch_items);
+
+        for (items, batch_items) |item, *slot| {
+            slot.* = .{
+                .input = item.input,
+                .operation = "generate",
+                .execution = item.execution,
+                .max_tokens = item.max_tokens,
+                .native_exec = item.native_exec,
+                .allows_batching = item.allows_batching,
+            };
+        }
+
+        return try self.client.generateTextBatch(self.model_dir, batch_items, .{
+            .preferred_weights = self.preferred_weights,
+        });
+    }
+};
+
+pub const VisionModel = struct {
+    allocator: std.mem.Allocator,
+    client: KinetixClient,
+    model_dir: []u8,
+    preferred_weights: backend.WeightScheme,
+
+    pub fn deinit(self: *VisionModel) void {
+        self.allocator.free(self.model_dir);
+        self.* = undefined;
+    }
+
+    pub fn detect(self: *const VisionModel, image_path: []const u8, options: VisionModelDetectOptions) !DetectionResult {
+        return try self.client.detect(self.model_dir, image_path, .{
+            .operation = "detect",
+            .execution = options.execution,
+            .preferred_weights = self.preferred_weights,
+        });
+    }
+};
+
+pub const OCRModel = struct {
+    allocator: std.mem.Allocator,
+    client: KinetixClient,
+    model_dir: []u8,
+    preferred_weights: backend.WeightScheme,
+
+    pub fn deinit(self: *OCRModel) void {
+        self.allocator.free(self.model_dir);
+        self.* = undefined;
+    }
+
+    pub fn infer(self: *const OCRModel, image_path: []const u8, options: OCRModelInferOptions) !OCRResult {
+        return try self.client.inferOCR(self.model_dir, image_path, .{
+            .operation = "infer-ocr",
+            .execution = options.execution,
+            .preferred_weights = self.preferred_weights,
+        });
+    }
+};
+
+pub const OpenedModel = union(enum) {
+    text: TextModel,
+    vision: VisionModel,
+    ocr: OCRModel,
+
+    pub fn deinit(self: *OpenedModel) void {
+        switch (self.*) {
+            .text => |*model| model.deinit(),
+            .vision => |*model| model.deinit(),
+            .ocr => |*model| model.deinit(),
+        }
+    }
+};
+
 pub const KinetixClient = struct {
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) KinetixClient {
         return .{ .allocator = allocator };
+    }
+
+    pub fn openTextModel(
+        self: KinetixClient,
+        model_dir: []const u8,
+        options: OpenModelOptions,
+    ) !TextModel {
+        return .{
+            .allocator = self.allocator,
+            .client = self,
+            .model_dir = try self.allocator.dupe(u8, model_dir),
+            .preferred_weights = options.preferred_weights,
+        };
+    }
+
+    pub fn openVisionModel(
+        self: KinetixClient,
+        model_dir: []const u8,
+        options: OpenModelOptions,
+    ) !VisionModel {
+        return .{
+            .allocator = self.allocator,
+            .client = self,
+            .model_dir = try self.allocator.dupe(u8, model_dir),
+            .preferred_weights = options.preferred_weights,
+        };
+    }
+
+    pub fn openOCRModel(
+        self: KinetixClient,
+        model_dir: []const u8,
+        options: OpenModelOptions,
+    ) !OCRModel {
+        return .{
+            .allocator = self.allocator,
+            .client = self,
+            .model_dir = try self.allocator.dupe(u8, model_dir),
+            .preferred_weights = options.preferred_weights,
+        };
+    }
+
+    pub fn openModel(
+        self: KinetixClient,
+        model_dir: []const u8,
+        options: OpenModelOptions,
+    ) !OpenedModel {
+        return switch (try detectOpenedModelKind(self.allocator, model_dir)) {
+            .text => .{ .text = try self.openTextModel(model_dir, options) },
+            .vision => .{ .vision = try self.openVisionModel(model_dir, options) },
+            .ocr => .{ .ocr = try self.openOCRModel(model_dir, options) },
+        };
     }
 
     pub fn generateText(
@@ -456,6 +653,17 @@ fn dupeOptionalString(allocator: std.mem.Allocator, value: ?[]const u8) !?[]u8 {
     return null;
 }
 
+fn detectOpenedModelKind(allocator: std.mem.Allocator, model_dir: []const u8) !OpenedModelKind {
+    var catalog = try backend.ModelCatalog.discover(allocator, model_dir);
+    defer catalog.deinit();
+
+    if (catalog.has(.graph_json) and catalog.has(.weights_bin)) return .vision;
+    if (catalog.has(.config) and catalog.has(.tokenizer_json) and (catalog.resolveAutoScheme() != .auto or catalog.has(.safetensors))) return .text;
+    if (catalog.has(.ocr_model)) return .ocr;
+
+    return error.UnsupportedModelDirectory;
+}
+
 fn allBatchResultsHaveText(report: engine.runtime.batch_executor.BatchExecutionReport) bool {
     for (report.batches) |batch| {
         for (batch.request_results) |request_result| {
@@ -632,6 +840,112 @@ test "client generateTextBatch falls back to sequential typed generation when ba
     try std.testing.expectEqual(@as(usize, 2), result.items.len);
     try std.testing.expectEqualStrings("stub-native-single", result.items[0].text);
     try std.testing.expectEqualStrings("stub-native-single", result.items[1].text);
+}
+
+test "client openTextModel exposes operation-specific methods without operation strings" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "config.json", "{\"model_type\":\"qwen3\"}");
+    try writeTmpFile(tmp.dir, "tokenizer.json", "{}");
+    try writeTmpFile(tmp.dir, "model.q8.zinfer", "q8");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    const client = KinetixClient.init(std.testing.allocator);
+    var model = try client.openTextModel(root_path, .{});
+    defer model.deinit();
+
+    var generate_result = try model.generate("hello", .{
+        .native_exec = true,
+        .max_tokens = 8,
+    });
+    defer generate_result.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("stub-native-single", generate_result.text);
+
+    var chat_result = try model.chat("hello", .{
+        .native_exec = true,
+        .max_tokens = 8,
+    });
+    defer chat_result.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("stub-native-single", chat_result.text);
+}
+
+test "client openModel auto-detects text models" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "config.json", "{\"model_type\":\"qwen3\"}");
+    try writeTmpFile(tmp.dir, "tokenizer.json", "{}");
+    try writeTmpFile(tmp.dir, "model.q8.zinfer", "q8");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    const client = KinetixClient.init(std.testing.allocator);
+    var opened = try client.openModel(root_path, .{});
+    defer opened.deinit();
+
+    switch (opened) {
+        .text => {},
+        else => return error.ExpectedTextModel,
+    }
+}
+
+test "client openModel auto-detects vision models" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "graph.json",
+        \\{
+        \\  "format_version": 1,
+        \\  "model_name": "vision-yolo",
+        \\  "metadata": {},
+        \\  "tensors": [],
+        \\  "execution_plan": [
+        \\    { "index": 0, "path": "pipeline.detect", "kind": "Detect", "from": [-1] }
+        \\  ],
+        \\  "component_tree": {
+        \\    "path": "pipeline",
+        \\    "kind": "Pipeline",
+        \\    "attrs": {},
+        \\    "children": []
+        \\  }
+        \\}
+    );
+    try writeTmpFile(tmp.dir, "weights.bin", "vision");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    const client = KinetixClient.init(std.testing.allocator);
+    var opened = try client.openModel(root_path, .{});
+    defer opened.deinit();
+
+    switch (opened) {
+        .vision => {},
+        else => return error.ExpectedVisionModel,
+    }
+}
+
+test "client openModel auto-detects ocr models" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeOCRModel(tmp.dir, "demo.swm", 0);
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    const client = KinetixClient.init(std.testing.allocator);
+    var opened = try client.openModel(root_path, .{});
+    defer opened.deinit();
+
+    switch (opened) {
+        .ocr => {},
+        else => return error.ExpectedOCRModel,
+    }
 }
 
 fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {

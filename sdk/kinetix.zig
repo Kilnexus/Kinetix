@@ -9,6 +9,10 @@ pub const adapter = engine.adapter;
 pub const registry = engine.registry;
 pub const scheduler = engine.scheduler;
 pub const KinetixClient = client.KinetixClient;
+pub const OpenedModel = client.OpenedModel;
+pub const TextModel = client.TextModel;
+pub const VisionModel = client.VisionModel;
+pub const OCRModel = client.OCRModel;
 
 test {
     _ = execution;
