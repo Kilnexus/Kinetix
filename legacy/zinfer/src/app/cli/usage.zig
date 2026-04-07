@@ -17,15 +17,6 @@ pub fn printUsage() !void {
         \\  zinfer probe-model [model_dir] <token_id> <top_k>
         \\  zinfer generate-token-ids [seed_ids_csv] [steps]
         \\  zinfer generate-token-ids [model_dir] <seed_ids_csv> <steps>
-        \\  zinfer bench <text> [max_new_tokens]
-        \\  zinfer bench [model_dir] <text> <max_new_tokens>
-        \\  zinfer bench-batch <text> <batch_size> [max_new_tokens]
-        \\  zinfer bench-batch [model_dir] <text> <batch_size> [max_new_tokens]
-        \\  zinfer bench-continuous <text> <batch_size> <total_requests> [max_new_tokens]
-        \\  zinfer bench-continuous [model_dir] <text> <batch_size> <total_requests> [max_new_tokens]
-        \\  zinfer bench-ops [iterations]
-        \\  zinfer bench-ops [model_dir] [iterations]
-        \\  zinfer bench-suite [model_dir]
         \\  zinfer quantize <q8|q6|q4>
         \\  zinfer quantize <q8|q6|q4> [model_dir]
         \\  zinfer tokenize <text>

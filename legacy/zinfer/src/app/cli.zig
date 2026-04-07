@@ -158,65 +158,6 @@ pub fn run(allocator: std.mem.Allocator) !void {
         return error.InvalidCommand;
     }
 
-    if (std.mem.eql(u8, command, "bench")) {
-        var invocation = try cli_args.parseBenchInvocation(allocator, args);
-        defer invocation.deinit(allocator);
-        try cli_tools.benchPrompt(allocator, invocation.model_dir, invocation.user_text, invocation.options);
-        return;
-    }
-
-    if (std.mem.eql(u8, command, "bench-batch")) {
-        var invocation = try cli_args.parseBenchBatchInvocation(allocator, args);
-        defer invocation.deinit(allocator);
-        try cli_tools.benchBatchPrompt(
-            allocator,
-            invocation.model_dir,
-            invocation.user_text,
-            invocation.batch_size,
-            invocation.options,
-        );
-        return;
-    }
-
-    if (std.mem.eql(u8, command, "bench-continuous")) {
-        var invocation = try cli_args.parseBenchContinuousInvocation(allocator, args);
-        defer invocation.deinit(allocator);
-        try cli_tools.benchContinuousPrompt(
-            allocator,
-            invocation.model_dir,
-            invocation.user_text,
-            invocation.batch_size,
-            invocation.total_requests,
-            invocation.options,
-        );
-        return;
-    }
-
-    if (std.mem.eql(u8, command, "bench-ops")) {
-        var model_dir: []const u8 = default_model_dir;
-        var iterations: usize = 0;
-
-        if (args.len >= 3) {
-            if (std.fmt.parseInt(usize, args[2], 10)) |parsed_iterations| {
-                iterations = parsed_iterations;
-            } else |_| {
-                model_dir = args[2];
-                if (args.len >= 4) {
-                    iterations = try std.fmt.parseInt(usize, args[3], 10);
-                }
-            }
-        }
-
-        try cli_tools.benchHandwrittenOps(allocator, model_dir, iterations);
-        return;
-    }
-
-    if (std.mem.eql(u8, command, "bench-suite")) {
-        const model_dir = if (args.len >= 3) args[2] else default_model_dir;
-        try cli_tools.benchSuite(allocator, model_dir);
-        return;
-    }
-
     if (std.mem.eql(u8, command, "quantize")) {
         if (args.len == 3) {
             try cli_tools.quantizeModelDir(allocator, default_model_dir, args[2]);
