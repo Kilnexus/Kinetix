@@ -1,6 +1,6 @@
 const std = @import("std");
 const detect_types = @import("types.zig");
-const thread_pool = @import("../../thread_pool.zig");
+const thread_pool = @import("engine_global_thread_pool");
 
 const Tensor = detect_types.Tensor;
 const ConvPlan = detect_types.ConvPlan;

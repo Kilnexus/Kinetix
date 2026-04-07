@@ -26,6 +26,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     weights_mod.addImport("graph", graph_mod);
+    const global_thread_pool_mod = b.createModule(.{
+        .root_source_file = b.path("../../engine/core/threading/global_thread_pool_module.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    ops_mod.addImport("engine_global_thread_pool", global_thread_pool_mod);
     const pixio_dep = b.dependency("Pixio", .{
         .target = target,
         .optimize = optimize,
@@ -41,6 +47,7 @@ pub fn build(b: *std.Build) void {
     runtime_mod.addImport("tensor", tensor_mod);
     runtime_mod.addImport("ops", ops_mod);
     runtime_mod.addImport("weights", weights_mod);
+    runtime_mod.addImport("engine_global_thread_pool", global_thread_pool_mod);
     const vision_mod = b.createModule(.{
         .root_source_file = b.path("src/vision/preprocess.zig"),
         .target = target,
@@ -62,6 +69,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("runtime", runtime_mod);
     exe.root_module.addImport("vision", vision_mod);
     exe.root_module.addImport("weights", weights_mod);
+    exe.root_module.addImport("engine_global_thread_pool", global_thread_pool_mod);
 
     b.installArtifact(exe);
 
@@ -85,6 +93,7 @@ pub fn build(b: *std.Build) void {
     unit_tests.root_module.addImport("Pixio", pixio_mod);
     unit_tests.root_module.addImport("runtime", runtime_mod);
     unit_tests.root_module.addImport("vision", vision_mod);
+    unit_tests.root_module.addImport("engine_global_thread_pool", global_thread_pool_mod);
 
     const run_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run Zig unit tests");

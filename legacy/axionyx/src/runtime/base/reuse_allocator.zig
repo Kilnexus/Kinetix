@@ -116,6 +116,7 @@ pub const ReuseAllocator = struct {
                 self.child.rawFree(memory, alignment, ret_addr);
                 return;
             }
+
             self.cache.append(self.child, .{
                 .ptr = memory.ptr,
                 .len = meta.len,

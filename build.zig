@@ -40,6 +40,7 @@ const LegacyImports = struct {
     tensor: *std.Build.Module,
     ops: *std.Build.Module,
     weights: *std.Build.Module,
+    global_thread_pool: *std.Build.Module,
     runtime: *std.Build.Module,
     legacy_vision: *std.Build.Module,
 };
@@ -99,6 +100,12 @@ fn addLegacyImports(
         .optimize = optimize,
     });
     weights.addImport("graph", graph);
+    const global_thread_pool = b.createModule(.{
+        .root_source_file = b.path("engine/core/threading/global_thread_pool_module.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    ops.addImport("engine_global_thread_pool", global_thread_pool);
 
     const runtime = b.createModule(.{
         .root_source_file = b.path("legacy/axionyx/src/runtime/runtime.zig"),
@@ -109,6 +116,7 @@ fn addLegacyImports(
     runtime.addImport("tensor", tensor);
     runtime.addImport("ops", ops);
     runtime.addImport("weights", weights);
+    runtime.addImport("engine_global_thread_pool", global_thread_pool);
 
     const legacy_vision = b.createModule(.{
         .root_source_file = b.path("legacy/axionyx/src/vision/preprocess.zig"),
@@ -124,6 +132,7 @@ fn addLegacyImports(
         .tensor = tensor,
         .ops = ops,
         .weights = weights,
+        .global_thread_pool = global_thread_pool,
         .runtime = runtime,
         .legacy_vision = legacy_vision,
     };
@@ -135,6 +144,7 @@ fn addImportsToRoot(root: *std.Build.Module, imports: LegacyImports) void {
     root.addImport("tensor", imports.tensor);
     root.addImport("ops", imports.ops);
     root.addImport("weights", imports.weights);
+    root.addImport("engine_global_thread_pool", imports.global_thread_pool);
     root.addImport("runtime", imports.runtime);
     root.addImport("vision", imports.legacy_vision);
 }

@@ -1,7 +1,7 @@
 const std = @import("std");
 const common = @import("common.zig");
 const tasks = @import("tasks.zig");
-const thread_pool = @import("../../thread_pool.zig");
+const thread_pool = @import("engine_global_thread_pool");
 
 const PointwisePackKey = struct {
     ptr: usize,
