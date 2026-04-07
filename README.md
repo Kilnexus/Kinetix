@@ -19,5 +19,6 @@ Current directory intent:
 - `sdk/`: package surface and shared execution/session entrypoints
 - `engine/`: reusable runtime internals grouped by domain (`core`, `artifacts`, `runtime`, `scheduler`)
 - `engine/runtime/vision/`: layered by concern (`io`, `analysis`, `memory`, `modules`, `nn`)
+- `engine/runtime/text/`: keep generic decoder infrastructure at the root, and keep model-family-specific adaptation and optimization under `families/<model>/`
 - `adapters/`: modality adapters (`text`, `vision`, `ocr`)
 - `apps/`: executable surfaces only

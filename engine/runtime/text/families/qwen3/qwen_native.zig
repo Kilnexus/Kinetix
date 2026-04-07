@@ -1,13 +1,13 @@
 const std = @import("std");
-const backend = @import("../../artifacts/backend/backend.zig");
-const task = @import("../../core/task.zig");
-const backend_scheme = @import("backend_scheme.zig");
-const decoder_family = @import("decoder_family.zig");
-const decoder_runtime = @import("decoder_runtime.zig");
-const kv_cache = @import("kv_cache.zig");
-const text_prompts = @import("prompts.zig");
-const text_options = @import("generate_options.zig");
-const text_runtime = @import("generator_runtime.zig");
+const backend = @import("../../../../artifacts/backend/backend.zig");
+const task = @import("../../../../core/task.zig");
+const backend_scheme = @import("../../backend_scheme.zig");
+const decoder_family = @import("../../decoder_family.zig");
+const decoder_runtime = @import("../../decoder_runtime.zig");
+const kv_cache = @import("../../kv_cache.zig");
+const text_prompts = @import("../../prompts.zig");
+const text_options = @import("../../generate_options.zig");
+const text_runtime = @import("../../generator_runtime.zig");
 
 pub const NativeBatchOutput = struct {
     texts: [][]u8,

@@ -4,7 +4,7 @@ const decoder_types = @import("decoder_types.zig");
 const generic_block = @import("block_layout.zig");
 const logits_util = @import("logits.zig");
 const weights_layout = @import("weights_layout.zig");
-const qwen3_family = @import("qwen3/family.zig");
+const qwen3_family = @import("families/qwen3/family.zig");
 
 pub const Architecture = decoder_types.Architecture;
 pub const ThinkingMode = chat_types.ThinkingMode;

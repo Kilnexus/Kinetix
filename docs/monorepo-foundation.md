@@ -13,6 +13,7 @@ This repository is the integration root for the Kinetix unified inference framew
 - `sdk/`: package surface and execution/session entrypoints
 - `engine/`: shared runtime core, memory, tensor, scheduler, artifact loading
 - `engine/runtime/<modality>/`: internal runtime code grouped by concern instead of flat files
+- `engine/runtime/text/families/<model>/`: keep model-specific adapters, prompt formatting, weight layout, and native optimization paths together
 - `adapters/`: modality-specific runtimes built on top of `engine/`
 - `apps/`: CLI and service entrypoints
 - `docs/`: migration and architecture notes

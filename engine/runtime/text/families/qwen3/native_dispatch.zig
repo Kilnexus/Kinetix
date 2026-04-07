@@ -1,7 +1,7 @@
 const std = @import("std");
-const adapter_mod = @import("../../adapter/adapter.zig");
-const backend = @import("../../artifacts/backend/backend.zig");
-const task = @import("../../core/task.zig");
+const adapter_mod = @import("../../../../adapter/adapter.zig");
+const backend = @import("../../../../artifacts/backend/backend.zig");
+const task = @import("../../../../core/task.zig");
 const qwen_native = @import("qwen_native.zig");
 
 pub const NativeBatchBridge = struct {
