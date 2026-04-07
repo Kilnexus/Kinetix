@@ -1,0 +1,663 @@
+const std = @import("std");
+const engine = @import("engine_root");
+const execution = @import("sdk_execution");
+
+const adapter_mod = engine.adapter;
+const backend = engine.artifacts.backend;
+const task = engine.core.task;
+
+pub const TextGenerateOptions = struct {
+    operation: []const u8 = "generate",
+    execution: task.ExecutionMode = .sync,
+    preferred_weights: backend.WeightScheme = .auto,
+    max_tokens: ?usize = null,
+    native_exec: bool = false,
+};
+
+pub const TextBatchItem = struct {
+    input: []const u8,
+    operation: []const u8 = "generate",
+    execution: task.ExecutionMode = .sync,
+    max_tokens: ?usize = null,
+    native_exec: bool = false,
+    allows_batching: bool = true,
+};
+
+pub const TextBatchOptions = struct {
+    preferred_weights: backend.WeightScheme = .auto,
+};
+
+pub const DetectOptions = struct {
+    operation: []const u8 = "detect",
+    execution: task.ExecutionMode = .sync,
+    preferred_weights: backend.WeightScheme = .auto,
+};
+
+pub const OCROptions = struct {
+    operation: []const u8 = "infer-ocr",
+    execution: task.ExecutionMode = .sync,
+    preferred_weights: backend.WeightScheme = .auto,
+};
+
+pub const TextGenerationResult = struct {
+    adapter_id: []u8,
+    model_family: []u8,
+    accepted: bool,
+    execution: task.ExecutionMode,
+    origin: adapter_mod.ExecutionOrigin,
+    note: adapter_mod.ExecutionNote,
+    text: []u8,
+
+    pub fn deinit(self: *TextGenerationResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.adapter_id);
+        allocator.free(self.model_family);
+        allocator.free(self.text);
+        self.* = undefined;
+    }
+};
+
+pub const TextBatchGenerationItem = struct {
+    accepted: bool,
+    execution: task.ExecutionMode,
+    origin: adapter_mod.ExecutionOrigin,
+    note: adapter_mod.ExecutionNote,
+    text: []u8,
+
+    pub fn deinit(self: *TextBatchGenerationItem, allocator: std.mem.Allocator) void {
+        allocator.free(self.text);
+        self.* = undefined;
+    }
+};
+
+pub const TextBatchGenerationResult = struct {
+    adapter_id: []u8,
+    model_family: []u8,
+    used_batching: bool,
+    items: []TextBatchGenerationItem,
+
+    pub fn deinit(self: *TextBatchGenerationResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.adapter_id);
+        allocator.free(self.model_family);
+        for (self.items) |*item| item.deinit(allocator);
+        allocator.free(self.items);
+        self.* = undefined;
+    }
+};
+
+pub const Detection = struct {
+    x1: f64,
+    y1: f64,
+    x2: f64,
+    y2: f64,
+    score: f64,
+    class_id: usize,
+};
+
+pub const DetectionResult = struct {
+    adapter_id: []u8,
+    accepted: bool,
+    execution: task.ExecutionMode,
+    origin: adapter_mod.ExecutionOrigin,
+    note: adapter_mod.ExecutionNote,
+    status: []u8,
+    operation: []u8,
+    model_name: []u8,
+    model_family: []u8,
+    input_path: ?[]u8,
+    execution_nodes: usize,
+    tensor_count: usize,
+    class_count: ?usize,
+    candidate_count: ?usize,
+    detections: []Detection,
+
+    pub fn deinit(self: *DetectionResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.adapter_id);
+        allocator.free(self.status);
+        allocator.free(self.operation);
+        allocator.free(self.model_name);
+        allocator.free(self.model_family);
+        if (self.input_path) |value| allocator.free(value);
+        allocator.free(self.detections);
+        self.* = undefined;
+    }
+};
+
+pub const OCRResult = struct {
+    adapter_id: []u8,
+    accepted: bool,
+    execution: task.ExecutionMode,
+    origin: adapter_mod.ExecutionOrigin,
+    note: adapter_mod.ExecutionNote,
+    status: []u8,
+    operation: []u8,
+    model_family: []u8,
+    model_path: []u8,
+    input_path: ?[]u8,
+    loaded_tensors: ?usize,
+    image_width: ?usize,
+    image_height: ?usize,
+
+    pub fn deinit(self: *OCRResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.adapter_id);
+        allocator.free(self.status);
+        allocator.free(self.operation);
+        allocator.free(self.model_family);
+        allocator.free(self.model_path);
+        if (self.input_path) |value| allocator.free(value);
+        self.* = undefined;
+    }
+};
+
+const ParsedVisionReceipt = struct {
+    status: []const u8,
+    operation: []const u8,
+    model_name: []const u8,
+    model_family: []const u8,
+    input_path: ?[]const u8,
+    execution_nodes: usize,
+    tensor_count: usize,
+    class_count: ?usize,
+    candidate_count: ?usize,
+    detections: []Detection,
+};
+
+const ParsedOCRReceipt = struct {
+    status: []const u8,
+    operation: []const u8,
+    model_family: []const u8,
+    model_path: []const u8,
+    input_path: ?[]const u8,
+    loaded_tensors: ?usize,
+    image_width: ?usize,
+    image_height: ?usize,
+};
+
+pub const KinetixClient = struct {
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator) KinetixClient {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn generateText(
+        self: KinetixClient,
+        model_dir: []const u8,
+        prompt: []const u8,
+        options: TextGenerateOptions,
+    ) !TextGenerationResult {
+        var prepared = try execution.prepare(self.allocator, .{
+            .model_dir = model_dir,
+            .operation = options.operation,
+            .input = prompt,
+            .execution = options.execution,
+            .preferred_weights = options.preferred_weights,
+            .max_tokens = options.max_tokens,
+            .native_exec = options.native_exec,
+        });
+        defer prepared.deinit();
+
+        var result = try prepared.execute();
+        defer result.deinit(self.allocator);
+
+        return try copyTextGenerationResult(self.allocator, &prepared, result);
+    }
+
+    pub fn generateTextBatch(
+        self: KinetixClient,
+        model_dir: []const u8,
+        items: []const TextBatchItem,
+        options: TextBatchOptions,
+    ) !TextBatchGenerationResult {
+        if (items.len == 0) return error.EmptyBatch;
+
+        const batch_items = try self.allocator.alloc(execution.PrepareBatchItem, items.len);
+        defer self.allocator.free(batch_items);
+
+        for (items, batch_items) |item, *slot| {
+            slot.* = .{
+                .operation = item.operation,
+                .input = item.input,
+                .execution = item.execution,
+                .max_tokens = item.max_tokens,
+                .native_exec = item.native_exec,
+                .allows_batching = item.allows_batching,
+            };
+        }
+
+        var prepared = try execution.prepareBatch(self.allocator, .{
+            .model_dir = model_dir,
+            .preferred_weights = options.preferred_weights,
+            .items = batch_items,
+        });
+        defer prepared.deinit();
+
+        var report = prepared.execute() catch {
+            return try generateTextBatchSequentialFallback(self, model_dir, items, options.preferred_weights);
+        };
+        defer report.deinit();
+
+        if (allBatchResultsHaveText(report)) {
+            return try copyTextBatchResult(self.allocator, &prepared, report);
+        }
+
+        return try generateTextBatchSequentialFallback(self, model_dir, items, options.preferred_weights);
+    }
+
+    pub fn detect(
+        self: KinetixClient,
+        model_dir: []const u8,
+        image_path: []const u8,
+        options: DetectOptions,
+    ) !DetectionResult {
+        var prepared = try execution.prepare(self.allocator, .{
+            .model_dir = model_dir,
+            .operation = options.operation,
+            .input = image_path,
+            .execution = options.execution,
+            .preferred_weights = options.preferred_weights,
+        });
+        defer prepared.deinit();
+
+        var result = try prepared.execute();
+        defer result.deinit(self.allocator);
+
+        return try copyDetectionResult(self.allocator, result);
+    }
+
+    pub fn inferOCR(
+        self: KinetixClient,
+        model_dir: []const u8,
+        image_path: []const u8,
+        options: OCROptions,
+    ) !OCRResult {
+        var prepared = try execution.prepare(self.allocator, .{
+            .model_dir = model_dir,
+            .operation = options.operation,
+            .input = image_path,
+            .execution = options.execution,
+            .preferred_weights = options.preferred_weights,
+        });
+        defer prepared.deinit();
+
+        var result = try prepared.execute();
+        defer result.deinit(self.allocator);
+
+        return try copyOCRResult(self.allocator, result);
+    }
+};
+
+fn copyTextGenerationResult(
+    allocator: std.mem.Allocator,
+    prepared: *const execution.PreparedExecution,
+    result: adapter_mod.ExecutionResult,
+) !TextGenerationResult {
+    const text = switch (result.output) {
+        .text => |value| value,
+        else => return error.ExpectedTextOutput,
+    };
+
+    return .{
+        .adapter_id = try allocator.dupe(u8, result.submission.adapter_id),
+        .model_family = try allocator.dupe(u8, prepared.request.spec.model_family),
+        .accepted = result.submission.accepted,
+        .execution = result.submission.execution,
+        .origin = result.origin,
+        .note = result.note,
+        .text = try allocator.dupe(u8, text),
+    };
+}
+
+fn copyTextBatchResult(
+    allocator: std.mem.Allocator,
+    prepared: *const execution.PreparedBatchExecution,
+    report: engine.runtime.batch_executor.BatchExecutionReport,
+) !TextBatchGenerationResult {
+    const items = try allocator.alloc(TextBatchGenerationItem, prepared.requests.len);
+    errdefer allocator.free(items);
+
+    var seen = try allocator.alloc(bool, prepared.requests.len);
+    defer allocator.free(seen);
+    @memset(seen, false);
+
+    errdefer {
+        for (items, seen) |*item, was_seen| {
+            if (was_seen) item.deinit(allocator);
+        }
+        allocator.free(items);
+    }
+
+    for (report.batches) |batch| {
+        for (batch.request_results) |request_result| {
+            if (request_result.request_index >= items.len) return error.InvalidRequestIndex;
+            if (seen[request_result.request_index]) return error.DuplicateBatchResult;
+
+            items[request_result.request_index] = try copyTextBatchItem(allocator, request_result.result);
+            seen[request_result.request_index] = true;
+        }
+    }
+
+    for (seen) |was_seen| {
+        if (!was_seen) return error.MissingBatchResult;
+    }
+
+    return .{
+        .adapter_id = try allocator.dupe(u8, prepared.descriptor.id),
+        .model_family = try allocator.dupe(u8, prepared.descriptor.bound_model_family.?),
+        .used_batching = true,
+        .items = items,
+    };
+}
+
+fn copyTextBatchItem(allocator: std.mem.Allocator, result: adapter_mod.ExecutionResult) !TextBatchGenerationItem {
+    const text = switch (result.output) {
+        .text => |value| value,
+        else => return error.ExpectedTextOutput,
+    };
+
+    return .{
+        .accepted = result.submission.accepted,
+        .execution = result.submission.execution,
+        .origin = result.origin,
+        .note = result.note,
+        .text = try allocator.dupe(u8, text),
+    };
+}
+
+fn copyDetectionResult(allocator: std.mem.Allocator, result: adapter_mod.ExecutionResult) !DetectionResult {
+    const payload = switch (result.output) {
+        .json => |value| value,
+        else => return error.ExpectedJsonOutput,
+    };
+
+    const parsed = try std.json.parseFromSlice(ParsedVisionReceipt, allocator, payload, .{});
+    defer parsed.deinit();
+
+    const adapter_id = try allocator.dupe(u8, result.submission.adapter_id);
+    errdefer allocator.free(adapter_id);
+    const status = try allocator.dupe(u8, parsed.value.status);
+    errdefer allocator.free(status);
+    const operation = try allocator.dupe(u8, parsed.value.operation);
+    errdefer allocator.free(operation);
+    const model_name = try allocator.dupe(u8, parsed.value.model_name);
+    errdefer allocator.free(model_name);
+    const model_family = try allocator.dupe(u8, parsed.value.model_family);
+    errdefer allocator.free(model_family);
+    const input_path = try dupeOptionalString(allocator, parsed.value.input_path);
+    errdefer if (input_path) |value| allocator.free(value);
+    const detections = try copyDetections(allocator, parsed.value.detections);
+    errdefer allocator.free(detections);
+
+    return .{
+        .adapter_id = adapter_id,
+        .accepted = result.submission.accepted,
+        .execution = result.submission.execution,
+        .origin = result.origin,
+        .note = result.note,
+        .status = status,
+        .operation = operation,
+        .model_name = model_name,
+        .model_family = model_family,
+        .input_path = input_path,
+        .execution_nodes = parsed.value.execution_nodes,
+        .tensor_count = parsed.value.tensor_count,
+        .class_count = parsed.value.class_count,
+        .candidate_count = parsed.value.candidate_count,
+        .detections = detections,
+    };
+}
+
+fn copyOCRResult(allocator: std.mem.Allocator, result: adapter_mod.ExecutionResult) !OCRResult {
+    const payload = switch (result.output) {
+        .json => |value| value,
+        else => return error.ExpectedJsonOutput,
+    };
+
+    const parsed = try std.json.parseFromSlice(ParsedOCRReceipt, allocator, payload, .{});
+    defer parsed.deinit();
+
+    const adapter_id = try allocator.dupe(u8, result.submission.adapter_id);
+    errdefer allocator.free(adapter_id);
+    const status = try allocator.dupe(u8, parsed.value.status);
+    errdefer allocator.free(status);
+    const operation = try allocator.dupe(u8, parsed.value.operation);
+    errdefer allocator.free(operation);
+    const model_family = try allocator.dupe(u8, parsed.value.model_family);
+    errdefer allocator.free(model_family);
+    const model_path = try allocator.dupe(u8, parsed.value.model_path);
+    errdefer allocator.free(model_path);
+    const input_path = try dupeOptionalString(allocator, parsed.value.input_path);
+    errdefer if (input_path) |value| allocator.free(value);
+
+    return .{
+        .adapter_id = adapter_id,
+        .accepted = result.submission.accepted,
+        .execution = result.submission.execution,
+        .origin = result.origin,
+        .note = result.note,
+        .status = status,
+        .operation = operation,
+        .model_family = model_family,
+        .model_path = model_path,
+        .input_path = input_path,
+        .loaded_tensors = parsed.value.loaded_tensors,
+        .image_width = parsed.value.image_width,
+        .image_height = parsed.value.image_height,
+    };
+}
+
+fn copyDetections(allocator: std.mem.Allocator, detections: []const Detection) ![]Detection {
+    const owned = try allocator.alloc(Detection, detections.len);
+    for (detections, owned) |src, *dst| dst.* = src;
+    return owned;
+}
+
+fn dupeOptionalString(allocator: std.mem.Allocator, value: ?[]const u8) !?[]u8 {
+    if (value) |string| return try allocator.dupe(u8, string);
+    return null;
+}
+
+fn allBatchResultsHaveText(report: engine.runtime.batch_executor.BatchExecutionReport) bool {
+    for (report.batches) |batch| {
+        for (batch.request_results) |request_result| {
+            switch (request_result.result.output) {
+                .text => {},
+                else => return false,
+            }
+        }
+    }
+    return true;
+}
+
+fn generateTextBatchSequentialFallback(
+    self: KinetixClient,
+    model_dir: []const u8,
+    items: []const TextBatchItem,
+    preferred_weights: backend.WeightScheme,
+) !TextBatchGenerationResult {
+    const results = try self.allocator.alloc(TextBatchGenerationItem, items.len);
+    errdefer self.allocator.free(results);
+
+    const seen = try self.allocator.alloc(bool, items.len);
+    defer self.allocator.free(seen);
+    @memset(seen, false);
+
+    errdefer {
+        for (results, seen) |*item, was_seen| {
+            if (was_seen) item.deinit(self.allocator);
+        }
+        self.allocator.free(results);
+    }
+
+    var adapter_id: ?[]u8 = null;
+    errdefer if (adapter_id) |value| self.allocator.free(value);
+    var model_family: ?[]u8 = null;
+    errdefer if (model_family) |value| self.allocator.free(value);
+
+    for (items, 0..) |item, index| {
+        var single = try self.generateText(model_dir, item.input, .{
+            .operation = item.operation,
+            .execution = item.execution,
+            .preferred_weights = preferred_weights,
+            .max_tokens = item.max_tokens,
+            .native_exec = item.native_exec,
+        });
+        defer single.deinit(self.allocator);
+
+        if (adapter_id == null) adapter_id = try self.allocator.dupe(u8, single.adapter_id);
+        if (model_family == null) model_family = try self.allocator.dupe(u8, single.model_family);
+
+        results[index] = .{
+            .accepted = single.accepted,
+            .execution = single.execution,
+            .origin = single.origin,
+            .note = single.note,
+            .text = try self.allocator.dupe(u8, single.text),
+        };
+        seen[index] = true;
+    }
+
+    return .{
+        .adapter_id = adapter_id.?,
+        .model_family = model_family.?,
+        .used_batching = false,
+        .items = results,
+    };
+}
+
+test "client generateText returns typed result for qwen3 native execution" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "config.json", "{\"model_type\":\"qwen3\"}");
+    try writeTmpFile(tmp.dir, "tokenizer.json", "{}");
+    try writeTmpFile(tmp.dir, "model.q8.zinfer", "q8");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    const client = KinetixClient.init(std.testing.allocator);
+    var result = try client.generateText(root_path, "hello", .{
+        .native_exec = true,
+        .max_tokens = 8,
+    });
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("qwen3", result.model_family);
+    try std.testing.expectEqual(adapter_mod.ExecutionOrigin.native_single_bridge, result.origin);
+    try std.testing.expectEqual(adapter_mod.ExecutionNote.text_native_qwen_single, result.note);
+    try std.testing.expectEqualStrings("stub-native-single", result.text);
+}
+
+test "client detect returns typed detection result" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "graph.json",
+        \\{
+        \\  "format_version": 1,
+        \\  "model_name": "vision-yolo",
+        \\  "metadata": {},
+        \\  "tensors": [],
+        \\  "execution_plan": [
+        \\    { "index": 0, "path": "pipeline.detect", "kind": "Detect", "from": [-1] }
+        \\  ],
+        \\  "component_tree": {
+        \\    "path": "pipeline",
+        \\    "kind": "Pipeline",
+        \\    "attrs": {},
+        \\    "children": []
+        \\  }
+        \\}
+    );
+    try writeTmpFile(tmp.dir, "weights.bin", "vision");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    const client = KinetixClient.init(std.testing.allocator);
+    var result = try client.detect(root_path, "demo.png", .{});
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("detect_completed", result.status);
+    try std.testing.expectEqualStrings("yolo", result.model_family);
+    try std.testing.expectEqual(@as(?usize, 4), result.candidate_count);
+    try std.testing.expectEqual(@as(usize, 1), result.detections.len);
+    try std.testing.expectEqual(@as(usize, 1), result.detections[0].class_id);
+}
+
+test "client inferOCR returns typed result" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeOCRModel(tmp.dir, "demo.swm", 0);
+    try writePPMImage(tmp.dir, "demo.ppm", 1, 1, &[_]u8{ 1, 2, 3 });
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+    const image_path = try tmp.dir.realpathAlloc(std.testing.allocator, "demo.ppm");
+    defer std.testing.allocator.free(image_path);
+
+    const client = KinetixClient.init(std.testing.allocator);
+    var result = try client.inferOCR(root_path, image_path, .{});
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("ocr_infer_completed", result.status);
+    try std.testing.expectEqualStrings("swiftocr", result.model_family);
+    try std.testing.expectEqual(@as(?usize, 0), result.loaded_tensors);
+    try std.testing.expectEqual(@as(?usize, 1), result.image_width);
+    try std.testing.expectEqual(@as(?usize, 1), result.image_height);
+}
+
+test "client generateTextBatch falls back to sequential typed generation when batch outputs are not materialized" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "config.json", "{\"model_type\":\"qwen3\"}");
+    try writeTmpFile(tmp.dir, "tokenizer.json", "{}");
+    try writeTmpFile(tmp.dir, "model.q8.zinfer", "q8");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    const requests = [_]TextBatchItem{
+        .{ .input = "hello", .native_exec = true, .max_tokens = 8 },
+        .{ .input = "world", .native_exec = true, .max_tokens = 8 },
+    };
+
+    const client = KinetixClient.init(std.testing.allocator);
+    var result = try client.generateTextBatch(root_path, &requests, .{});
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expect(!result.used_batching);
+    try std.testing.expectEqual(@as(usize, 2), result.items.len);
+    try std.testing.expectEqualStrings("stub-native-single", result.items[0].text);
+    try std.testing.expectEqualStrings("stub-native-single", result.items[1].text);
+}
+
+fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {
+    var file = try dir.createFile(relative_path, .{});
+    defer file.close();
+    try file.writeAll(contents);
+}
+
+fn writeOCRModel(dir: std.fs.Dir, relative_path: []const u8, tensor_count: u32) !void {
+    var file = try dir.createFile(relative_path, .{});
+    defer file.close();
+
+    var writer_impl = file.writer(&.{});
+    const writer = &writer_impl.interface;
+    try writer.writeAll(&[_]u8{ 'S', 'W', 'O', 'C', 'R', '0', '1', 0 });
+    try writer.writeInt(u32, tensor_count, .little);
+    try writer.flush();
+}
+
+fn writePPMImage(dir: std.fs.Dir, relative_path: []const u8, width: usize, height: usize, pixels: []const u8) !void {
+    var file = try dir.createFile(relative_path, .{});
+    defer file.close();
+
+    var writer_impl = file.writer(&.{});
+    const writer = &writer_impl.interface;
+    try writer.print("P6\n{d} {d}\n255\n", .{ width, height });
+    try writer.writeAll(pixels);
+    try writer.flush();
+}
