@@ -15,7 +15,7 @@ pub fn build(b: *std.Build) void {
     });
     graph_mod.addImport("engine_vision_graph", engine_vision_graph_mod);
     const tensor_mod = b.createModule(.{
-        .root_source_file = b.path("src/nn/tensor.zig"),
+        .root_source_file = b.path("../../engine/runtime/vision/nn/tensor.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -33,7 +33,7 @@ pub fn build(b: *std.Build) void {
     engine_vision_base_mod.addImport("graph", graph_mod);
     engine_vision_base_mod.addImport("tensor", tensor_mod);
     const ops_mod = b.createModule(.{
-        .root_source_file = b.path("src/nn/ops.zig"),
+        .root_source_file = b.path("../../engine/runtime/vision/nn/ops.zig"),
         .target = target,
         .optimize = optimize,
     });

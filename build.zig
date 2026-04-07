@@ -95,7 +95,7 @@ fn addLegacyImports(
     });
     graph.addImport("engine_vision_graph", engine_vision_graph);
     const tensor = b.createModule(.{
-        .root_source_file = b.path("legacy/axionyx/src/nn/tensor.zig"),
+        .root_source_file = b.path("engine/runtime/vision/nn/tensor.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -113,7 +113,7 @@ fn addLegacyImports(
     engine_vision_base.addImport("graph", graph);
     engine_vision_base.addImport("tensor", tensor);
     const ops = b.createModule(.{
-        .root_source_file = b.path("legacy/axionyx/src/nn/ops.zig"),
+        .root_source_file = b.path("engine/runtime/vision/nn/ops.zig"),
         .target = target,
         .optimize = optimize,
     });
