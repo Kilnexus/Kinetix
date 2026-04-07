@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const legacy_imports = addLegacyImports(b, target, optimize);
 
-    const kinetix_module = createRootModule(b, target, optimize, legacy_imports, "kinetix.zig");
+    const kinetix_module = createRootModule(b, target, optimize, legacy_imports, "sdk/kinetix.zig");
 
     const kinetix_lib = b.addLibrary(.{
         .name = "kinetix",
@@ -16,7 +16,7 @@ pub fn build(b: *std.Build) void {
 
     const cli_exe = b.addExecutable(.{
         .name = "kinetix",
-        .root_module = createRootModule(b, target, optimize, legacy_imports, "kinetix_cli.zig"),
+        .root_module = createRootModule(b, target, optimize, legacy_imports, "apps/cli/entry.zig"),
     });
     b.installArtifact(cli_exe);
 
@@ -27,7 +27,7 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the Kinetix CLI");
     run_step.dependOn(&run_cmd.step);
 
-    const unit_tests = b.addTest(.{ .root_module = createRootModule(b, target, optimize, legacy_imports, "kinetix.zig") });
+    const unit_tests = b.addTest(.{ .root_module = createRootModule(b, target, optimize, legacy_imports, "sdk/kinetix.zig") });
 
     const run_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run Kinetix engine tests");
@@ -35,6 +35,10 @@ pub fn build(b: *std.Build) void {
 }
 
 const LegacyImports = struct {
+    engine_root: *std.Build.Module,
+    adapters_root: *std.Build.Module,
+    sdk_execution: *std.Build.Module,
+    kinetix_sdk: *std.Build.Module,
     pixio: *std.Build.Module,
     graph: *std.Build.Module,
     engine_vision_inspect: *std.Build.Module,
@@ -71,6 +75,33 @@ fn addLegacyImports(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 ) LegacyImports {
+    const engine_root = b.createModule(.{
+        .root_source_file = b.path("engine/kinetix.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const adapters_root = b.createModule(.{
+        .root_source_file = b.path("adapters/adapters.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    adapters_root.addImport("engine_root", engine_root);
+    const sdk_execution = b.createModule(.{
+        .root_source_file = b.path("sdk/execution/session.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    sdk_execution.addImport("engine_root", engine_root);
+    sdk_execution.addImport("adapters_root", adapters_root);
+    const kinetix_sdk = b.createModule(.{
+        .root_source_file = b.path("sdk/kinetix.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    kinetix_sdk.addImport("engine_root", engine_root);
+    kinetix_sdk.addImport("adapters_root", adapters_root);
+    kinetix_sdk.addImport("sdk_execution", sdk_execution);
+
     const pixio = b.createModule(.{
         .root_source_file = b.path("../Pixio/src/Pixio.zig"),
         .target = target,
@@ -93,7 +124,7 @@ fn addLegacyImports(
         .optimize = optimize,
     });
     const engine_vision_inspect = b.createModule(.{
-        .root_source_file = b.path("engine/runtime/vision/inspect.zig"),
+        .root_source_file = b.path("engine/runtime/vision/analysis/inspect.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -137,7 +168,7 @@ fn addLegacyImports(
     engine_vision_modules.addImport("engine_global_thread_pool", global_thread_pool);
     engine_vision_modules.addImport("engine_vision_base", engine_vision_base);
     const engine_vision_reuse_allocator = b.createModule(.{
-        .root_source_file = b.path("engine/runtime/vision/reuse_allocator.zig"),
+        .root_source_file = b.path("engine/runtime/vision/memory/reuse_allocator.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -170,14 +201,22 @@ fn addLegacyImports(
     runtime.addImport("engine_vision_engine", engine_vision_engine);
 
     const legacy_vision = b.createModule(.{
-        .root_source_file = b.path("engine/runtime/vision/preprocess.zig"),
+        .root_source_file = b.path("engine/runtime/vision/io/preprocess.zig"),
         .target = target,
         .optimize = optimize,
     });
     legacy_vision.addImport("Pixio", pixio);
     legacy_vision.addImport("runtime", runtime);
+    adapters_root.addImport("graph", graph);
+    adapters_root.addImport("runtime", runtime);
+    adapters_root.addImport("vision", legacy_vision);
+    adapters_root.addImport("weights", weights);
 
     return .{
+        .engine_root = engine_root,
+        .adapters_root = adapters_root,
+        .sdk_execution = sdk_execution,
+        .kinetix_sdk = kinetix_sdk,
         .pixio = pixio,
         .graph = graph,
         .engine_vision_inspect = engine_vision_inspect,
@@ -195,6 +234,10 @@ fn addLegacyImports(
 }
 
 fn addImportsToRoot(root: *std.Build.Module, imports: LegacyImports) void {
+    root.addImport("engine_root", imports.engine_root);
+    root.addImport("adapters_root", imports.adapters_root);
+    root.addImport("sdk_execution", imports.sdk_execution);
+    root.addImport("kinetix_sdk", imports.kinetix_sdk);
     root.addImport("Pixio", imports.pixio);
     root.addImport("graph", imports.graph);
     root.addImport("engine_vision_inspect", imports.engine_vision_inspect);

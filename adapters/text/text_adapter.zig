@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const kinetix = @import("../../engine/kinetix.zig");
+const kinetix = @import("engine_root");
 
 const backend = kinetix.artifacts.backend;
 const load_plan = kinetix.runtime.load_plan;

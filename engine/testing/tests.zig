@@ -8,10 +8,11 @@ const registry_mod = @import("../registry/registry.zig");
 const batch_executor_mod = @import("../runtime/batch_executor.zig");
 const load_plan = @import("../runtime/load_plan.zig");
 const scheduler_mod = @import("../scheduler/scheduler.zig");
-const adapter_factory_mod = @import("../../adapters/factory.zig");
-const ocr_adapter_mod = @import("../../adapters/ocr/ocr.zig");
-const text_adapter_mod = @import("../../adapters/text/text.zig");
-const vision_adapter_mod = @import("../../adapters/vision/vision.zig");
+const adapters_root = @import("adapters_root");
+const adapter_factory_mod = adapters_root.factory;
+const ocr_adapter_mod = adapters_root.ocr;
+const text_adapter_mod = adapters_root.text;
+const vision_adapter_mod = adapters_root.vision;
 
 const MockState = struct {
     adapter_id: []const u8,

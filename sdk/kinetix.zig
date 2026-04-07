@@ -1,6 +1,6 @@
-pub const engine = @import("engine/kinetix.zig");
-pub const adapters = @import("adapters/adapters.zig");
-pub const execution = @import("execution.zig");
+pub const engine = @import("engine_root");
+pub const adapters = @import("adapters_root");
+pub const execution = @import("sdk_execution");
 pub const core = engine.core;
 pub const artifacts = engine.artifacts;
 pub const runtime = engine.runtime;

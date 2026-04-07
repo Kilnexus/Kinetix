@@ -1,6 +1,22 @@
-pub const image = @import("image.zig");
-pub const preprocess = @import("preprocess.zig");
-pub const inspect = @import("inspect.zig");
-pub const base = @import("base.zig");
-pub const engine = @import("engine.zig");
+pub const io = struct {
+    pub const image = @import("io/image.zig");
+    pub const preprocess = @import("io/preprocess.zig");
+};
+pub const analysis = struct {
+    pub const inspect = @import("analysis/inspect.zig");
+};
+pub const memory = struct {
+    pub const reuse_allocator = @import("memory/reuse_allocator.zig");
+};
+pub const api = struct {
+    pub const base = @import("base.zig");
+    pub const engine = @import("engine.zig");
+    pub const runtime = @import("runtime.zig");
+};
+pub const image = io.image;
+pub const preprocess = io.preprocess;
+pub const inspect = analysis.inspect;
+pub const base = api.base;
+pub const engine = api.engine;
+pub const runtime = api.runtime;
 pub const modules = @import("modules/modules.zig");

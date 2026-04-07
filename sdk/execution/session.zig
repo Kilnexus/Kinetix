@@ -1,6 +1,6 @@
 const std = @import("std");
-const adapters = @import("adapters/adapters.zig");
-const engine = @import("engine/kinetix.zig");
+const adapters = @import("adapters_root");
+const engine = @import("engine_root");
 
 const backend = engine.artifacts.backend;
 const registry_mod = engine.registry;

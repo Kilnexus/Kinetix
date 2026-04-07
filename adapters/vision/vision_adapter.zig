@@ -1,5 +1,5 @@
 const std = @import("std");
-const kinetix = @import("../../engine/kinetix.zig");
+const kinetix = @import("engine_root");
 
 const adapter_mod = kinetix.adapter;
 const graph = kinetix.artifacts.graph;

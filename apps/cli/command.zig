@@ -1,5 +1,5 @@
 const std = @import("std");
-const kinetix = @import("../../kinetix.zig");
+const kinetix = @import("root").kinetix;
 
 const backend = kinetix.artifacts.backend;
 const execution = kinetix.execution;
