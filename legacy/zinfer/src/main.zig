@@ -43,5 +43,5 @@ test {
     _ = @import("../../../../engine/runtime/text/backend/backend.zig");
     _ = @import("../../../../engine/runtime/text/bpe.zig");
     _ = @import("../../../../engine/runtime/text/quantized.zig");
-    _ = @import("sampling/sampler.zig");
+    _ = @import("../../../../engine/runtime/text/sampler.zig");
 }
