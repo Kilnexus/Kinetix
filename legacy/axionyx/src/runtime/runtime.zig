@@ -1,15 +1,16 @@
 const std = @import("std");
 const vision_base = @import("engine_vision_base");
 const vision_engine = @import("engine_vision_engine");
+const vision_modules = @import("engine_vision_modules");
+const reuse_allocator = @import("engine_vision_reuse_allocator");
 const types = vision_base.types;
 const spec = vision_base.spec;
-const blocks = @import("modules/blocks.zig");
-const psa = @import("modules/psa.zig");
-const detect = @import("modules/detect.zig");
+const blocks = vision_modules.blocks;
+const psa = vision_modules.psa;
+const detect = vision_modules.detect;
 const graph_exec = vision_engine.graph_exec;
 const trace = vision_engine.trace;
 const inspect = @import("engine_vision_inspect");
-const reuse_allocator = @import("base/reuse_allocator.zig");
 const tracking_allocator = vision_base.tracking_allocator;
 
 pub const TensorDesc = types.TensorDesc;
