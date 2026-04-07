@@ -1,97 +1,36 @@
 const std = @import("std");
-const graph = @import("graph");
-const runtime = @import("runtime");
-const weights = @import("weights");
-const cli = @import("app/cli.zig");
-const modes_bench = @import("app/modes_bench.zig");
-const modes_fast = @import("app/modes_fast.zig");
-const modes_image = @import("app/modes_image.zig");
-const modes_profile = @import("app/modes_profile.zig");
-const modes_zero = @import("app/modes_zero.zig");
-const app_print = @import("app/print.zig");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_state.deinit();
 
-    const argv = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, argv);
-    const parsed = cli.parseArgs(argv);
-
-    var model_graph = try graph.load(allocator, parsed.graph_path);
-    defer model_graph.deinit();
-
-    var weights_blob = try weights.WeightsBlob.load(allocator, parsed.weights_path);
-    defer weights_blob.deinit();
-
-    var support = try runtime.inspectModel(allocator, &model_graph);
-    defer support.deinit();
+    const gpa = gpa_state.allocator();
+    const args = try std.process.argsAlloc(gpa);
+    defer std.process.argsFree(gpa, args);
 
     const stdout = std.fs.File.stdout().deprecatedWriter();
-    const first_tensor_data = weights_blob.slice(&model_graph.tensors[0]);
-    try app_print.printModelSummary(
-        stdout,
-        parsed.graph_path,
-        parsed.weights_path,
-        &model_graph,
-        &support,
-        first_tensor_data,
+    const show_help = args.len <= 1 or
+        std.mem.eql(u8, args[1], "--help") or
+        std.mem.eql(u8, args[1], "-h");
+
+    try stdout.writeAll(
+        \\Legacy Axionyx CLI has been retired in this monorepo.
+        \\Use the unified Kinetix entrypoint instead.
+        \\Example:
+        \\  zig build run -- run --model-dir .\models\vision\compat_yolo11n --operation detect --input .\datasets\vision\archive\images\000_0001.png
+        \\
     );
 
-    switch (parsed.command) {
-        .roadmap => {},
-        .bench => |args| try modes_bench.runBenchmarkMode(
-            allocator,
-            &model_graph,
-            &weights_blob,
-            args.image_path,
-            args.warmup,
-            args.iterations,
-        ),
-        .fastbench => |args| try modes_fast.runFastBenchmarkMode(
-            allocator,
-            &model_graph,
-            &weights_blob,
-            args.image_path,
-            args.warmup,
-            args.iterations,
-            args.image_size,
-            args.score_threshold,
-        ),
-        .fast => |args| try modes_fast.runFastImageMode(
-            allocator,
-            &model_graph,
-            &weights_blob,
-            args.image_path,
-            args.image_size,
-            args.score_threshold,
-        ),
-        .profile => |args| try modes_profile.runProfileMode(
-            allocator,
-            &model_graph,
-            &weights_blob,
-            args.image_path,
-            args.image_size,
-        ),
-        .zero => |args| try modes_zero.runZeroMode(
-            allocator,
-            &model_graph,
-            &weights_blob,
-            args.size,
-            args.json_out_path,
-            args.trace_json_out_path,
-        ),
-        .image => |args| try modes_image.runImageMode(
-            allocator,
-            &model_graph,
-            &weights_blob,
-            args.image_path,
-            args.image_size,
-            args.json_out_path,
-            args.trace_json_out_path,
-        ),
-    }
+    if (show_help) return;
+    return error.InvalidCommand;
+}
 
-    try runtime.printRoadmap(stdout);
+test {
+    std.testing.refAllDecls(@This());
+    _ = @import("graph");
+    _ = @import("tensor");
+    _ = @import("ops");
+    _ = @import("weights");
+    _ = @import("runtime");
+    _ = @import("vision");
 }

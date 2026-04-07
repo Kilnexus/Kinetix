@@ -1,7 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const axionyx_graph = @import("graph");
-const axionyx_modes_image = @import("../../legacy/axionyx/src/app/modes_image.zig");
+const axionyx_runtime = @import("runtime");
+const axionyx_vision = @import("vision");
 const vision_weights = @import("weights");
 
 pub const Detection = struct {
@@ -58,23 +59,25 @@ pub fn executeDetect(
     var weights_blob = try loadWeightsAbsolute(allocator, resolved_weights_path);
     defer weights_blob.deinit();
 
-    var timed = try axionyx_modes_image.runTimedImageInference(
+    var prepared = try axionyx_vision.loadImageAsTensor(allocator, resolved_image_path, 640);
+    defer prepared.deinit();
+
+    var detections_output = try axionyx_runtime.runGraph(
         allocator,
         &model_graph,
         &weights_blob,
-        resolved_image_path,
-        640,
+        &prepared.tensor,
         .{
             .score_threshold = 0.25,
             .iou_threshold = 0.7,
             .max_det = 300,
         },
     );
-    defer timed.prepared.deinit();
-    defer timed.detections.deinit();
+    defer detections_output.deinit();
+    axionyx_vision.remapDetectionsToSource(detections_output.detections, prepared.info);
 
-    const detections = try allocator.alloc(Detection, timed.detections.detections.len);
-    for (timed.detections.detections, detections) |det, *owned| {
+    const detections = try allocator.alloc(Detection, detections_output.detections.len);
+    for (detections_output.detections, detections) |det, *owned| {
         owned.* = .{
             .x1 = det.x1,
             .y1 = det.y1,
@@ -86,7 +89,7 @@ pub fn executeDetect(
     }
 
     return .{
-        .candidate_count = timed.detections.candidate_count,
+        .candidate_count = detections_output.candidate_count,
         .detections = detections,
     };
 }
