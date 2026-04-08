@@ -204,53 +204,50 @@ const ParsedOCRReceipt = struct {
     image_height: ?usize,
 };
 
-const OpenedModelKind = enum {
-    text,
-    vision,
-    ocr,
-};
-
 pub const TextModel = struct {
-    allocator: std.mem.Allocator,
-    client: KinetixClient,
-    model_dir: []u8,
-    preferred_weights: backend.WeightScheme,
+    context: *execution.ExecutionContext,
 
     pub fn deinit(self: *TextModel) void {
-        self.allocator.free(self.model_dir);
+        destroyExecutionContext(self.context);
         self.* = undefined;
     }
 
     pub fn generate(self: *const TextModel, prompt: []const u8, options: TextModelGenerateOptions) !TextGenerationResult {
-        return try self.client.generateText(self.model_dir, prompt, .{
+        var result = try self.context.execute(.{
             .operation = "generate",
+            .input = prompt,
             .execution = options.execution,
-            .preferred_weights = self.preferred_weights,
             .max_tokens = options.max_tokens,
             .native_exec = options.native_exec,
         });
+        defer result.deinit(self.context.allocator);
+
+        return try copyTextGenerationResultFromDescriptor(self.context.allocator, self.context.descriptor, result);
     }
 
     pub fn chat(self: *const TextModel, prompt: []const u8, options: TextModelChatOptions) !TextGenerationResult {
-        return try self.client.generateText(self.model_dir, prompt, .{
+        var result = try self.context.execute(.{
             .operation = "chat",
+            .input = prompt,
             .execution = options.execution,
-            .preferred_weights = self.preferred_weights,
             .max_tokens = options.max_tokens,
             .native_exec = options.native_exec,
         });
+        defer result.deinit(self.context.allocator);
+
+        return try copyTextGenerationResultFromDescriptor(self.context.allocator, self.context.descriptor, result);
     }
 
     pub fn generateBatch(self: *const TextModel, items: []const TextModelBatchItem) !TextBatchGenerationResult {
         if (items.len == 0) return error.EmptyBatch;
 
-        const batch_items = try self.allocator.alloc(TextBatchItem, items.len);
-        defer self.allocator.free(batch_items);
+        const batch_items = try self.context.allocator.alloc(execution.ContextBatchItem, items.len);
+        defer self.context.allocator.free(batch_items);
 
         for (items, batch_items) |item, *slot| {
             slot.* = .{
-                .input = item.input,
                 .operation = "generate",
+                .input = item.input,
                 .execution = item.execution,
                 .max_tokens = item.max_tokens,
                 .native_exec = item.native_exec,
@@ -258,49 +255,56 @@ pub const TextModel = struct {
             };
         }
 
-        return try self.client.generateTextBatch(self.model_dir, batch_items, .{
-            .preferred_weights = self.preferred_weights,
-        });
+        var report = self.context.executeBatch(self.context.allocator, .{ .items = batch_items }) catch {
+            return try generateTextBatchSequentialFallbackForContext(self.context, items);
+        };
+        defer report.deinit();
+
+        if (allBatchResultsHaveText(report)) {
+            return try copyTextBatchResultFromDescriptor(self.context.allocator, self.context.descriptor, items.len, true, report);
+        }
+
+        return try generateTextBatchSequentialFallbackForContext(self.context, items);
     }
 };
 
 pub const VisionModel = struct {
-    allocator: std.mem.Allocator,
-    client: KinetixClient,
-    model_dir: []u8,
-    preferred_weights: backend.WeightScheme,
+    context: *execution.ExecutionContext,
 
     pub fn deinit(self: *VisionModel) void {
-        self.allocator.free(self.model_dir);
+        destroyExecutionContext(self.context);
         self.* = undefined;
     }
 
     pub fn detect(self: *const VisionModel, image_path: []const u8, options: VisionModelDetectOptions) !DetectionResult {
-        return try self.client.detect(self.model_dir, image_path, .{
+        var result = try self.context.execute(.{
             .operation = "detect",
+            .input = image_path,
             .execution = options.execution,
-            .preferred_weights = self.preferred_weights,
         });
+        defer result.deinit(self.context.allocator);
+
+        return try copyDetectionResult(self.context.allocator, result);
     }
 };
 
 pub const OCRModel = struct {
-    allocator: std.mem.Allocator,
-    client: KinetixClient,
-    model_dir: []u8,
-    preferred_weights: backend.WeightScheme,
+    context: *execution.ExecutionContext,
 
     pub fn deinit(self: *OCRModel) void {
-        self.allocator.free(self.model_dir);
+        destroyExecutionContext(self.context);
         self.* = undefined;
     }
 
     pub fn infer(self: *const OCRModel, image_path: []const u8, options: OCRModelInferOptions) !OCRResult {
-        return try self.client.inferOCR(self.model_dir, image_path, .{
+        var result = try self.context.execute(.{
             .operation = "infer-ocr",
+            .input = image_path,
             .execution = options.execution,
-            .preferred_weights = self.preferred_weights,
         });
+        defer result.deinit(self.context.allocator);
+
+        return try copyOCRResult(self.context.allocator, result);
     }
 };
 
@@ -330,12 +334,14 @@ pub const KinetixClient = struct {
         model_dir: []const u8,
         options: OpenModelOptions,
     ) !TextModel {
-        return .{
-            .allocator = self.allocator,
-            .client = self,
-            .model_dir = try self.allocator.dupe(u8, model_dir),
+        const context = try execution.openContext(self.allocator, .{
+            .model_dir = model_dir,
             .preferred_weights = options.preferred_weights,
-        };
+        });
+        errdefer destroyExecutionContext(context);
+
+        if (context.descriptor.modality != .text) return error.ModelModalityMismatch;
+        return .{ .context = context };
     }
 
     pub fn openVisionModel(
@@ -343,12 +349,14 @@ pub const KinetixClient = struct {
         model_dir: []const u8,
         options: OpenModelOptions,
     ) !VisionModel {
-        return .{
-            .allocator = self.allocator,
-            .client = self,
-            .model_dir = try self.allocator.dupe(u8, model_dir),
+        const context = try execution.openContext(self.allocator, .{
+            .model_dir = model_dir,
             .preferred_weights = options.preferred_weights,
-        };
+        });
+        errdefer destroyExecutionContext(context);
+
+        if (context.descriptor.modality != .vision) return error.ModelModalityMismatch;
+        return .{ .context = context };
     }
 
     pub fn openOCRModel(
@@ -356,12 +364,14 @@ pub const KinetixClient = struct {
         model_dir: []const u8,
         options: OpenModelOptions,
     ) !OCRModel {
-        return .{
-            .allocator = self.allocator,
-            .client = self,
-            .model_dir = try self.allocator.dupe(u8, model_dir),
+        const context = try execution.openContext(self.allocator, .{
+            .model_dir = model_dir,
             .preferred_weights = options.preferred_weights,
-        };
+        });
+        errdefer destroyExecutionContext(context);
+
+        if (context.descriptor.modality != .ocr) return error.ModelModalityMismatch;
+        return .{ .context = context };
     }
 
     pub fn openModel(
@@ -369,10 +379,17 @@ pub const KinetixClient = struct {
         model_dir: []const u8,
         options: OpenModelOptions,
     ) !OpenedModel {
-        return switch (try detectOpenedModelKind(self.allocator, model_dir)) {
-            .text => .{ .text = try self.openTextModel(model_dir, options) },
-            .vision => .{ .vision = try self.openVisionModel(model_dir, options) },
-            .ocr => .{ .ocr = try self.openOCRModel(model_dir, options) },
+        const context = try execution.openContext(self.allocator, .{
+            .model_dir = model_dir,
+            .preferred_weights = options.preferred_weights,
+        });
+        errdefer destroyExecutionContext(context);
+
+        return switch (context.descriptor.modality) {
+            .text => .{ .text = .{ .context = context } },
+            .vision => .{ .vision = .{ .context = context } },
+            .ocr => .{ .ocr = .{ .context = context } },
+            else => return error.UnsupportedModelModality,
         };
     }
 
@@ -488,6 +505,14 @@ fn copyTextGenerationResult(
     prepared: *const execution.PreparedExecution,
     result: adapter_mod.ExecutionResult,
 ) !TextGenerationResult {
+    return try copyTextGenerationResultFromDescriptor(allocator, prepared.descriptor, result);
+}
+
+fn copyTextGenerationResultFromDescriptor(
+    allocator: std.mem.Allocator,
+    descriptor: engine.adapter.Descriptor,
+    result: adapter_mod.ExecutionResult,
+) !TextGenerationResult {
     const text = switch (result.output) {
         .text => |value| value,
         else => return error.ExpectedTextOutput,
@@ -495,7 +520,7 @@ fn copyTextGenerationResult(
 
     return .{
         .adapter_id = try allocator.dupe(u8, result.submission.adapter_id),
-        .model_family = try allocator.dupe(u8, prepared.request.spec.model_family),
+        .model_family = try allocator.dupe(u8, descriptor.bound_model_family orelse "unknown"),
         .accepted = result.submission.accepted,
         .execution = result.submission.execution,
         .origin = result.origin,
@@ -509,10 +534,20 @@ fn copyTextBatchResult(
     prepared: *const execution.PreparedBatchExecution,
     report: engine.runtime.batch_executor.BatchExecutionReport,
 ) !TextBatchGenerationResult {
-    const items = try allocator.alloc(TextBatchGenerationItem, prepared.requests.len);
+    return try copyTextBatchResultFromDescriptor(allocator, prepared.descriptor, prepared.requests.len, true, report);
+}
+
+fn copyTextBatchResultFromDescriptor(
+    allocator: std.mem.Allocator,
+    descriptor: engine.adapter.Descriptor,
+    item_count: usize,
+    used_batching: bool,
+    report: engine.runtime.batch_executor.BatchExecutionReport,
+) !TextBatchGenerationResult {
+    const items = try allocator.alloc(TextBatchGenerationItem, item_count);
     errdefer allocator.free(items);
 
-    var seen = try allocator.alloc(bool, prepared.requests.len);
+    var seen = try allocator.alloc(bool, item_count);
     defer allocator.free(seen);
     @memset(seen, false);
 
@@ -538,9 +573,9 @@ fn copyTextBatchResult(
     }
 
     return .{
-        .adapter_id = try allocator.dupe(u8, prepared.descriptor.id),
-        .model_family = try allocator.dupe(u8, prepared.descriptor.bound_model_family.?),
-        .used_batching = true,
+        .adapter_id = try allocator.dupe(u8, descriptor.id),
+        .model_family = try allocator.dupe(u8, descriptor.bound_model_family orelse "unknown"),
+        .used_batching = used_batching,
         .items = items,
     };
 }
@@ -653,15 +688,10 @@ fn dupeOptionalString(allocator: std.mem.Allocator, value: ?[]const u8) !?[]u8 {
     return null;
 }
 
-fn detectOpenedModelKind(allocator: std.mem.Allocator, model_dir: []const u8) !OpenedModelKind {
-    var catalog = try backend.ModelCatalog.discover(allocator, model_dir);
-    defer catalog.deinit();
-
-    if (catalog.has(.graph_json) and catalog.has(.weights_bin)) return .vision;
-    if (catalog.has(.config) and catalog.has(.tokenizer_json) and (catalog.resolveAutoScheme() != .auto or catalog.has(.safetensors))) return .text;
-    if (catalog.has(.ocr_model)) return .ocr;
-
-    return error.UnsupportedModelDirectory;
+fn destroyExecutionContext(context: *execution.ExecutionContext) void {
+    const allocator = context.allocator;
+    context.deinit();
+    allocator.destroy(context);
 }
 
 fn allBatchResultsHaveText(report: engine.runtime.batch_executor.BatchExecutionReport) bool {
@@ -727,6 +757,46 @@ fn generateTextBatchSequentialFallback(
     return .{
         .adapter_id = adapter_id.?,
         .model_family = model_family.?,
+        .used_batching = false,
+        .items = results,
+    };
+}
+
+fn generateTextBatchSequentialFallbackForContext(
+    context: *const execution.ExecutionContext,
+    items: []const TextModelBatchItem,
+) !TextBatchGenerationResult {
+    const results = try context.allocator.alloc(TextBatchGenerationItem, items.len);
+    errdefer context.allocator.free(results);
+
+    const seen = try context.allocator.alloc(bool, items.len);
+    defer context.allocator.free(seen);
+    @memset(seen, false);
+
+    errdefer {
+        for (results, seen) |*item, was_seen| {
+            if (was_seen) item.deinit(context.allocator);
+        }
+        context.allocator.free(results);
+    }
+
+    for (items, 0..) |item, index| {
+        var single = try context.execute(.{
+            .operation = "generate",
+            .input = item.input,
+            .execution = item.execution,
+            .max_tokens = item.max_tokens,
+            .native_exec = item.native_exec,
+        });
+        defer single.deinit(context.allocator);
+
+        results[index] = try copyTextBatchItem(context.allocator, single);
+        seen[index] = true;
+    }
+
+    return .{
+        .adapter_id = try context.allocator.dupe(u8, context.descriptor.id),
+        .model_family = try context.allocator.dupe(u8, context.descriptor.bound_model_family orelse "unknown"),
         .used_batching = false,
         .items = results,
     };
