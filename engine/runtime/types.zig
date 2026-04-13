@@ -133,6 +133,25 @@ pub const RuntimeResult = struct {
     }
 };
 
+pub const RuntimeVisionDetection = struct {
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    score: f32,
+    class_id: usize,
+};
+
+pub const RuntimeVisionDetectOutput = struct {
+    candidate_count: usize,
+    detections: []RuntimeVisionDetection,
+
+    pub fn deinit(self: *RuntimeVisionDetectOutput, allocator: std.mem.Allocator) void {
+        allocator.free(self.detections);
+        self.* = undefined;
+    }
+};
+
 pub const RuntimeBatchResults = struct {
     allocator: std.mem.Allocator,
     items: []RuntimeResult,

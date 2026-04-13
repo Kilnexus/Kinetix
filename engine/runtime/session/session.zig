@@ -150,8 +150,205 @@ test "runtime session can execute qwen3 batch requests through the unified execu
     try std.testing.expectEqualStrings("text_native_qwen_batch", results.items[0].note);
 }
 
+test "runtime session can execute yolo vision requests through the unified executor" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "graph.json",
+        \\{
+        \\  "format_version": 1,
+        \\  "model_name": "vision-yolo",
+        \\  "metadata": { "class_count": 2 },
+        \\  "tensors": [],
+        \\  "execution_plan": [
+        \\    { "index": 0, "path": "pipeline.detect", "kind": "Detect", "from": [-1] }
+        \\  ],
+        \\  "component_tree": {
+        \\    "path": "pipeline",
+        \\    "kind": "Pipeline",
+        \\    "attrs": {},
+        \\    "children": []
+        \\  }
+        \\}
+    );
+    try writeTmpFile(tmp.dir, "weights.bin", "vision");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var session = RuntimeSession.init(std.testing.allocator);
+    defer session.deinit();
+
+    var handle = try session.openModel(.{ .model_dir = root_path });
+    defer handle.deinit();
+
+    var plan = try session.plan(&handle, .{
+        .operation = "detect",
+        .input = .{ .image_path = "demo.png" },
+    });
+    defer plan.deinit();
+
+    var result = try session.execute(&handle, &plan);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(types.ExecutionOrigin.shared_adapter, result.origin);
+    try std.testing.expectEqualStrings("vision_shared_detect", result.note);
+}
+
+test "runtime session can batch yolo vision requests through the unified executor" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "graph.json",
+        \\{
+        \\  "format_version": 1,
+        \\  "model_name": "vision-yolo",
+        \\  "metadata": { "class_count": 2 },
+        \\  "tensors": [],
+        \\  "execution_plan": [
+        \\    { "index": 0, "path": "pipeline.detect", "kind": "Detect", "from": [-1] }
+        \\  ],
+        \\  "component_tree": {
+        \\    "path": "pipeline",
+        \\    "kind": "Pipeline",
+        \\    "attrs": {},
+        \\    "children": []
+        \\  }
+        \\}
+    );
+    try writeTmpFile(tmp.dir, "weights.bin", "vision");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var session = RuntimeSession.init(std.testing.allocator);
+    defer session.deinit();
+
+    var handle = try session.openModel(.{ .model_dir = root_path });
+    defer handle.deinit();
+
+    const items = [_]types.RuntimeRequest{
+        .{
+            .operation = "detect",
+            .input = .{ .image_path = "demo-a.png" },
+        },
+        .{
+            .operation = "detect",
+            .input = .{ .image_path = "demo-b.png" },
+        },
+    };
+
+    var plan = try session.planBatch(&handle, .{ .items = &items });
+    defer plan.deinit();
+
+    var results = try session.executeBatch(&handle, &plan);
+    defer results.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), plan.batches.len);
+    try std.testing.expectEqual(@as(usize, 2), results.items.len);
+    try std.testing.expectEqualStrings("vision_shared_detect", results.items[0].note);
+    try std.testing.expectEqualStrings("vision_shared_detect", results.items[1].note);
+}
+
+test "runtime session can execute swiftocr requests through the unified executor" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeOCRModel(tmp.dir, "demo.swm", 0);
+    try writePPMImage(tmp.dir, "demo.ppm", 1, 1, &[_]u8{ 1, 2, 3 });
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+    const image_path = try tmp.dir.realpathAlloc(std.testing.allocator, "demo.ppm");
+    defer std.testing.allocator.free(image_path);
+
+    var session = RuntimeSession.init(std.testing.allocator);
+    defer session.deinit();
+
+    var handle = try session.openModel(.{ .model_dir = root_path });
+    defer handle.deinit();
+
+    var plan = try session.plan(&handle, .{
+        .operation = "infer-ocr",
+        .input = .{ .image_path = image_path },
+    });
+    defer plan.deinit();
+
+    var result = try session.execute(&handle, &plan);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(types.ExecutionOrigin.shared_adapter, result.origin);
+    try std.testing.expectEqualStrings("ocr_shared_infer", result.note);
+}
+
+test "runtime session can batch swiftocr requests through the unified executor" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeOCRModel(tmp.dir, "demo.swm", 0);
+    try writePPMImage(tmp.dir, "demo-a.ppm", 1, 1, &[_]u8{ 1, 2, 3 });
+    try writePPMImage(tmp.dir, "demo-b.ppm", 1, 1, &[_]u8{ 4, 5, 6 });
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+    const image_a = try tmp.dir.realpathAlloc(std.testing.allocator, "demo-a.ppm");
+    defer std.testing.allocator.free(image_a);
+    const image_b = try tmp.dir.realpathAlloc(std.testing.allocator, "demo-b.ppm");
+    defer std.testing.allocator.free(image_b);
+
+    var session = RuntimeSession.init(std.testing.allocator);
+    defer session.deinit();
+
+    var handle = try session.openModel(.{ .model_dir = root_path });
+    defer handle.deinit();
+
+    const items = [_]types.RuntimeRequest{
+        .{
+            .operation = "infer-ocr",
+            .input = .{ .image_path = image_a },
+        },
+        .{
+            .operation = "infer-ocr",
+            .input = .{ .image_path = image_b },
+        },
+    };
+
+    var plan = try session.planBatch(&handle, .{ .items = &items });
+    defer plan.deinit();
+
+    var results = try session.executeBatch(&handle, &plan);
+    defer results.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), plan.batches.len);
+    try std.testing.expectEqual(@as(usize, 2), results.items.len);
+    try std.testing.expectEqualStrings("ocr_shared_infer", results.items[0].note);
+    try std.testing.expectEqualStrings("ocr_shared_infer", results.items[1].note);
+}
+
 fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {
     var file = try dir.createFile(relative_path, .{});
     defer file.close();
     try file.writeAll(contents);
+}
+
+fn writeOCRModel(dir: std.fs.Dir, relative_path: []const u8, tensor_count: u32) !void {
+    var file = try dir.createFile(relative_path, .{});
+    defer file.close();
+
+    var writer_impl = file.writer(&.{});
+    const writer = &writer_impl.interface;
+    try writer.writeAll(&[_]u8{ 'S', 'W', 'O', 'C', 'R', '0', '1', 0 });
+    try writer.writeInt(u32, tensor_count, .little);
+    try writer.flush();
+}
+
+fn writePPMImage(dir: std.fs.Dir, relative_path: []const u8, width: usize, height: usize, pixels: []const u8) !void {
+    var file = try dir.createFile(relative_path, .{});
+    defer file.close();
+
+    var writer_impl = file.writer(&.{});
+    const writer = &writer_impl.interface;
+    try writer.print("P6\n{d} {d}\n255\n", .{ width, height });
+    try writer.writeAll(pixels);
+    try writer.flush();
 }
