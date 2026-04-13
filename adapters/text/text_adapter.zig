@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const kinetix = @import("engine_root");
 
 const backend = kinetix.artifacts.backend;
@@ -8,44 +7,7 @@ const adapter_mod = kinetix.adapter;
 const registry_mod = kinetix.registry;
 const task = kinetix.core.task;
 const family_registry = kinetix.runtime.text.family_registry;
-const text_native_dispatch = kinetix.runtime.text.native_dispatch;
-const native_batch_bridge = if (builtin.is_test) struct {
-    pub fn executeQwenSingle(
-        allocator: std.mem.Allocator,
-        model_dir: []const u8,
-        preferred_weights: backend.WeightScheme,
-        request: task.TaskRequest,
-    ) ![]u8 {
-        _ = model_dir;
-        _ = preferred_weights;
-        _ = request;
-        return try allocator.dupe(u8, "stub-native-single");
-    }
-
-    pub const NativeBatchOutput = struct {
-        texts: [][]u8,
-        total_decoded_tokens: usize,
-        finished_requests: usize,
-
-        pub fn deinit(self: *NativeBatchOutput, allocator: std.mem.Allocator) void {
-            _ = allocator;
-            _ = self;
-        }
-    };
-
-    pub fn executeQwenBatch(
-        allocator: std.mem.Allocator,
-        model_dir: []const u8,
-        preferred_weights: backend.WeightScheme,
-        requests: []const task.TaskRequest,
-    ) !NativeBatchOutput {
-        _ = allocator;
-        _ = model_dir;
-        _ = preferred_weights;
-        _ = requests;
-        return error.NativeBatchBridgeUnavailableInTests;
-    }
-} else text_native_dispatch.NativeBatchBridge;
+const text_shared = kinetix.runtime.providers.text_shared;
 
 pub const ModelFamily = enum {
     qwen3,
@@ -161,19 +123,14 @@ pub const TextAdapter = struct {
     fn execute(ctx: *anyopaque, allocator: std.mem.Allocator, request: task.TaskRequest) !adapter_mod.ExecutionResult {
         const self: *TextAdapter = @ptrCast(@alignCast(ctx));
         if (self.family != .qwen3) {
-            return .{
-                .submission = try submit(ctx, request),
-                .origin = .shared_adapter,
-                .note = .text_request_ready,
-            };
+            return text_shared.buildReadyResult(try submit(ctx, request));
         }
 
-        return try text_native_dispatch.executeSingle(
+        return try text_shared.executeLegacySingle(
             allocator,
-            native_batch_bridge,
             self.plan.model_dir,
             self.plan.weight_scheme orelse .auto,
-            try submit(ctx, request),
+            self.descriptor.id,
             request,
         );
     }
@@ -181,22 +138,11 @@ pub const TextAdapter = struct {
     fn executeBatch(ctx: *anyopaque, allocator: std.mem.Allocator, requests: []const task.TaskRequest) ![]adapter_mod.ExecutionResult {
         const self: *TextAdapter = @ptrCast(@alignCast(ctx));
         if (self.family != .qwen3) {
-            const results = try allocator.alloc(adapter_mod.ExecutionResult, requests.len);
-            errdefer allocator.free(results);
-
-            for (requests, results) |request, *result| {
-                result.* = .{
-                    .submission = buildSubmission(self, request),
-                    .origin = .shared_adapter,
-                    .note = .text_request_ready,
-                };
-            }
-            return results;
+            return try text_shared.buildReadyBatchResults(allocator, self.descriptor.id, requests);
         }
 
-        return try text_native_dispatch.executeBatch(
+        return try text_shared.executeLegacyBatch(
             allocator,
-            native_batch_bridge,
             self.plan.model_dir,
             self.plan.weight_scheme orelse .auto,
             self.descriptor.id,
@@ -254,9 +200,5 @@ fn buildSubmissions(self: *const TextAdapter, allocator: std.mem.Allocator, requ
 }
 
 fn buildSubmission(self: *const TextAdapter, request: task.TaskRequest) adapter_mod.Submission {
-    return .{
-        .adapter_id = self.descriptor.id,
-        .accepted = true,
-        .execution = request.spec.execution,
-    };
+    return text_shared.buildSubmission(self.descriptor.id, request.spec.execution);
 }
