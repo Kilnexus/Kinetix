@@ -5,6 +5,9 @@ const backend = kinetix.artifacts.backend;
 const load_plan = kinetix.runtime.load_plan;
 const adapter_mod = kinetix.adapter;
 const registry_mod = kinetix.registry;
+const runtime_model = kinetix.runtime.model;
+const runtime_providers = kinetix.runtime.providers;
+const runtime_session = kinetix.runtime.session;
 const task = kinetix.core.task;
 const family_registry = kinetix.runtime.text.family_registry;
 const text_shared = kinetix.runtime.providers.text_shared;
@@ -30,6 +33,7 @@ const unknown_operations = [_][]const u8{"infer-text"};
 pub const TextAdapter = struct {
     allocator: std.mem.Allocator,
     plan: load_plan.ResolvedLoadPlan,
+    runtime_handle: runtime_model.ModelHandle,
     family: ModelFamily,
     adapter_id: []u8,
     descriptor: adapter_mod.Descriptor,
@@ -60,10 +64,21 @@ pub const TextAdapter = struct {
         const family_name = family.name();
         const adapter_id = try std.fmt.allocPrint(allocator, "text.{s}.{s}", .{ family_name, basename });
         errdefer allocator.free(adapter_id);
+        var session = runtime_session.RuntimeSession.init(allocator);
+        defer session.deinit();
+        const runtime_handle = try session.openModel(.{
+            .model_dir = model_dir,
+            .preferred_weights = preferred_weights,
+        });
+        errdefer {
+            var owned = runtime_handle;
+            owned.deinit();
+        }
 
         return .{
             .allocator = allocator,
             .plan = plan,
+            .runtime_handle = runtime_handle,
             .family = family,
             .adapter_id = adapter_id,
             .descriptor = .{
@@ -79,6 +94,7 @@ pub const TextAdapter = struct {
 
     pub fn deinit(self: *TextAdapter) void {
         self.allocator.free(self.adapter_id);
+        self.runtime_handle.deinit();
         self.plan.deinit();
         self.* = undefined;
     }
@@ -126,10 +142,9 @@ pub const TextAdapter = struct {
             return text_shared.buildReadyResult(try submit(ctx, request));
         }
 
-        return try text_shared.executeLegacySingle(
+        return try runtime_providers.adapter_bridge.executeSingle(
             allocator,
-            self.plan.model_dir,
-            self.plan.weight_scheme orelse .auto,
+            &self.runtime_handle,
             self.descriptor.id,
             request,
         );
@@ -141,10 +156,9 @@ pub const TextAdapter = struct {
             return try text_shared.buildReadyBatchResults(allocator, self.descriptor.id, requests);
         }
 
-        return try text_shared.executeLegacyBatch(
+        return try runtime_providers.adapter_bridge.executeBatch(
             allocator,
-            self.plan.model_dir,
-            self.plan.weight_scheme orelse .auto,
+            &self.runtime_handle,
             self.descriptor.id,
             requests,
         );

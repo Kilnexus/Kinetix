@@ -600,6 +600,67 @@ test "vision adapter rejects missing binary weights" {
     try std.testing.expectError(error.MissingBinaryWeightsArtifact, vision_adapter_mod.VisionAdapter.init(std.testing.allocator, root_path));
 }
 
+test "vision adapter batch execution is routed through unified runtime shell" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "graph.json",
+        \\{
+        \\  "format_version": 1,
+        \\  "model_name": "vision-yolo",
+        \\  "metadata": { "class_count": 2 },
+        \\  "tensors": [],
+        \\  "execution_plan": [
+        \\    { "index": 0, "path": "pipeline.detect", "kind": "Detect", "from": [-1] }
+        \\  ],
+        \\  "component_tree": {
+        \\    "path": "pipeline",
+        \\    "kind": "Pipeline",
+        \\    "attrs": {},
+        \\    "children": []
+        \\  }
+        \\}
+    );
+    try writeTmpFile(tmp.dir, "weights.bin", "vision");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var vision_adapter = try vision_adapter_mod.VisionAdapter.init(std.testing.allocator, root_path);
+    defer vision_adapter.deinit();
+
+    const requests = [_]task.TaskRequest{
+        .{
+            .spec = .{
+                .modality = .vision,
+                .operation = "detect",
+                .model_family = "yolo",
+                .execution = .sync,
+            },
+            .input = .{ .image_path = "demo-a.png" },
+        },
+        .{
+            .spec = .{
+                .modality = .vision,
+                .operation = "detect",
+                .model_family = "yolo",
+                .execution = .sync,
+            },
+            .input = .{ .image_path = "demo-b.png" },
+        },
+    };
+
+    const results = try vision_adapter.asAdapter().executeBatch(std.testing.allocator, &requests);
+    defer {
+        for (results) |*result| result.deinit(std.testing.allocator);
+        std.testing.allocator.free(results);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), results.len);
+    try std.testing.expectEqual(adapter_mod.ExecutionNote.vision_shared_detect, results[0].note);
+    try std.testing.expectEqual(adapter_mod.ExecutionNote.vision_shared_detect, results[1].note);
+}
+
 test "model catalog discovers swiftocr single-file model artifacts" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -675,6 +736,56 @@ test "ocr adapter resolves swiftocr model and integrates with scheduler" {
         },
         else => return error.ExpectedJsonOutput,
     }
+}
+
+test "ocr adapter batch execution is routed through unified runtime shell" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeOCRModel(tmp.dir, "demo.swm", 0);
+    try writePPMImage(tmp.dir, "demo-a.ppm", 1, 1, &[_]u8{ 1, 2, 3 });
+    try writePPMImage(tmp.dir, "demo-b.ppm", 1, 1, &[_]u8{ 4, 5, 6 });
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+    const image_a = try tmp.dir.realpathAlloc(std.testing.allocator, "demo-a.ppm");
+    defer std.testing.allocator.free(image_a);
+    const image_b = try tmp.dir.realpathAlloc(std.testing.allocator, "demo-b.ppm");
+    defer std.testing.allocator.free(image_b);
+
+    var ocr_adapter = try ocr_adapter_mod.OCRAdapter.init(std.testing.allocator, root_path);
+    defer ocr_adapter.deinit();
+
+    const requests = [_]task.TaskRequest{
+        .{
+            .spec = .{
+                .modality = .ocr,
+                .operation = "infer-ocr",
+                .model_family = "swiftocr",
+                .execution = .sync,
+            },
+            .input = .{ .image_path = image_a },
+        },
+        .{
+            .spec = .{
+                .modality = .ocr,
+                .operation = "infer-ocr",
+                .model_family = "swiftocr",
+                .execution = .sync,
+            },
+            .input = .{ .image_path = image_b },
+        },
+    };
+
+    const results = try ocr_adapter.asAdapter().executeBatch(std.testing.allocator, &requests);
+    defer {
+        for (results) |*result| result.deinit(std.testing.allocator);
+        std.testing.allocator.free(results);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), results.len);
+    try std.testing.expectEqual(adapter_mod.ExecutionNote.ocr_shared_infer, results[0].note);
+    try std.testing.expectEqual(adapter_mod.ExecutionNote.ocr_shared_infer, results[1].note);
 }
 
 test "text adapter rejects image payloads in shared request path" {

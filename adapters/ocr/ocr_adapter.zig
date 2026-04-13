@@ -4,8 +4,10 @@ const kinetix = @import("engine_root");
 const adapter_mod = kinetix.adapter;
 const backend = kinetix.artifacts.backend;
 const load_plan = kinetix.runtime.load_plan;
-const ocr_shared = kinetix.runtime.providers.ocr_shared;
 const registry_mod = kinetix.registry;
+const runtime_model = kinetix.runtime.model;
+const runtime_providers = kinetix.runtime.providers;
+const runtime_session = kinetix.runtime.session;
 const task = kinetix.core.task;
 
 const swiftocr_operations = [_][]const u8{ "infer-ocr", "detect-text", "recognize-text" };
@@ -13,6 +15,7 @@ const swiftocr_operations = [_][]const u8{ "infer-ocr", "detect-text", "recogniz
 pub const OCRAdapter = struct {
     allocator: std.mem.Allocator,
     plan: load_plan.ResolvedLoadPlan,
+    runtime_handle: runtime_model.ModelHandle,
     adapter_id: []u8,
     descriptor: adapter_mod.Descriptor,
 
@@ -32,10 +35,18 @@ pub const OCRAdapter = struct {
         const basename = std.fs.path.basename(plan.model_dir);
         const adapter_id = try std.fmt.allocPrint(allocator, "ocr.swiftocr.{s}", .{basename});
         errdefer allocator.free(adapter_id);
+        var session = runtime_session.RuntimeSession.init(allocator);
+        defer session.deinit();
+        const runtime_handle = try session.openModel(.{ .model_dir = model_dir });
+        errdefer {
+            var owned = runtime_handle;
+            owned.deinit();
+        }
 
         return .{
             .allocator = allocator,
             .plan = plan,
+            .runtime_handle = runtime_handle,
             .adapter_id = adapter_id,
             .descriptor = .{
                 .id = adapter_id,
@@ -50,6 +61,7 @@ pub const OCRAdapter = struct {
 
     pub fn deinit(self: *OCRAdapter) void {
         self.allocator.free(self.adapter_id);
+        self.runtime_handle.deinit();
         self.plan.deinit();
         self.* = undefined;
     }
@@ -83,37 +95,17 @@ pub const OCRAdapter = struct {
 
     fn execute(ctx: *anyopaque, allocator: std.mem.Allocator, request: task.TaskRequest) !adapter_mod.ExecutionResult {
         const self: *OCRAdapter = @ptrCast(@alignCast(ctx));
-        const infer_output = try maybeRunSharedInfer(self, allocator, request);
-        const output = try ocr_shared.buildOutputJson(allocator, .{
-            .operation = request.spec.operation,
-            .model_family = self.descriptor.bound_model_family.?,
-            .model_path = self.plan.ocr_model_path.?,
-            .input_path = request.input.asString(),
-        }, infer_output);
-        return .{
-            .submission = try submit(ctx, request),
-            .origin = .shared_adapter,
-            .note = if (infer_output != null) .ocr_shared_infer else .ocr_model_ready,
-            .output = .{ .json = output },
-        };
+        return try runtime_providers.adapter_bridge.executeSingle(allocator, &self.runtime_handle, self.descriptor.id, request);
+    }
+
+    fn executeBatch(ctx: *anyopaque, allocator: std.mem.Allocator, requests: []const task.TaskRequest) ![]adapter_mod.ExecutionResult {
+        const self: *OCRAdapter = @ptrCast(@alignCast(ctx));
+        return try runtime_providers.adapter_bridge.executeBatch(allocator, &self.runtime_handle, self.descriptor.id, requests);
     }
 };
 
 const vtable = adapter_mod.VTable{
     .submit = OCRAdapter.submit,
     .execute = OCRAdapter.execute,
+    .execute_batch = OCRAdapter.executeBatch,
 };
-
-fn maybeRunSharedInfer(
-    self: *const OCRAdapter,
-    allocator: std.mem.Allocator,
-    request: task.TaskRequest,
-) !?ocr_shared.InferResult {
-    return try ocr_shared.maybeRunInfer(
-        allocator,
-        self.plan.ocr_model_path.?,
-        request.spec.operation,
-        request.spec.execution,
-        request.input.asString(),
-    );
-}

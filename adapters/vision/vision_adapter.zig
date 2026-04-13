@@ -6,7 +6,9 @@ const graph = kinetix.artifacts.graph;
 const backend = kinetix.artifacts.backend;
 const load_plan = kinetix.runtime.load_plan;
 const registry_mod = kinetix.registry;
-const vision_shared = kinetix.runtime.providers.vision_shared;
+const runtime_model = kinetix.runtime.model;
+const runtime_providers = kinetix.runtime.providers;
+const runtime_session = kinetix.runtime.session;
 const task = kinetix.core.task;
 
 const yolo_operations = [_][]const u8{ "detect", "profile", "benchmark" };
@@ -27,6 +29,7 @@ pub const ModelFamily = enum {
 pub const VisionAdapter = struct {
     allocator: std.mem.Allocator,
     plan: load_plan.ResolvedLoadPlan,
+    runtime_handle: runtime_model.ModelHandle,
     family: ModelFamily,
     adapter_id: []u8,
     graph_summary: graph.Summary,
@@ -53,10 +56,18 @@ pub const VisionAdapter = struct {
         const basename = std.fs.path.basename(plan.model_dir);
         const adapter_id = try std.fmt.allocPrint(allocator, "vision.{s}.{s}", .{ family.name(), basename });
         errdefer allocator.free(adapter_id);
+        var session = runtime_session.RuntimeSession.init(allocator);
+        defer session.deinit();
+        const runtime_handle = try session.openModel(.{ .model_dir = model_dir });
+        errdefer {
+            var owned = runtime_handle;
+            owned.deinit();
+        }
 
         return .{
             .allocator = allocator,
             .plan = plan,
+            .runtime_handle = runtime_handle,
             .family = family,
             .adapter_id = adapter_id,
             .graph_summary = summary,
@@ -74,6 +85,7 @@ pub const VisionAdapter = struct {
     pub fn deinit(self: *VisionAdapter) void {
         self.allocator.free(@constCast(self.graph_summary.model_name));
         self.allocator.free(self.adapter_id);
+        self.runtime_handle.deinit();
         self.plan.deinit();
         self.* = undefined;
     }
@@ -108,30 +120,18 @@ pub const VisionAdapter = struct {
 
     fn execute(ctx: *anyopaque, allocator: std.mem.Allocator, request: task.TaskRequest) !adapter_mod.ExecutionResult {
         const self: *VisionAdapter = @ptrCast(@alignCast(ctx));
-        const maybe_detection_output = try maybeRunSharedDetect(self, allocator, request);
-        var detection_output = maybe_detection_output;
-        defer if (detection_output) |*output| output.deinit(allocator);
+        return try runtime_providers.adapter_bridge.executeSingle(allocator, &self.runtime_handle, self.descriptor.id, request);
+    }
 
-        const output = try vision_shared.buildOutputJson(allocator, .{
-            .operation = request.spec.operation,
-            .model_name = self.graph_summary.model_name,
-            .model_family = self.family.name(),
-            .input_path = request.input.asString(),
-            .execution_nodes = self.graph_summary.execution_nodes,
-            .tensor_count = self.graph_summary.tensor_count,
-            .class_count = self.graph_summary.class_count,
-        }, detection_output);
-        return .{
-            .submission = try submit(ctx, request),
-            .origin = .shared_adapter,
-            .note = if (detection_output != null) .vision_shared_detect else .vision_graph_ready,
-            .output = .{ .json = output },
-        };
+    fn executeBatch(ctx: *anyopaque, allocator: std.mem.Allocator, requests: []const task.TaskRequest) ![]adapter_mod.ExecutionResult {
+        const self: *VisionAdapter = @ptrCast(@alignCast(ctx));
+        return try runtime_providers.adapter_bridge.executeBatch(allocator, &self.runtime_handle, self.descriptor.id, requests);
     }
 };
 
 const vtable = adapter_mod.VTable{
     .submit = VisionAdapter.submit,
+    .execute_batch = VisionAdapter.executeBatch,
     .execute = VisionAdapter.execute,
 };
 
@@ -150,19 +150,4 @@ fn detectModelFamily(allocator: std.mem.Allocator, graph_path: []const u8) !Mode
         if (std.mem.eql(u8, node.kind, "Detect")) return .yolo;
     }
     return .unknown;
-}
-
-fn maybeRunSharedDetect(
-    self: *const VisionAdapter,
-    allocator: std.mem.Allocator,
-    request: task.TaskRequest,
-) !?vision_shared.DetectOutput {
-    return try vision_shared.maybeRunDetect(
-        allocator,
-        self.plan.graph_path.?,
-        self.plan.binary_weights_path.?,
-        request.spec.operation,
-        request.spec.execution,
-        request.input.asString(),
-    );
 }
