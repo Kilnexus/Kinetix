@@ -6,8 +6,8 @@ const graph = kinetix.artifacts.graph;
 const backend = kinetix.artifacts.backend;
 const load_plan = kinetix.runtime.load_plan;
 const registry_mod = kinetix.registry;
+const vision_shared = kinetix.runtime.providers.vision_shared;
 const task = kinetix.core.task;
-const axionyx_bridge = @import("axionyx_bridge.zig");
 
 const yolo_operations = [_][]const u8{ "detect", "profile", "benchmark" };
 const generic_operations = [_][]const u8{"infer-image"};
@@ -112,7 +112,15 @@ pub const VisionAdapter = struct {
         var detection_output = maybe_detection_output;
         defer if (detection_output) |*output| output.deinit(allocator);
 
-        const output = try buildOutputJson(self, allocator, request, detection_output);
+        const output = try vision_shared.buildOutputJson(allocator, .{
+            .operation = request.spec.operation,
+            .model_name = self.graph_summary.model_name,
+            .model_family = self.family.name(),
+            .input_path = request.input.asString(),
+            .execution_nodes = self.graph_summary.execution_nodes,
+            .tensor_count = self.graph_summary.tensor_count,
+            .class_count = self.graph_summary.class_count,
+        }, detection_output);
         return .{
             .submission = try submit(ctx, request),
             .origin = .shared_adapter,
@@ -144,62 +152,17 @@ fn detectModelFamily(allocator: std.mem.Allocator, graph_path: []const u8) !Mode
     return .unknown;
 }
 
-fn buildOutputJson(
-    self: *const VisionAdapter,
-    allocator: std.mem.Allocator,
-    request: task.TaskRequest,
-    detection_output: ?axionyx_bridge.DetectOutput,
-) ![]u8 {
-    const Detection = axionyx_bridge.Detection;
-    const VisionReceipt = struct {
-        status: []const u8,
-        operation: []const u8,
-        model_name: []const u8,
-        model_family: []const u8,
-        input_path: ?[]const u8,
-        execution_nodes: usize,
-        tensor_count: usize,
-        class_count: ?usize,
-        candidate_count: ?usize,
-        detections: []const Detection,
-    };
-
-    const receipt = VisionReceipt{
-        .status = if (detection_output != null) "detect_completed" else "graph_ready",
-        .operation = request.spec.operation,
-        .model_name = self.graph_summary.model_name,
-        .model_family = self.family.name(),
-        .input_path = request.input.asString(),
-        .execution_nodes = self.graph_summary.execution_nodes,
-        .tensor_count = self.graph_summary.tensor_count,
-        .class_count = self.graph_summary.class_count,
-        .candidate_count = if (detection_output) |output| output.candidate_count else null,
-        .detections = if (detection_output) |output| output.detections else &.{},
-    };
-
-    var out: std.Io.Writer.Allocating = .init(allocator);
-    defer out.deinit();
-    try std.json.Stringify.value(receipt, .{}, &out.writer);
-    return try allocator.dupe(u8, out.written());
-}
-
 fn maybeRunSharedDetect(
     self: *const VisionAdapter,
     allocator: std.mem.Allocator,
     request: task.TaskRequest,
-) !?axionyx_bridge.DetectOutput {
-    if (!std.mem.eql(u8, request.spec.operation, "detect")) return null;
-    if (request.spec.execution != .sync) return null;
-
-    const image_path = switch (request.input) {
-        .image_path => |value| value,
-        else => return null,
-    };
-
-    return try axionyx_bridge.executeDetect(
+) !?vision_shared.DetectOutput {
+    return try vision_shared.maybeRunDetect(
         allocator,
         self.plan.graph_path.?,
         self.plan.binary_weights_path.?,
-        image_path,
+        request.spec.operation,
+        request.spec.execution,
+        request.input.asString(),
     );
 }

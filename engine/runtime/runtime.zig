@@ -10,3 +10,7 @@ pub const registry = @import("registry/registry.zig");
 pub const planner = @import("planner/planner.zig");
 pub const executor = @import("executor/executor.zig");
 pub const session = @import("session/session.zig");
+pub const providers = struct {
+    pub const vision_shared = @import("providers/vision_shared.zig");
+    pub const ocr_shared = @import("providers/ocr_shared.zig");
+};
