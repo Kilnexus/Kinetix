@@ -1,5 +1,4 @@
 const std = @import("std");
-const adapter_mod = @import("../adapter/adapter.zig");
 const backend = @import("../artifacts/backend/backend.zig");
 const task = @import("../core/task.zig");
 
@@ -8,8 +7,80 @@ pub const ExecutionMode = task.ExecutionMode;
 pub const InputPayload = task.InputPayload;
 pub const GenerationOptions = task.GenerationOptions;
 pub const WeightScheme = backend.WeightScheme;
-pub const OutputPayload = adapter_mod.OutputPayload;
-pub const ExecutionOrigin = adapter_mod.ExecutionOrigin;
+
+pub const Descriptor = struct {
+    id: []const u8,
+    modality: Modality,
+    version: []const u8 = "0.1.0",
+    bound_model_family: ?[]const u8 = null,
+    supports_batching: bool = false,
+    supports_streaming: bool = false,
+    supported_operations: []const []const u8 = &.{},
+
+    pub fn supportsOperation(self: Descriptor, operation: []const u8) bool {
+        if (self.supported_operations.len == 0) return true;
+        for (self.supported_operations) |supported| {
+            if (std.mem.eql(u8, supported, operation)) return true;
+        }
+        return false;
+    }
+};
+
+pub const Submission = struct {
+    adapter_id: []const u8,
+    accepted: bool = true,
+    execution: ExecutionMode,
+};
+
+pub const OutputPayload = union(enum) {
+    none,
+    text: []const u8,
+    json: []const u8,
+
+    pub fn deinit(self: *OutputPayload, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .none => {},
+            .text => |value| allocator.free(value),
+            .json => |value| allocator.free(value),
+        }
+        self.* = .none;
+    }
+};
+
+pub const ExecutionOrigin = enum {
+    shared_adapter,
+    native_single_bridge,
+    native_batch_bridge,
+};
+
+pub const ExecutionNote = enum {
+    none,
+    validated_only,
+    text_request_ready,
+    text_native_qwen_single,
+    text_native_qwen_batch,
+    vision_graph_ready,
+    vision_shared_detect,
+    ocr_model_ready,
+    ocr_shared_infer,
+};
+
+pub const ExecutionResult = struct {
+    submission: Submission,
+    origin: ExecutionOrigin = .shared_adapter,
+    note: ExecutionNote = .none,
+    output: OutputPayload = .none,
+
+    pub fn deinit(self: *ExecutionResult, allocator: std.mem.Allocator) void {
+        self.output.deinit(allocator);
+        self.* = undefined;
+    }
+};
+
+pub const BatchExecutionPath = enum {
+    adapter_batch,
+    per_request_fallback,
+};
 
 pub const InputKind = enum {
     none,
@@ -124,7 +195,7 @@ pub const ExecutionPlan = struct {
 
 pub const RuntimeResult = struct {
     origin: ExecutionOrigin = .shared_adapter,
-    note: []const u8 = "",
+    note: ExecutionNote = .none,
     output: OutputPayload = .none,
     diagnostics: []const Diagnostic = &.{},
 
@@ -161,6 +232,57 @@ pub const RuntimeBatchResults = struct {
         for (self.items) |*item| item.deinit(self.allocator);
         self.allocator.free(self.items);
         self.* = undefined;
+    }
+};
+
+pub const RequestExecutionResult = struct {
+    request_index: usize,
+    result: ExecutionResult,
+};
+
+pub const ExecutedBatch = struct {
+    adapter_id: []const u8,
+    execution: ExecutionMode,
+    supports_batching: bool,
+    execute_path: BatchExecutionPath,
+    request_results: []RequestExecutionResult,
+
+    pub fn len(self: ExecutedBatch) usize {
+        return self.request_results.len;
+    }
+
+    pub fn acceptedCount(self: ExecutedBatch) usize {
+        var accepted: usize = 0;
+        for (self.request_results) |result| {
+            accepted += @intFromBool(result.result.submission.accepted);
+        }
+        return accepted;
+    }
+};
+
+pub const BatchExecutionReport = struct {
+    allocator: std.mem.Allocator,
+    batches: []ExecutedBatch,
+
+    pub fn deinit(self: *BatchExecutionReport) void {
+        for (self.batches) |batch| {
+            for (batch.request_results) |*result| result.result.deinit(self.allocator);
+            self.allocator.free(batch.request_results);
+        }
+        self.allocator.free(self.batches);
+        self.* = undefined;
+    }
+
+    pub fn totalRequests(self: BatchExecutionReport) usize {
+        var total: usize = 0;
+        for (self.batches) |batch| total += batch.len();
+        return total;
+    }
+
+    pub fn totalAccepted(self: BatchExecutionReport) usize {
+        var total: usize = 0;
+        for (self.batches) |batch| total += batch.acceptedCount();
+        return total;
     }
 };
 

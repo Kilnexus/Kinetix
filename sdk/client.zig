@@ -2,8 +2,8 @@ const std = @import("std");
 const engine = @import("engine_root");
 const execution = @import("sdk_execution");
 
-const adapter_mod = engine.adapter;
 const backend = engine.artifacts.backend;
+const runtime_types = engine.runtime.types;
 const task = engine.core.task;
 
 pub const TextGenerateOptions = struct {
@@ -76,8 +76,8 @@ pub const TextGenerationResult = struct {
     model_family: []u8,
     accepted: bool,
     execution: task.ExecutionMode,
-    origin: adapter_mod.ExecutionOrigin,
-    note: adapter_mod.ExecutionNote,
+    origin: runtime_types.ExecutionOrigin,
+    note: runtime_types.ExecutionNote,
     text: []u8,
 
     pub fn deinit(self: *TextGenerationResult, allocator: std.mem.Allocator) void {
@@ -91,8 +91,8 @@ pub const TextGenerationResult = struct {
 pub const TextBatchGenerationItem = struct {
     accepted: bool,
     execution: task.ExecutionMode,
-    origin: adapter_mod.ExecutionOrigin,
-    note: adapter_mod.ExecutionNote,
+    origin: runtime_types.ExecutionOrigin,
+    note: runtime_types.ExecutionNote,
     text: []u8,
 
     pub fn deinit(self: *TextBatchGenerationItem, allocator: std.mem.Allocator) void {
@@ -129,8 +129,8 @@ pub const DetectionResult = struct {
     adapter_id: []u8,
     accepted: bool,
     execution: task.ExecutionMode,
-    origin: adapter_mod.ExecutionOrigin,
-    note: adapter_mod.ExecutionNote,
+    origin: runtime_types.ExecutionOrigin,
+    note: runtime_types.ExecutionNote,
     status: []u8,
     operation: []u8,
     model_name: []u8,
@@ -158,8 +158,8 @@ pub const OCRResult = struct {
     adapter_id: []u8,
     accepted: bool,
     execution: task.ExecutionMode,
-    origin: adapter_mod.ExecutionOrigin,
-    note: adapter_mod.ExecutionNote,
+    origin: runtime_types.ExecutionOrigin,
+    note: runtime_types.ExecutionNote,
     status: []u8,
     operation: []u8,
     model_family: []u8,
@@ -503,15 +503,15 @@ pub const KinetixClient = struct {
 fn copyTextGenerationResult(
     allocator: std.mem.Allocator,
     prepared: *const execution.PreparedExecution,
-    result: adapter_mod.ExecutionResult,
+    result: runtime_types.ExecutionResult,
 ) !TextGenerationResult {
     return try copyTextGenerationResultFromDescriptor(allocator, prepared.descriptor, result);
 }
 
 fn copyTextGenerationResultFromDescriptor(
     allocator: std.mem.Allocator,
-    descriptor: engine.adapter.Descriptor,
-    result: adapter_mod.ExecutionResult,
+    descriptor: runtime_types.Descriptor,
+    result: runtime_types.ExecutionResult,
 ) !TextGenerationResult {
     const text = switch (result.output) {
         .text => |value| value,
@@ -532,17 +532,17 @@ fn copyTextGenerationResultFromDescriptor(
 fn copyTextBatchResult(
     allocator: std.mem.Allocator,
     prepared: *const execution.PreparedBatchExecution,
-    report: engine.runtime.batch_executor.BatchExecutionReport,
+    report: runtime_types.BatchExecutionReport,
 ) !TextBatchGenerationResult {
     return try copyTextBatchResultFromDescriptor(allocator, prepared.descriptor, prepared.requests.len, true, report);
 }
 
 fn copyTextBatchResultFromDescriptor(
     allocator: std.mem.Allocator,
-    descriptor: engine.adapter.Descriptor,
+    descriptor: runtime_types.Descriptor,
     item_count: usize,
     used_batching: bool,
-    report: engine.runtime.batch_executor.BatchExecutionReport,
+    report: runtime_types.BatchExecutionReport,
 ) !TextBatchGenerationResult {
     const items = try allocator.alloc(TextBatchGenerationItem, item_count);
     errdefer allocator.free(items);
@@ -580,7 +580,7 @@ fn copyTextBatchResultFromDescriptor(
     };
 }
 
-fn copyTextBatchItem(allocator: std.mem.Allocator, result: adapter_mod.ExecutionResult) !TextBatchGenerationItem {
+fn copyTextBatchItem(allocator: std.mem.Allocator, result: runtime_types.ExecutionResult) !TextBatchGenerationItem {
     const text = switch (result.output) {
         .text => |value| value,
         else => return error.ExpectedTextOutput,
@@ -595,7 +595,7 @@ fn copyTextBatchItem(allocator: std.mem.Allocator, result: adapter_mod.Execution
     };
 }
 
-fn copyDetectionResult(allocator: std.mem.Allocator, result: adapter_mod.ExecutionResult) !DetectionResult {
+fn copyDetectionResult(allocator: std.mem.Allocator, result: runtime_types.ExecutionResult) !DetectionResult {
     const payload = switch (result.output) {
         .json => |value| value,
         else => return error.ExpectedJsonOutput,
@@ -638,7 +638,7 @@ fn copyDetectionResult(allocator: std.mem.Allocator, result: adapter_mod.Executi
     };
 }
 
-fn copyOCRResult(allocator: std.mem.Allocator, result: adapter_mod.ExecutionResult) !OCRResult {
+fn copyOCRResult(allocator: std.mem.Allocator, result: runtime_types.ExecutionResult) !OCRResult {
     const payload = switch (result.output) {
         .json => |value| value,
         else => return error.ExpectedJsonOutput,
@@ -694,7 +694,7 @@ fn destroyExecutionContext(context: *execution.ExecutionContext) void {
     allocator.destroy(context);
 }
 
-fn allBatchResultsHaveText(report: engine.runtime.batch_executor.BatchExecutionReport) bool {
+fn allBatchResultsHaveText(report: runtime_types.BatchExecutionReport) bool {
     for (report.batches) |batch| {
         for (batch.request_results) |request_result| {
             switch (request_result.result.output) {
@@ -821,8 +821,8 @@ test "client generateText returns typed result for qwen3 native execution" {
     defer result.deinit(std.testing.allocator);
 
     try std.testing.expectEqualStrings("qwen3", result.model_family);
-    try std.testing.expectEqual(adapter_mod.ExecutionOrigin.native_single_bridge, result.origin);
-    try std.testing.expectEqual(adapter_mod.ExecutionNote.text_native_qwen_single, result.note);
+    try std.testing.expectEqual(runtime_types.ExecutionOrigin.native_single_bridge, result.origin);
+    try std.testing.expectEqual(runtime_types.ExecutionNote.text_native_qwen_single, result.note);
     try std.testing.expectEqualStrings("stub-native-single", result.text);
 }
 

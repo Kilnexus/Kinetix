@@ -36,7 +36,6 @@ pub fn build(b: *std.Build) void {
 
 const LegacyImports = struct {
     engine_root: *std.Build.Module,
-    adapters_root: *std.Build.Module,
     sdk_execution: *std.Build.Module,
     kinetix_sdk: *std.Build.Module,
     pixio: *std.Build.Module,
@@ -80,12 +79,6 @@ fn addLegacyImports(
         .target = target,
         .optimize = optimize,
     });
-    const adapters_root = b.createModule(.{
-        .root_source_file = b.path("adapters/adapters.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    adapters_root.addImport("engine_root", engine_root);
     const sdk_execution = b.createModule(.{
         .root_source_file = b.path("sdk/execution/session.zig"),
         .target = target,
@@ -205,14 +198,9 @@ fn addLegacyImports(
     });
     legacy_vision.addImport("Pixio", pixio);
     legacy_vision.addImport("runtime", runtime);
-    adapters_root.addImport("graph", graph);
-    adapters_root.addImport("runtime", runtime);
-    adapters_root.addImport("vision", legacy_vision);
-    adapters_root.addImport("weights", weights);
 
     return .{
         .engine_root = engine_root,
-        .adapters_root = adapters_root,
         .sdk_execution = sdk_execution,
         .kinetix_sdk = kinetix_sdk,
         .pixio = pixio,
@@ -233,7 +221,6 @@ fn addLegacyImports(
 
 fn addImportsToRoot(root: *std.Build.Module, imports: LegacyImports) void {
     root.addImport("engine_root", imports.engine_root);
-    root.addImport("adapters_root", imports.adapters_root);
     root.addImport("sdk_execution", imports.sdk_execution);
     root.addImport("kinetix_sdk", imports.kinetix_sdk);
     root.addImport("Pixio", imports.pixio);

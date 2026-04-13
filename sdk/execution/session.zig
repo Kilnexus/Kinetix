@@ -2,8 +2,6 @@ const std = @import("std");
 const engine = @import("engine_root");
 
 const backend = engine.artifacts.backend;
-const adapter_mod = engine.adapter;
-const batch_executor = engine.runtime.batch_executor;
 const runtime_model = engine.runtime.model;
 const runtime_session = engine.runtime.session;
 const runtime_types = engine.runtime.types;
@@ -64,7 +62,7 @@ pub const ExecutionContext = struct {
     allocator: std.mem.Allocator,
     unified_runtime: runtime_session.RuntimeSession,
     model_handle: runtime_model.ModelHandle,
-    descriptor: adapter_mod.Descriptor,
+    descriptor: runtime_types.Descriptor,
 
     pub fn deinit(self: *ExecutionContext) void {
         self.model_handle.deinit();
@@ -98,13 +96,13 @@ pub const ExecutionContext = struct {
         };
     }
 
-    pub fn execute(self: *const ExecutionContext, request: ContextRequest) !adapter_mod.ExecutionResult {
+    pub fn execute(self: *const ExecutionContext, request: ContextRequest) !runtime_types.ExecutionResult {
         var prepared = try self.prepare(request);
         defer prepared.deinit();
         return try prepared.execute();
     }
 
-    pub fn executeBatch(self: *const ExecutionContext, allocator: std.mem.Allocator, request: ContextBatchRequest) !batch_executor.BatchExecutionReport {
+    pub fn executeBatch(self: *const ExecutionContext, allocator: std.mem.Allocator, request: ContextBatchRequest) !runtime_types.BatchExecutionReport {
         var prepared = try self.prepareBatch(allocator, request);
         defer prepared.deinit();
         return try prepared.execute();
@@ -121,7 +119,7 @@ pub const PreparedContextExecution = struct {
         self.* = undefined;
     }
 
-    pub fn execute(self: *const PreparedContextExecution) !adapter_mod.ExecutionResult {
+    pub fn execute(self: *const PreparedContextExecution) !runtime_types.ExecutionResult {
         return try executeWithUnifiedRuntime(self.context, &self.runtime_plan, self.request.spec.execution);
     }
 };
@@ -138,7 +136,7 @@ pub const PreparedContextBatchExecution = struct {
         self.* = undefined;
     }
 
-    pub fn execute(self: *const PreparedContextBatchExecution) !batch_executor.BatchExecutionReport {
+    pub fn execute(self: *const PreparedContextBatchExecution) !runtime_types.BatchExecutionReport {
         return try executeBatchWithUnifiedRuntime(self.context, &self.runtime_plan);
     }
 };
@@ -146,7 +144,7 @@ pub const PreparedContextBatchExecution = struct {
 pub const PreparedExecution = struct {
     allocator: std.mem.Allocator,
     context: *ExecutionContext,
-    descriptor: adapter_mod.Descriptor,
+    descriptor: runtime_types.Descriptor,
     request: task.TaskRequest,
     runtime_plan: runtime_types.ExecutionPlan,
 
@@ -157,7 +155,7 @@ pub const PreparedExecution = struct {
         self.* = undefined;
     }
 
-    pub fn execute(self: *const PreparedExecution) !adapter_mod.ExecutionResult {
+    pub fn execute(self: *const PreparedExecution) !runtime_types.ExecutionResult {
         return try executeWithUnifiedRuntime(self.context, &self.runtime_plan, self.request.spec.execution);
     }
 };
@@ -165,7 +163,7 @@ pub const PreparedExecution = struct {
 pub const PreparedBatchExecution = struct {
     allocator: std.mem.Allocator,
     context: *ExecutionContext,
-    descriptor: adapter_mod.Descriptor,
+    descriptor: runtime_types.Descriptor,
     requests: []task.TaskRequest,
     runtime_plan: runtime_types.ExecutionPlan,
 
@@ -177,7 +175,7 @@ pub const PreparedBatchExecution = struct {
         self.* = undefined;
     }
 
-    pub fn execute(self: *const PreparedBatchExecution) !batch_executor.BatchExecutionReport {
+    pub fn execute(self: *const PreparedBatchExecution) !runtime_types.BatchExecutionReport {
         return try executeBatchWithUnifiedRuntime(self.context, &self.runtime_plan);
     }
 };
@@ -265,7 +263,7 @@ pub fn prepareBatch(allocator: std.mem.Allocator, request: PrepareBatchRequest) 
     };
 }
 
-fn buildDescriptor(handle: *const runtime_model.ModelHandle) adapter_mod.Descriptor {
+fn buildDescriptor(handle: *const runtime_model.ModelHandle) runtime_types.Descriptor {
     return .{
         .id = handle.normalized.descriptor.id,
         .modality = handle.normalized.descriptor.modality,
@@ -276,7 +274,7 @@ fn buildDescriptor(handle: *const runtime_model.ModelHandle) adapter_mod.Descrip
     };
 }
 
-fn defaultOperation(descriptor: adapter_mod.Descriptor) []const u8 {
+fn defaultOperation(descriptor: runtime_types.Descriptor) []const u8 {
     if (descriptor.supported_operations.len == 0) return "infer";
     return descriptor.supported_operations[0];
 }
@@ -289,7 +287,7 @@ const ResolvedRequest = struct {
     allows_batching: bool = true,
 };
 
-fn buildTaskRequest(descriptor: adapter_mod.Descriptor, request: ContextRequest) !task.TaskRequest {
+fn buildTaskRequest(descriptor: runtime_types.Descriptor, request: ContextRequest) !task.TaskRequest {
     const model_family = descriptor.bound_model_family orelse return error.MissingModelFamilyBinding;
     const resolved = resolveContextRequest(descriptor, request);
 
@@ -306,7 +304,7 @@ fn buildTaskRequest(descriptor: adapter_mod.Descriptor, request: ContextRequest)
     };
 }
 
-fn buildTaskRequests(allocator: std.mem.Allocator, descriptor: adapter_mod.Descriptor, items: []const ContextBatchItem) ![]task.TaskRequest {
+fn buildTaskRequests(allocator: std.mem.Allocator, descriptor: runtime_types.Descriptor, items: []const ContextBatchItem) ![]task.TaskRequest {
     const requests = try allocator.alloc(task.TaskRequest, items.len);
     errdefer allocator.free(requests);
 
@@ -341,7 +339,7 @@ const OwnedRuntimeBatchRequest = struct {
     }
 };
 
-fn buildRuntimeRequest(descriptor: adapter_mod.Descriptor, request: ContextRequest) runtime_types.RuntimeRequest {
+fn buildRuntimeRequest(descriptor: runtime_types.Descriptor, request: ContextRequest) runtime_types.RuntimeRequest {
     const resolved = resolveContextRequest(descriptor, request);
     return .{
         .operation = resolved.operation,
@@ -354,7 +352,7 @@ fn buildRuntimeRequest(descriptor: adapter_mod.Descriptor, request: ContextReque
 
 fn buildRuntimeBatchRequest(
     allocator: std.mem.Allocator,
-    descriptor: adapter_mod.Descriptor,
+    descriptor: runtime_types.Descriptor,
     items: []const ContextBatchItem,
 ) !OwnedRuntimeBatchRequest {
     const runtime_items = try allocator.alloc(runtime_types.RuntimeRequest, items.len);
@@ -377,7 +375,7 @@ fn buildRuntimeBatchRequest(
     };
 }
 
-fn resolveContextRequest(descriptor: adapter_mod.Descriptor, request: ContextRequest) ResolvedRequest {
+fn resolveContextRequest(descriptor: runtime_types.Descriptor, request: ContextRequest) ResolvedRequest {
     return .{
         .operation = request.operation orelse defaultOperation(descriptor),
         .input = inferInputPayload(descriptor.modality, request.input),
@@ -389,7 +387,7 @@ fn resolveContextRequest(descriptor: adapter_mod.Descriptor, request: ContextReq
     };
 }
 
-fn resolveContextBatchItem(descriptor: adapter_mod.Descriptor, item: ContextBatchItem) ResolvedRequest {
+fn resolveContextBatchItem(descriptor: runtime_types.Descriptor, item: ContextBatchItem) ResolvedRequest {
     return .{
         .operation = item.operation orelse defaultOperation(descriptor),
         .input = inferInputPayload(descriptor.modality, item.input),
@@ -416,9 +414,8 @@ fn executeWithUnifiedRuntime(
     context: *const ExecutionContext,
     runtime_plan: *const runtime_types.ExecutionPlan,
     execution: task.ExecutionMode,
-) !adapter_mod.ExecutionResult {
+) !runtime_types.ExecutionResult {
     var runtime_result = try context.unified_runtime.execute(&context.model_handle, runtime_plan);
-    errdefer runtime_result.deinit(context.allocator);
 
     const output = runtime_result.output;
     runtime_result.output = .none;
@@ -429,7 +426,7 @@ fn executeWithUnifiedRuntime(
             .execution = execution,
         },
         .origin = runtime_result.origin,
-        .note = parseExecutionNote(runtime_result.note),
+        .note = runtime_result.note,
         .output = output,
     };
 }
@@ -437,11 +434,11 @@ fn executeWithUnifiedRuntime(
 fn executeBatchWithUnifiedRuntime(
     context: *const ExecutionContext,
     runtime_plan: *const runtime_types.ExecutionPlan,
-) !batch_executor.BatchExecutionReport {
+) !runtime_types.BatchExecutionReport {
     var runtime_results = try context.unified_runtime.executeBatch(&context.model_handle, runtime_plan);
     defer runtime_results.deinit();
 
-    const batches = try context.allocator.alloc(batch_executor.ExecutedBatch, runtime_plan.batches.len);
+    const batches = try context.allocator.alloc(runtime_types.ExecutedBatch, runtime_plan.batches.len);
     errdefer context.allocator.free(batches);
 
     var initialized_batches: usize = 0;
@@ -454,7 +451,7 @@ fn executeBatchWithUnifiedRuntime(
     }
 
     for (runtime_plan.batches, batches) |plan_batch, *batch| {
-        const request_results = try context.allocator.alloc(batch_executor.RequestExecutionResult, plan_batch.request_indices.len);
+        const request_results = try context.allocator.alloc(runtime_types.RequestExecutionResult, plan_batch.request_indices.len);
         errdefer context.allocator.free(request_results);
 
         for (plan_batch.request_indices, request_results) |request_index, *request_result| {
@@ -472,7 +469,7 @@ fn executeBatchWithUnifiedRuntime(
                         .execution = runtime_plan.requests[request_index].execution,
                     },
                     .origin = runtime_result.origin,
-                    .note = parseExecutionNote(runtime_result.note),
+                    .note = runtime_result.note,
                     .output = output,
                 },
             };
@@ -495,18 +492,6 @@ fn executeBatchWithUnifiedRuntime(
         .allocator = context.allocator,
         .batches = batches,
     };
-}
-
-fn parseExecutionNote(value: []const u8) adapter_mod.ExecutionNote {
-    if (std.mem.eql(u8, value, "validated_only")) return .validated_only;
-    if (std.mem.eql(u8, value, "text_request_ready")) return .text_request_ready;
-    if (std.mem.eql(u8, value, "text_native_qwen_single")) return .text_native_qwen_single;
-    if (std.mem.eql(u8, value, "text_native_qwen_batch")) return .text_native_qwen_batch;
-    if (std.mem.eql(u8, value, "vision_graph_ready")) return .vision_graph_ready;
-    if (std.mem.eql(u8, value, "vision_shared_detect")) return .vision_shared_detect;
-    if (std.mem.eql(u8, value, "ocr_model_ready")) return .ocr_model_ready;
-    if (std.mem.eql(u8, value, "ocr_shared_infer")) return .ocr_shared_infer;
-    return .none;
 }
 
 test "prepared execution resolves text requests through the unified runtime" {
@@ -537,7 +522,7 @@ test "prepared execution resolves text requests through the unified runtime" {
     var result = try prepared.execute();
     defer result.deinit(std.testing.allocator);
     try std.testing.expect(result.submission.accepted);
-    try std.testing.expectEqual(adapter_mod.ExecutionNote.text_request_ready, result.note);
+    try std.testing.expectEqual(runtime_types.ExecutionNote.text_request_ready, result.note);
 }
 
 test "prepared execution can request native text execution output" {
@@ -564,8 +549,8 @@ test "prepared execution can request native text execution output" {
     defer result.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(runtime_types.ExecutionPath.native, prepared.runtime_plan.path);
-    try std.testing.expectEqual(adapter_mod.ExecutionOrigin.native_single_bridge, result.origin);
-    try std.testing.expectEqual(adapter_mod.ExecutionNote.text_native_qwen_single, result.note);
+    try std.testing.expectEqual(runtime_types.ExecutionOrigin.native_single_bridge, result.origin);
+    try std.testing.expectEqual(runtime_types.ExecutionNote.text_native_qwen_single, result.note);
     try std.testing.expectEqualStrings("stub-native-single", result.output.text);
 }
 
@@ -643,8 +628,8 @@ test "execution context reuses one opened runtime handle across multiple text re
     });
     defer second.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(adapter_mod.ExecutionOrigin.native_single_bridge, first.origin);
-    try std.testing.expectEqual(adapter_mod.ExecutionOrigin.native_single_bridge, second.origin);
+    try std.testing.expectEqual(runtime_types.ExecutionOrigin.native_single_bridge, first.origin);
+    try std.testing.expectEqual(runtime_types.ExecutionOrigin.native_single_bridge, second.origin);
     try std.testing.expectEqualStrings("stub-native-single", first.output.text);
     try std.testing.expectEqualStrings("stub-native-single", second.output.text);
 }

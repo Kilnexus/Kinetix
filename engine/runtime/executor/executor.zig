@@ -69,7 +69,6 @@ fn executeQwen3Batch(
         handle.normalized.descriptor.id,
         task_requests,
     );
-    defer allocator.free(legacy_results);
     return try text_shared.adoptRuntimeBatchResults(allocator, legacy_results);
 }
 
@@ -109,7 +108,7 @@ fn executeYoloVision(
     }, detection_output);
     return .{
         .origin = .shared_adapter,
-        .note = if (detection_output != null) "vision_shared_detect" else "vision_graph_ready",
+        .note = if (detection_output != null) .vision_shared_detect else .vision_graph_ready,
         .output = .{ .json = output },
     };
 }
@@ -135,7 +134,7 @@ fn executeSwiftOCR(
     }, infer_output);
     return .{
         .origin = .shared_adapter,
-        .note = if (infer_output != null) "ocr_shared_infer" else "ocr_model_ready",
+        .note = if (infer_output != null) .ocr_shared_infer else .ocr_model_ready,
         .output = .{ .json = output },
     };
 }

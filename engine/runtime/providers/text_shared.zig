@@ -1,6 +1,5 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const adapter_mod = @import("../../adapter/adapter.zig");
 const backend = @import("../../artifacts/backend/backend.zig");
 const task = @import("../../core/task.zig");
 const text_runtime = @import("../text/text.zig");
@@ -58,7 +57,7 @@ pub const NativeBridge = if (builtin.is_test) struct {
     }
 } else text_runtime.native_dispatch.NativeBatchBridge;
 
-pub fn buildSubmission(adapter_id: []const u8, execution: task.ExecutionMode) adapter_mod.Submission {
+pub fn buildSubmission(adapter_id: []const u8, execution: task.ExecutionMode) types.Submission {
     return .{
         .adapter_id = adapter_id,
         .accepted = true,
@@ -66,7 +65,7 @@ pub fn buildSubmission(adapter_id: []const u8, execution: task.ExecutionMode) ad
     };
 }
 
-pub fn buildReadyResult(submission: adapter_mod.Submission) adapter_mod.ExecutionResult {
+pub fn buildReadyResult(submission: types.Submission) types.ExecutionResult {
     return .{
         .submission = submission,
         .origin = .shared_adapter,
@@ -78,8 +77,8 @@ pub fn buildReadyBatchResults(
     allocator: std.mem.Allocator,
     adapter_id: []const u8,
     requests: []const task.TaskRequest,
-) ![]adapter_mod.ExecutionResult {
-    const results = try allocator.alloc(adapter_mod.ExecutionResult, requests.len);
+) ![]types.ExecutionResult {
+    const results = try allocator.alloc(types.ExecutionResult, requests.len);
     errdefer allocator.free(results);
 
     for (requests, results) |request, *result| {
@@ -94,7 +93,7 @@ pub fn executeLegacySingle(
     preferred_weights: backend.WeightScheme,
     adapter_id: []const u8,
     request: task.TaskRequest,
-) !adapter_mod.ExecutionResult {
+) !types.ExecutionResult {
     return try text_runtime.native_dispatch.executeSingle(
         allocator,
         NativeBridge,
@@ -111,7 +110,7 @@ pub fn executeLegacyBatch(
     preferred_weights: backend.WeightScheme,
     adapter_id: []const u8,
     requests: []const task.TaskRequest,
-) ![]adapter_mod.ExecutionResult {
+) ![]types.ExecutionResult {
     return try text_runtime.native_dispatch.executeBatch(
         allocator,
         NativeBridge,
@@ -122,20 +121,21 @@ pub fn executeLegacyBatch(
     );
 }
 
-pub fn adoptRuntimeResult(legacy_result: *adapter_mod.ExecutionResult) types.RuntimeResult {
+pub fn adoptRuntimeResult(legacy_result: *types.ExecutionResult) types.RuntimeResult {
     const output = legacy_result.output;
     legacy_result.output = .none;
     return .{
         .origin = legacy_result.origin,
-        .note = @tagName(legacy_result.note),
+        .note = legacy_result.note,
         .output = output,
     };
 }
 
 pub fn adoptRuntimeBatchResults(
     allocator: std.mem.Allocator,
-    legacy_results: []adapter_mod.ExecutionResult,
+    legacy_results: []types.ExecutionResult,
 ) !types.RuntimeBatchResults {
+    defer allocator.free(legacy_results);
     const results = try allocator.alloc(types.RuntimeResult, legacy_results.len);
     errdefer allocator.free(results);
 

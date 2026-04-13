@@ -1,8 +1,8 @@
 const std = @import("std");
-const adapter_mod = @import("../../../../adapter/adapter.zig");
 const backend = @import("../../../../artifacts/backend/backend.zig");
 const task = @import("../../../../core/task.zig");
 const qwen_native = @import("qwen_native.zig");
+const types = @import("../../../types.zig");
 
 pub const NativeBatchBridge = struct {
     pub fn executeQwenSingle(
@@ -61,12 +61,12 @@ pub fn executeSingle(
     bridge: type,
     model_dir: []const u8,
     preferred_weights: backend.WeightScheme,
-    submission: adapter_mod.Submission,
+    submission: types.Submission,
     request: task.TaskRequest,
-) !adapter_mod.ExecutionResult {
+) !types.ExecutionResult {
     const use_native = canUseNativeQwenSingle(true, request);
     const output = if (use_native)
-        adapter_mod.OutputPayload{ .text = try bridge.executeQwenSingle(
+        types.OutputPayload{ .text = try bridge.executeQwenSingle(
             allocator,
             model_dir,
             preferred_weights,
@@ -90,7 +90,7 @@ pub fn executeBatch(
     preferred_weights: backend.WeightScheme,
     adapter_id: []const u8,
     requests: []const task.TaskRequest,
-) ![]adapter_mod.ExecutionResult {
+) ![]types.ExecutionResult {
     const use_native = canUseNativeQwenBatch(true, requests);
     var native_output: ?bridge.NativeBatchOutput = null;
     defer if (native_output) |*output| output.deinit(allocator);
@@ -104,7 +104,7 @@ pub fn executeBatch(
         );
     }
 
-    const results = try allocator.alloc(adapter_mod.ExecutionResult, requests.len);
+    const results = try allocator.alloc(types.ExecutionResult, requests.len);
     errdefer allocator.free(results);
 
     for (requests, results, 0..) |request, *result, index| {
