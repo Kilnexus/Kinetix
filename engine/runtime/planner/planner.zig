@@ -27,7 +27,7 @@ pub const Planner = struct {
             .request_indices = indices,
             .operation = request.operation,
             .execution = request.execution,
-            .allows_batching = handle.normalized.capabilities.supports_batch,
+            .allows_batching = handle.normalized.capabilities.supports_batch and request.allows_batching,
         };
 
         return .{
@@ -55,42 +55,7 @@ pub const Planner = struct {
         const requests = try self.allocator.alloc(types.RuntimeRequest, request.items.len);
         errdefer self.allocator.free(requests);
         @memcpy(requests, request.items);
-
-        const same_operation = allItemsShareOperation(request.items);
-        const use_batching = handle.normalized.capabilities.supports_batch and same_operation;
-        const batch_count: usize = if (use_batching) 1 else request.items.len;
-        const batches = try self.allocator.alloc(types.PlanBatch, batch_count);
-        errdefer self.allocator.free(batches);
-
-        if (use_batching) {
-            const indices = try self.allocator.alloc(usize, request.items.len);
-            errdefer self.allocator.free(indices);
-            for (indices, 0..) |*slot, index| slot.* = index;
-            batches[0] = .{
-                .allocator = self.allocator,
-                .request_indices = indices,
-                .operation = request.items[0].operation,
-                .execution = request.items[0].execution,
-                .allows_batching = true,
-            };
-        } else {
-            var initialized: usize = 0;
-            errdefer {
-                for (batches[0..initialized]) |*batch| batch.deinit();
-            }
-            for (request.items, 0..) |item, index| {
-                const indices = try self.allocator.alloc(usize, 1);
-                indices[0] = index;
-                batches[index] = .{
-                    .allocator = self.allocator,
-                    .request_indices = indices,
-                    .operation = item.operation,
-                    .execution = item.execution,
-                    .allows_batching = false,
-                };
-                initialized += 1;
-            }
-        }
+        const batches = try buildBatches(self.allocator, handle, request.items);
 
         return .{
             .allocator = self.allocator,
@@ -129,12 +94,90 @@ fn acceptsInput(handle: *const handle_mod.ModelHandle, kind: types.InputKind) bo
     return kind == .none;
 }
 
-fn allItemsShareOperation(items: []const types.RuntimeRequest) bool {
-    for (items[1..]) |item| {
-        if (!std.mem.eql(u8, items[0].operation, item.operation)) return false;
-        if (items[0].execution != item.execution) return false;
-        if (items[0].generation.native_execution != item.generation.native_execution) return false;
-        if (items[0].generation.max_tokens != item.generation.max_tokens) return false;
+fn buildBatches(
+    allocator: std.mem.Allocator,
+    handle: *const handle_mod.ModelHandle,
+    items: []const types.RuntimeRequest,
+) ![]types.PlanBatch {
+    const Builder = struct {
+        operation: []const u8,
+        execution: types.ExecutionMode,
+        input_tag: std.meta.Tag(types.InputPayload),
+        generation_max_tokens: ?usize,
+        native_execution: bool,
+        allows_batching: bool,
+        indices: std.ArrayListUnmanaged(usize) = .empty,
+
+        fn deinit(self: *@This(), alloc: std.mem.Allocator) void {
+            self.indices.deinit(alloc);
+        }
+    };
+
+    var builders = std.ArrayListUnmanaged(Builder).empty;
+    defer {
+        for (builders.items) |*builder| builder.deinit(allocator);
+        builders.deinit(allocator);
     }
-    return true;
+
+    for (items, 0..) |item, index| {
+        const batching_allowed = handle.normalized.capabilities.supports_batch and item.allows_batching;
+        const payload_tag = std.meta.activeTag(item.input);
+
+        if (batching_allowed) {
+            for (builders.items) |*builder| {
+                if (!builder.allows_batching) continue;
+                if (builder.execution != item.execution) continue;
+                if (builder.input_tag != payload_tag) continue;
+                if (builder.generation_max_tokens != item.generation.max_tokens) continue;
+                if (builder.native_execution != item.generation.native_execution) continue;
+                if (!std.mem.eql(u8, builder.operation, item.operation)) continue;
+                try builder.indices.append(allocator, index);
+                break;
+            } else {
+                var builder = Builder{
+                    .operation = item.operation,
+                    .execution = item.execution,
+                    .input_tag = payload_tag,
+                    .generation_max_tokens = item.generation.max_tokens,
+                    .native_execution = item.generation.native_execution,
+                    .allows_batching = true,
+                };
+                try builder.indices.append(allocator, index);
+                try builders.append(allocator, builder);
+            }
+            continue;
+        }
+
+        var builder = Builder{
+            .operation = item.operation,
+            .execution = item.execution,
+            .input_tag = payload_tag,
+            .generation_max_tokens = item.generation.max_tokens,
+            .native_execution = item.generation.native_execution,
+            .allows_batching = false,
+        };
+        try builder.indices.append(allocator, index);
+        try builders.append(allocator, builder);
+    }
+
+    const batches = try allocator.alloc(types.PlanBatch, builders.items.len);
+    errdefer allocator.free(batches);
+
+    var initialized: usize = 0;
+    errdefer {
+        for (batches[0..initialized]) |*batch| batch.deinit();
+    }
+
+    for (builders.items, batches) |*builder, *batch| {
+        batch.* = .{
+            .allocator = allocator,
+            .request_indices = try builder.indices.toOwnedSlice(allocator),
+            .operation = builder.operation,
+            .execution = builder.execution,
+            .allows_batching = builder.allows_batching,
+        };
+        initialized += 1;
+    }
+
+    return batches;
 }

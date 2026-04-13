@@ -79,6 +79,7 @@ pub const RuntimeRequest = struct {
     input: InputPayload = .none,
     execution: ExecutionMode = .sync,
     generation: GenerationOptions = .{},
+    allows_batching: bool = true,
 };
 
 pub const RuntimeBatchRequest = struct {

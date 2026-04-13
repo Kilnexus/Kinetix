@@ -92,14 +92,12 @@ fn addLegacyImports(
         .optimize = optimize,
     });
     sdk_execution.addImport("engine_root", engine_root);
-    sdk_execution.addImport("adapters_root", adapters_root);
     const kinetix_sdk = b.createModule(.{
         .root_source_file = b.path("sdk/kinetix.zig"),
         .target = target,
         .optimize = optimize,
     });
     kinetix_sdk.addImport("engine_root", engine_root);
-    kinetix_sdk.addImport("adapters_root", adapters_root);
     kinetix_sdk.addImport("sdk_execution", sdk_execution);
 
     const pixio = b.createModule(.{
