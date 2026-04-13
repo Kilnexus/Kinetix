@@ -305,23 +305,28 @@ fn defaultOperation(descriptor: engine.adapter.Descriptor) []const u8 {
     return descriptor.supported_operations[0];
 }
 
+const ResolvedRequest = struct {
+    operation: []const u8,
+    input: task.InputPayload,
+    execution: task.ExecutionMode,
+    generation: task.GenerationOptions,
+    allows_batching: bool = true,
+};
+
 fn buildTaskRequest(descriptor: engine.adapter.Descriptor, request: ContextRequest) !task.TaskRequest {
-    const operation = request.operation orelse defaultOperation(descriptor);
     const model_family = descriptor.bound_model_family orelse return error.MissingModelFamilyBinding;
+    const resolved = resolveContextRequest(descriptor, request);
 
     return .{
         .spec = .{
             .modality = descriptor.modality,
-            .operation = operation,
+            .operation = resolved.operation,
             .model_family = model_family,
             .adapter_id = descriptor.id,
-            .execution = request.execution,
+            .execution = resolved.execution,
         },
-        .input = inferInputPayload(descriptor.modality, request.input),
-        .generation = .{
-            .max_tokens = request.max_tokens,
-            .native_execution = request.native_exec,
-        },
+        .input = resolved.input,
+        .generation = resolved.generation,
     };
 }
 
@@ -329,25 +334,21 @@ fn buildTaskRequests(allocator: std.mem.Allocator, descriptor: engine.adapter.De
     const requests = try allocator.alloc(task.TaskRequest, items.len);
     errdefer allocator.free(requests);
 
-    const operation = defaultOperation(descriptor);
     const model_family = descriptor.bound_model_family orelse return error.MissingModelFamilyBinding;
 
     for (items, requests) |item, *slot| {
-        const execution_mode = item.execution orelse .sync;
+        const resolved = resolveContextBatchItem(descriptor, item);
         slot.* = .{
             .spec = .{
                 .modality = descriptor.modality,
-                .operation = item.operation orelse operation,
+                .operation = resolved.operation,
                 .model_family = model_family,
                 .adapter_id = descriptor.id,
-                .execution = execution_mode,
-                .allows_batching = item.allows_batching,
+                .execution = resolved.execution,
+                .allows_batching = resolved.allows_batching,
             },
-            .input = inferInputPayload(descriptor.modality, item.input),
-            .generation = .{
-                .max_tokens = item.max_tokens,
-                .native_execution = item.native_exec,
-            },
+            .input = resolved.input,
+            .generation = resolved.generation,
         };
     }
 
@@ -365,14 +366,12 @@ const OwnedRuntimeBatchRequest = struct {
 };
 
 fn buildRuntimeRequest(descriptor: engine.adapter.Descriptor, request: ContextRequest) engine.runtime.types.RuntimeRequest {
+    const resolved = resolveContextRequest(descriptor, request);
     return .{
-        .operation = request.operation orelse defaultOperation(descriptor),
-        .input = inferInputPayload(descriptor.modality, request.input),
-        .execution = request.execution,
-        .generation = .{
-            .max_tokens = request.max_tokens,
-            .native_execution = request.native_exec,
-        },
+        .operation = resolved.operation,
+        .input = resolved.input,
+        .execution = resolved.execution,
+        .generation = resolved.generation,
     };
 }
 
@@ -384,22 +383,44 @@ fn buildRuntimeBatchRequest(
     const runtime_items = try allocator.alloc(engine.runtime.types.RuntimeRequest, items.len);
     errdefer allocator.free(runtime_items);
 
-    const operation = defaultOperation(descriptor);
     for (items, runtime_items) |item, *slot| {
+        const resolved = resolveContextBatchItem(descriptor, item);
         slot.* = .{
-            .operation = item.operation orelse operation,
-            .input = inferInputPayload(descriptor.modality, item.input),
-            .execution = item.execution orelse .sync,
-            .generation = .{
-                .max_tokens = item.max_tokens,
-                .native_execution = item.native_exec,
-            },
+            .operation = resolved.operation,
+            .input = resolved.input,
+            .execution = resolved.execution,
+            .generation = resolved.generation,
         };
     }
 
     return .{
         .allocator = allocator,
         .request = .{ .items = runtime_items },
+    };
+}
+
+fn resolveContextRequest(descriptor: engine.adapter.Descriptor, request: ContextRequest) ResolvedRequest {
+    return .{
+        .operation = request.operation orelse defaultOperation(descriptor),
+        .input = inferInputPayload(descriptor.modality, request.input),
+        .execution = request.execution,
+        .generation = .{
+            .max_tokens = request.max_tokens,
+            .native_execution = request.native_exec,
+        },
+    };
+}
+
+fn resolveContextBatchItem(descriptor: engine.adapter.Descriptor, item: ContextBatchItem) ResolvedRequest {
+    return .{
+        .operation = item.operation orelse defaultOperation(descriptor),
+        .input = inferInputPayload(descriptor.modality, item.input),
+        .execution = item.execution orelse .sync,
+        .generation = .{
+            .max_tokens = item.max_tokens,
+            .native_execution = item.native_exec,
+        },
+        .allows_batching = item.allows_batching,
     };
 }
 

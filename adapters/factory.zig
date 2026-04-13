@@ -3,8 +3,10 @@ const kinetix = @import("engine_root");
 
 const backend = kinetix.artifacts.backend;
 const registry_mod = kinetix.registry;
+const runtime_compat = kinetix.runtime.compat;
 const runtime_model = kinetix.runtime.model;
 const runtime_types = kinetix.runtime.types;
+const runtime_session = kinetix.runtime.session;
 const ocr_mod = @import("ocr/ocr.zig");
 const text_mod = @import("text/text.zig");
 const vision_mod = @import("vision/vision.zig");
@@ -52,20 +54,9 @@ pub fn initAuto(
     model_dir: []const u8,
     preferred_weights: backend.WeightScheme,
 ) !ManagedAdapter {
-    var catalog = try backend.ModelCatalog.discover(allocator, model_dir);
-    defer catalog.deinit();
-
-    if (catalog.has(.graph_json) and catalog.has(.weights_bin)) {
-        return .{ .vision = try vision_mod.VisionAdapter.init(allocator, model_dir) };
-    }
-    if (catalog.has(.config) and catalog.has(.tokenizer_json) and (catalog.resolveAutoScheme() != .auto or catalog.has(.safetensors))) {
-        return .{ .text = try text_mod.TextAdapter.init(allocator, model_dir, preferred_weights) };
-    }
-    if (catalog.has(.ocr_model)) {
-        return .{ .ocr = try ocr_mod.OCRAdapter.init(allocator, model_dir) };
-    }
-
-    return error.UnsupportedModelDirectory;
+    var normalized = try runtime_compat.normalizeModel(allocator, model_dir, preferred_weights);
+    defer normalized.deinit();
+    return try initForNormalizedModel(allocator, &normalized, preferred_weights);
 }
 
 pub fn initForModelHandle(
@@ -73,29 +64,40 @@ pub fn initForModelHandle(
     handle: *const runtime_model.ModelHandle,
     preferred_weights: backend.WeightScheme,
 ) !ManagedAdapter {
-    const model_dir = handle.normalized.artifacts.model_dir;
-    return switch (handle.normalized.provider_key) {
-        .qwen3_text, .bert_text => .{
+    return try initForNormalizedModel(allocator, &handle.normalized, preferred_weights);
+}
+
+pub fn initForNormalizedModel(
+    allocator: std.mem.Allocator,
+    normalized: *const runtime_compat.NormalizedModel,
+    preferred_weights: backend.WeightScheme,
+) !ManagedAdapter {
+    const model_dir = normalized.artifacts.model_dir;
+    return switch (normalized.provider_key) {
+        .qwen3_text, .bert_text => try initForModality(allocator, .text, model_dir, preferred_weights),
+        .yolo_vision => try initForModality(allocator, .vision, model_dir, preferred_weights),
+        .swiftocr_ocr => try initForModality(allocator, .ocr, model_dir, preferred_weights),
+        .generic => try initForModality(allocator, normalized.descriptor.modality, model_dir, preferred_weights),
+    };
+}
+
+fn initForModality(
+    allocator: std.mem.Allocator,
+    modality: runtime_types.Modality,
+    model_dir: []const u8,
+    preferred_weights: backend.WeightScheme,
+) !ManagedAdapter {
+    return switch (modality) {
+        .text, .multimodal => .{
             .text = try text_mod.TextAdapter.init(allocator, model_dir, preferred_weights),
         },
-        .yolo_vision => .{
+        .vision => .{
             .vision = try vision_mod.VisionAdapter.init(allocator, model_dir),
         },
-        .swiftocr_ocr => .{
+        .ocr => .{
             .ocr = try ocr_mod.OCRAdapter.init(allocator, model_dir),
         },
-        .generic => switch (handle.normalized.descriptor.modality) {
-            .text, .multimodal => .{
-                .text = try text_mod.TextAdapter.init(allocator, model_dir, preferred_weights),
-            },
-            .vision => .{
-                .vision = try vision_mod.VisionAdapter.init(allocator, model_dir),
-            },
-            .ocr => .{
-                .ocr = try ocr_mod.OCRAdapter.init(allocator, model_dir),
-            },
-            else => error.UnsupportedNormalizedProvider,
-        },
+        else => error.UnsupportedNormalizedProvider,
     };
 }
 
@@ -110,37 +112,10 @@ test "factory can bridge from unified runtime model handle to legacy adapters" {
     const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
     defer std.testing.allocator.free(root_path);
 
-    var handle = runtime_model.ModelHandle{
-        .allocator = std.testing.allocator,
-        .normalized = .{
-            .descriptor = .{
-                .allocator = std.testing.allocator,
-                .id = try std.testing.allocator.dupe(u8, "runtime.text.qwen3.demo"),
-                .modality = .text,
-                .family = try std.testing.allocator.dupe(u8, "qwen3"),
-                .source_format = .huggingface_directory,
-                .normalized_format = .text_decoder,
-            },
-            .artifacts = .{
-                .allocator = std.testing.allocator,
-                .model_dir = try std.testing.allocator.dupe(u8, root_path),
-                .config_path = null,
-                .tokenizer_path = null,
-                .graph_path = null,
-                .weights_path = null,
-                .binary_weights_path = null,
-                .ocr_model_path = null,
-            },
-            .capabilities = .{
-                .supports_sync = true,
-                .supports_batch = true,
-                .supports_stream = true,
-                .supports_native_exec = true,
-            },
-            .compat = try kinetix.runtime.compat.CompatibilityReport.supported(std.testing.allocator),
-            .provider_key = .qwen3_text,
-        },
-    };
+    var session = runtime_session.RuntimeSession.init(std.testing.allocator);
+    defer session.deinit();
+
+    var handle = try session.openModel(.{ .model_dir = root_path });
     defer handle.deinit();
 
     var managed = try initForModelHandle(std.testing.allocator, &handle, .auto);
