@@ -12,6 +12,10 @@ pub const Planner = struct {
     pub fn plan(self: Planner, handle: *const handle_mod.ModelHandle, request: types.RuntimeRequest) !types.ExecutionPlan {
         try validateRequest(handle, request);
 
+        const requests = try self.allocator.alloc(types.RuntimeRequest, 1);
+        errdefer self.allocator.free(requests);
+        requests[0] = request;
+
         const indices = try self.allocator.alloc(usize, 1);
         errdefer self.allocator.free(indices);
         indices[0] = 0;
@@ -32,6 +36,7 @@ pub const Planner = struct {
             .request_count = 1,
             .execution = request.execution,
             .path = choosePath(handle, request),
+            .requests = requests,
             .batches = batches,
         };
     }
@@ -46,6 +51,10 @@ pub const Planner = struct {
         for (request.items) |item| {
             try validateRequest(handle, item);
         }
+
+        const requests = try self.allocator.alloc(types.RuntimeRequest, request.items.len);
+        errdefer self.allocator.free(requests);
+        @memcpy(requests, request.items);
 
         const same_operation = allItemsShareOperation(request.items);
         const use_batching = handle.normalized.capabilities.supports_batch and same_operation;
@@ -89,6 +98,7 @@ pub const Planner = struct {
             .request_count = request.items.len,
             .execution = request.items[0].execution,
             .path = choosePath(handle, request.items[0]),
+            .requests = requests,
             .batches = batches,
         };
     }

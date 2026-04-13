@@ -70,6 +70,41 @@ test "runtime session opens normalized models through the unified compatibility 
     try std.testing.expectEqual(types.Modality.text, handle.normalized.descriptor.modality);
 }
 
+test "runtime session can execute qwen3 requests through the unified executor" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "config.json", "{\"model_type\":\"qwen3\"}");
+    try writeTmpFile(tmp.dir, "tokenizer.json", "{}");
+    try writeTmpFile(tmp.dir, "model.q8.zinfer", "q8");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var session = RuntimeSession.init(std.testing.allocator);
+    defer session.deinit();
+
+    var handle = try session.openModel(.{ .model_dir = root_path });
+    defer handle.deinit();
+
+    var plan = try session.plan(&handle, .{
+        .operation = "generate",
+        .input = .{ .text = "hello" },
+        .generation = .{
+            .max_tokens = 8,
+            .native_execution = true,
+        },
+    });
+    defer plan.deinit();
+
+    var result = try session.execute(&handle, &plan);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(types.ExecutionOrigin.native_single_bridge, result.origin);
+    try std.testing.expectEqualStrings("text_native_qwen_single", result.note);
+    try std.testing.expectEqualStrings("stub-native-single", result.output.text);
+}
+
 fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {
     var file = try dir.createFile(relative_path, .{});
     defer file.close();

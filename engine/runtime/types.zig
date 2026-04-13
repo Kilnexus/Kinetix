@@ -110,9 +110,11 @@ pub const ExecutionPlan = struct {
     request_count: usize,
     execution: ExecutionMode,
     path: ExecutionPath,
+    requests: []RuntimeRequest,
     batches: []PlanBatch,
 
     pub fn deinit(self: *ExecutionPlan) void {
+        self.allocator.free(self.requests);
         for (self.batches) |*batch| batch.deinit();
         self.allocator.free(self.batches);
         self.* = undefined;
