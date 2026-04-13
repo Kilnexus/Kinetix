@@ -886,7 +886,7 @@ test "client inferOCR returns typed result" {
     try std.testing.expectEqual(@as(?usize, 1), result.image_height);
 }
 
-test "client generateTextBatch falls back to sequential typed generation when batch outputs are not materialized" {
+test "client generateTextBatch returns batched typed generation when unified runtime materializes outputs" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -906,10 +906,10 @@ test "client generateTextBatch falls back to sequential typed generation when ba
     var result = try client.generateTextBatch(root_path, &requests, .{});
     defer result.deinit(std.testing.allocator);
 
-    try std.testing.expect(!result.used_batching);
+    try std.testing.expect(result.used_batching);
     try std.testing.expectEqual(@as(usize, 2), result.items.len);
-    try std.testing.expectEqualStrings("stub-native-single", result.items[0].text);
-    try std.testing.expectEqualStrings("stub-native-single", result.items[1].text);
+    try std.testing.expectEqualStrings("stub-native-batch", result.items[0].text);
+    try std.testing.expectEqualStrings("stub-native-batch", result.items[1].text);
 }
 
 test "client openTextModel exposes operation-specific methods without operation strings" {

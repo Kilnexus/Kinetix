@@ -3,6 +3,7 @@ const adapters = @import("adapters_root");
 const engine = @import("engine_root");
 
 const backend = engine.artifacts.backend;
+const adapter_mod = engine.adapter;
 const registry_mod = engine.registry;
 const batch_executor = engine.runtime.batch_executor;
 const runtime_model = engine.runtime.model;
@@ -135,6 +136,9 @@ pub const PreparedContextExecution = struct {
     }
 
     pub fn execute(self: *const PreparedContextExecution) !engine.adapter.ExecutionResult {
+        if (try tryExecuteWithUnifiedRuntime(self.context, &self.runtime_plan, self.request.spec.execution)) |result| {
+            return result;
+        }
         const entry = self.context.registry.findById(self.plan.adapter_id) orelse return error.AdapterNotFound;
         return try entry.adapter.execute(self.context.allocator, self.request);
     }
@@ -155,6 +159,9 @@ pub const PreparedContextBatchExecution = struct {
     }
 
     pub fn execute(self: *const PreparedContextBatchExecution) !batch_executor.BatchExecutionReport {
+        if (try tryExecuteBatchWithUnifiedRuntime(self.context, &self.runtime_plan)) |report| {
+            return report;
+        }
         return try batch_executor.execute(self.allocator, &self.context.registry, self.requests, &self.batch_plan);
     }
 };
@@ -176,6 +183,9 @@ pub const PreparedExecution = struct {
     }
 
     pub fn execute(self: *const PreparedExecution) !engine.adapter.ExecutionResult {
+        if (try tryExecuteWithUnifiedRuntime(self.context, &self.runtime_plan, self.request.spec.execution)) |result| {
+            return result;
+        }
         const entry = self.context.registry.findById(self.plan.adapter_id) orelse return error.AdapterNotFound;
         return try entry.adapter.execute(self.allocator, self.request);
     }
@@ -199,6 +209,9 @@ pub const PreparedBatchExecution = struct {
     }
 
     pub fn execute(self: *const PreparedBatchExecution) !batch_executor.BatchExecutionReport {
+        if (try tryExecuteBatchWithUnifiedRuntime(self.context, &self.runtime_plan)) |report| {
+            return report;
+        }
         return try batch_executor.execute(self.allocator, &self.context.registry, self.requests, &self.batch_plan);
     }
 };
@@ -432,6 +445,109 @@ fn inferInputPayload(modality: task.Modality, input: ?[]const u8) task.InputPayl
         .audio, .tts => .{ .audio_path = value },
         .video => .{ .video_path = value },
     };
+}
+
+fn tryExecuteWithUnifiedRuntime(
+    context: *const ExecutionContext,
+    runtime_plan: *const engine.runtime.types.ExecutionPlan,
+    execution: task.ExecutionMode,
+) !?adapter_mod.ExecutionResult {
+    var runtime_result = context.unified_runtime.execute(&context.model_handle, runtime_plan) catch |err| switch (err) {
+        error.RuntimeExecutionNotImplemented => return null,
+        else => return err,
+    };
+    errdefer runtime_result.deinit(context.allocator);
+
+    const output = runtime_result.output;
+    runtime_result.output = .none;
+    return adapter_mod.ExecutionResult{
+        .submission = .{
+            .adapter_id = context.descriptor.id,
+            .accepted = true,
+            .execution = execution,
+        },
+        .origin = runtime_result.origin,
+        .note = parseExecutionNote(runtime_result.note),
+        .output = output,
+    };
+}
+
+fn tryExecuteBatchWithUnifiedRuntime(
+    context: *const ExecutionContext,
+    runtime_plan: *const engine.runtime.types.ExecutionPlan,
+) !?batch_executor.BatchExecutionReport {
+    var runtime_results = context.unified_runtime.executeBatch(&context.model_handle, runtime_plan) catch |err| switch (err) {
+        error.RuntimeExecutionNotImplemented => return null,
+        else => return err,
+    };
+    defer runtime_results.deinit();
+
+    const batches = try context.allocator.alloc(batch_executor.ExecutedBatch, runtime_plan.batches.len);
+    errdefer context.allocator.free(batches);
+
+    var initialized_batches: usize = 0;
+    errdefer {
+        for (batches[0..initialized_batches]) |batch| {
+            for (batch.request_results) |*request_result| request_result.result.deinit(context.allocator);
+            context.allocator.free(batch.request_results);
+        }
+        context.allocator.free(batches);
+    }
+
+    for (runtime_plan.batches, batches) |plan_batch, *batch| {
+        const request_results = try context.allocator.alloc(batch_executor.RequestExecutionResult, plan_batch.request_indices.len);
+        errdefer context.allocator.free(request_results);
+
+        for (plan_batch.request_indices, request_results) |request_index, *request_result| {
+            if (request_index >= runtime_results.items.len) return error.InvalidExecutionPlan;
+
+            const runtime_result = &runtime_results.items[request_index];
+            const output = runtime_result.output;
+            runtime_result.output = .none;
+            request_result.* = .{
+                .request_index = request_index,
+                .result = .{
+                    .submission = .{
+                        .adapter_id = context.descriptor.id,
+                        .accepted = true,
+                        .execution = runtime_plan.requests[request_index].execution,
+                    },
+                    .origin = runtime_result.origin,
+                    .note = parseExecutionNote(runtime_result.note),
+                    .output = output,
+                },
+            };
+        }
+
+        batch.* = .{
+            .adapter_id = context.descriptor.id,
+            .execution = plan_batch.execution,
+            .supports_batching = plan_batch.allows_batching,
+            .execute_path = if (plan_batch.allows_batching and plan_batch.request_indices.len > 1)
+                .adapter_batch
+            else
+                .per_request_fallback,
+            .request_results = request_results,
+        };
+        initialized_batches += 1;
+    }
+
+    return .{
+        .allocator = context.allocator,
+        .batches = batches,
+    };
+}
+
+fn parseExecutionNote(value: []const u8) adapter_mod.ExecutionNote {
+    if (std.mem.eql(u8, value, "validated_only")) return .validated_only;
+    if (std.mem.eql(u8, value, "text_request_ready")) return .text_request_ready;
+    if (std.mem.eql(u8, value, "text_native_qwen_single")) return .text_native_qwen_single;
+    if (std.mem.eql(u8, value, "text_native_qwen_batch")) return .text_native_qwen_batch;
+    if (std.mem.eql(u8, value, "vision_graph_ready")) return .vision_graph_ready;
+    if (std.mem.eql(u8, value, "vision_shared_detect")) return .vision_shared_detect;
+    if (std.mem.eql(u8, value, "ocr_model_ready")) return .ocr_model_ready;
+    if (std.mem.eql(u8, value, "ocr_shared_infer")) return .ocr_shared_infer;
+    return .none;
 }
 
 test "prepared execution resolves text adapter through shared executor" {

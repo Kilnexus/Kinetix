@@ -133,6 +133,17 @@ pub const RuntimeResult = struct {
     }
 };
 
+pub const RuntimeBatchResults = struct {
+    allocator: std.mem.Allocator,
+    items: []RuntimeResult,
+
+    pub fn deinit(self: *RuntimeBatchResults) void {
+        for (self.items) |*item| item.deinit(self.allocator);
+        self.allocator.free(self.items);
+        self.* = undefined;
+    }
+};
+
 pub fn inputKind(payload: InputPayload) InputKind {
     return switch (payload) {
         .none => .none,
