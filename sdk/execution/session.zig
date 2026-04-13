@@ -74,7 +74,7 @@ pub const ExecutionContext = struct {
 
     pub fn prepare(self: *const ExecutionContext, request: ContextRequest) !PreparedContextExecution {
         const scheduler = scheduler_mod.Scheduler.init(&self.registry);
-        const task_request = buildTaskRequest(self.descriptor, request);
+        const task_request = try buildTaskRequest(self.descriptor, request);
 
         return .{
             .context = self,
