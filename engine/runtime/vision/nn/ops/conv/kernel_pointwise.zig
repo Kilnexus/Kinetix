@@ -18,6 +18,7 @@ const PackedPointwiseWeights = struct {
     data: []f32,
 };
 
+// Cache
 const PointwisePackCache = struct {
     const threadlocal_capacity = 16;
 
@@ -133,6 +134,7 @@ const PointwisePackCache = struct {
     }
 };
 
+// Public entry points
 pub fn conv2dPointwise(
     input: *const common.Tensor,
     weights: *const common.Tensor,
@@ -200,6 +202,7 @@ pub fn conv2dPointwiseConcat(
     return conv2dPointwiseConcatRange(inputs, offsets, weights, bias, output, 0, out_channels, apply_silu);
 }
 
+// Parallel entry points
 fn conv2dPointwiseParallel(
     input: *const common.Tensor,
     weights: *const common.Tensor,
@@ -260,6 +263,86 @@ fn conv2dPointwiseConcatParallel(
     );
 }
 
+// Parallel callbacks
+const PointwiseContext = struct {
+    input: *const common.Tensor,
+    weights: *const common.Tensor,
+    bias: ?[]const f32,
+    output: *common.Tensor,
+    groups: usize,
+    apply_silu: bool,
+};
+
+const PointwiseConcatContext = struct {
+    inputs: []const *const common.Tensor,
+    input_channel_offsets: []const usize,
+    weights: *const common.Tensor,
+    bias: ?[]const f32,
+    output: *common.Tensor,
+    apply_silu: bool,
+};
+
+fn makePointwiseTask(ctx: *const PointwiseContext, oc_start: usize, oc_end: usize) tasks.Conv2DPointwiseTask {
+    return .{
+        .input = ctx.input,
+        .weights = ctx.weights,
+        .bias = ctx.bias,
+        .output = ctx.output,
+        .groups = ctx.groups,
+        .oc_start = oc_start,
+        .oc_end = oc_end,
+        .apply_silu = ctx.apply_silu,
+    };
+}
+
+fn makePointwiseConcatTask(ctx: *const PointwiseConcatContext, oc_start: usize, oc_end: usize) tasks.Conv2DPointwiseConcatTask {
+    return .{
+        .inputs = ctx.inputs,
+        .input_channel_offsets = ctx.input_channel_offsets,
+        .weights = ctx.weights,
+        .bias = ctx.bias,
+        .output = ctx.output,
+        .oc_start = oc_start,
+        .oc_end = oc_end,
+        .apply_silu = ctx.apply_silu,
+    };
+}
+
+fn runPointwiseRange(ctx: *const PointwiseContext, oc_start: usize, oc_end: usize) common.OpError!void {
+    return conv2dPointwiseRange(ctx.input, ctx.weights, ctx.bias, ctx.output, ctx.groups, oc_start, oc_end, ctx.apply_silu);
+}
+
+fn runPointwiseConcatRange(ctx: *const PointwiseConcatContext, oc_start: usize, oc_end: usize) common.OpError!void {
+    return conv2dPointwiseConcatRange(
+        ctx.inputs,
+        ctx.input_channel_offsets,
+        ctx.weights,
+        ctx.bias,
+        ctx.output,
+        oc_start,
+        oc_end,
+        ctx.apply_silu,
+    );
+}
+
+fn conv2dPointwiseWorker(task: tasks.Conv2DPointwiseTask) void {
+    conv2dPointwiseRange(task.input, task.weights, task.bias, task.output, task.groups, task.oc_start, task.oc_end, task.apply_silu) catch unreachable;
+}
+
+fn conv2dPointwiseConcatWorker(task: tasks.Conv2DPointwiseConcatTask) void {
+    conv2dPointwiseConcatRange(
+        task.inputs,
+        task.input_channel_offsets,
+        task.weights,
+        task.bias,
+        task.output,
+        task.oc_start,
+        task.oc_end,
+        task.apply_silu,
+    ) catch unreachable;
+}
+
+// Range implementations
 pub fn conv2dPointwiseRange(
     input: *const common.Tensor,
     weights: *const common.Tensor,
@@ -566,6 +649,7 @@ fn conv2dPointwiseRangePacked(
     }
 }
 
+// Block helpers
 const DensePointwiseAccessor = struct {
     weights: *const common.Tensor,
     lane_base: usize,
@@ -820,82 +904,4 @@ fn runPointwiseConcatBlock(
             out_slices[lane][i] = common.maybeApplySilu(acc[lane], apply_silu);
         }
     }
-}
-
-fn conv2dPointwiseWorker(task: tasks.Conv2DPointwiseTask) void {
-    conv2dPointwiseRange(task.input, task.weights, task.bias, task.output, task.groups, task.oc_start, task.oc_end, task.apply_silu) catch unreachable;
-}
-
-fn conv2dPointwiseConcatWorker(task: tasks.Conv2DPointwiseConcatTask) void {
-    conv2dPointwiseConcatRange(
-        task.inputs,
-        task.input_channel_offsets,
-        task.weights,
-        task.bias,
-        task.output,
-        task.oc_start,
-        task.oc_end,
-        task.apply_silu,
-    ) catch unreachable;
-}
-
-const PointwiseContext = struct {
-    input: *const common.Tensor,
-    weights: *const common.Tensor,
-    bias: ?[]const f32,
-    output: *common.Tensor,
-    groups: usize,
-    apply_silu: bool,
-};
-
-const PointwiseConcatContext = struct {
-    inputs: []const *const common.Tensor,
-    input_channel_offsets: []const usize,
-    weights: *const common.Tensor,
-    bias: ?[]const f32,
-    output: *common.Tensor,
-    apply_silu: bool,
-};
-
-fn makePointwiseTask(ctx: *const PointwiseContext, oc_start: usize, oc_end: usize) tasks.Conv2DPointwiseTask {
-    return .{
-        .input = ctx.input,
-        .weights = ctx.weights,
-        .bias = ctx.bias,
-        .output = ctx.output,
-        .groups = ctx.groups,
-        .oc_start = oc_start,
-        .oc_end = oc_end,
-        .apply_silu = ctx.apply_silu,
-    };
-}
-
-fn makePointwiseConcatTask(ctx: *const PointwiseConcatContext, oc_start: usize, oc_end: usize) tasks.Conv2DPointwiseConcatTask {
-    return .{
-        .inputs = ctx.inputs,
-        .input_channel_offsets = ctx.input_channel_offsets,
-        .weights = ctx.weights,
-        .bias = ctx.bias,
-        .output = ctx.output,
-        .oc_start = oc_start,
-        .oc_end = oc_end,
-        .apply_silu = ctx.apply_silu,
-    };
-}
-
-fn runPointwiseRange(ctx: *const PointwiseContext, oc_start: usize, oc_end: usize) common.OpError!void {
-    return conv2dPointwiseRange(ctx.input, ctx.weights, ctx.bias, ctx.output, ctx.groups, oc_start, oc_end, ctx.apply_silu);
-}
-
-fn runPointwiseConcatRange(ctx: *const PointwiseConcatContext, oc_start: usize, oc_end: usize) common.OpError!void {
-    return conv2dPointwiseConcatRange(
-        ctx.inputs,
-        ctx.input_channel_offsets,
-        ctx.weights,
-        ctx.bias,
-        ctx.output,
-        oc_start,
-        oc_end,
-        ctx.apply_silu,
-    );
 }
