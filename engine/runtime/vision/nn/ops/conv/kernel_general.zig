@@ -1,7 +1,6 @@
-const std = @import("std");
 const common = @import("common.zig");
+const parallel = @import("parallel.zig");
 const tasks = @import("tasks.zig");
-const thread_pool = @import("engine_global_thread_pool");
 
 pub fn conv2dGeneralParallel(
     input: *const common.Tensor,
@@ -11,64 +10,24 @@ pub fn conv2dGeneralParallel(
     options: common.Conv2DOptions,
     thread_count: usize,
 ) common.OpError!void {
-    if (thread_pool.get()) |pool| {
-        const out_channels = weights.shape[0];
-        var wg: std.Thread.WaitGroup = .{};
-        for (0..thread_count) |thread_index| {
-            const oc_start = (out_channels * thread_index) / thread_count;
-            const oc_end = (out_channels * (thread_index + 1)) / thread_count;
-            if (oc_start == oc_end) continue;
-
-            const task = tasks.Conv2DTask{
-                .input = input,
-                .weights = weights,
-                .bias = bias,
-                .output = output,
-                .options = options,
-                .oc_start = oc_start,
-                .oc_end = oc_end,
-            };
-            if (thread_index + 1 == thread_count) {
-                conv2dGeneralWorker(task);
-            } else {
-                pool.spawnWg(&wg, conv2dGeneralWorker, .{task});
-            }
-        }
-        wg.wait();
-        return;
-    }
-
-    var threads: [common.max_supported_conv_threads - 1]std.Thread = undefined;
-    var spawned: usize = 0;
     const out_channels = weights.shape[0];
-
-    for (0..thread_count) |thread_index| {
-        const oc_start = (out_channels * thread_index) / thread_count;
-        const oc_end = (out_channels * (thread_index + 1)) / thread_count;
-        if (oc_start == oc_end) continue;
-
-        if (thread_index + 1 == thread_count) {
-            try conv2dGeneralRange(input, weights, bias, output, options, oc_start, oc_end);
-        } else {
-            threads[spawned] = std.Thread.spawn(.{}, conv2dGeneralWorker, .{
-                tasks.Conv2DTask{
-                    .input = input,
-                    .weights = weights,
-                    .bias = bias,
-                    .output = output,
-                    .options = options,
-                    .oc_start = oc_start,
-                    .oc_end = oc_end,
-                },
-            }) catch {
-                try conv2dGeneralRange(input, weights, bias, output, options, oc_start, oc_end);
-                continue;
-            };
-            spawned += 1;
-        }
-    }
-
-    for (threads[0..spawned]) |thread| thread.join();
+    const ctx = GeneralContext{
+        .input = input,
+        .weights = weights,
+        .bias = bias,
+        .output = output,
+        .options = options,
+    };
+    return parallel.runByOutputChannel(
+        GeneralContext,
+        &ctx,
+        out_channels,
+        thread_count,
+        tasks.Conv2DTask,
+        makeGeneralTask,
+        conv2dGeneralWorker,
+        runGeneralRange,
+    );
 }
 
 pub fn conv2dGeneralRange(
@@ -141,4 +100,28 @@ pub fn conv2dGeneralRange(
 
 fn conv2dGeneralWorker(task: tasks.Conv2DTask) void {
     conv2dGeneralRange(task.input, task.weights, task.bias, task.output, task.options, task.oc_start, task.oc_end) catch unreachable;
+}
+
+const GeneralContext = struct {
+    input: *const common.Tensor,
+    weights: *const common.Tensor,
+    bias: ?[]const f32,
+    output: *common.Tensor,
+    options: common.Conv2DOptions,
+};
+
+fn makeGeneralTask(ctx: *const GeneralContext, oc_start: usize, oc_end: usize) tasks.Conv2DTask {
+    return .{
+        .input = ctx.input,
+        .weights = ctx.weights,
+        .bias = ctx.bias,
+        .output = ctx.output,
+        .options = ctx.options,
+        .oc_start = oc_start,
+        .oc_end = oc_end,
+    };
+}
+
+fn runGeneralRange(ctx: *const GeneralContext, oc_start: usize, oc_end: usize) common.OpError!void {
+    return conv2dGeneralRange(ctx.input, ctx.weights, ctx.bias, ctx.output, ctx.options, oc_start, oc_end);
 }

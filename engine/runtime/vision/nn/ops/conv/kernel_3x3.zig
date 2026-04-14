@@ -1,7 +1,6 @@
-const std = @import("std");
 const common = @import("common.zig");
+const parallel = @import("parallel.zig");
 const tasks = @import("tasks.zig");
-const thread_pool = @import("engine_global_thread_pool");
 
 pub fn conv2d3x3Pad1(
     input: *const common.Tensor,
@@ -19,18 +18,18 @@ pub fn conv2d3x3Pad1(
 
     if (options.stride_h == 2 and options.stride_w == 2) {
         if (thread_count > 1) {
-            return runParallelByOutputChannel(Stride2, input, weights, bias, output, options, thread_count);
+            return runStrideParallel(Stride2, input, weights, bias, output, options, thread_count);
         }
         return Stride2.range(input, weights, bias, output, options, 0, out_channels);
     }
 
     if (thread_count > 1) {
-        return runParallelByOutputChannel(Stride1, input, weights, bias, output, options, thread_count);
+        return runStrideParallel(Stride1, input, weights, bias, output, options, thread_count);
     }
     return Stride1.range(input, weights, bias, output, options, 0, out_channels);
 }
 
-fn runParallelByOutputChannel(
+fn runStrideParallel(
     comptime Impl: type,
     input: *const common.Tensor,
     weights: *const common.Tensor,
@@ -39,65 +38,33 @@ fn runParallelByOutputChannel(
     options: common.Conv2DOptions,
     thread_count: usize,
 ) common.OpError!void {
-    if (thread_pool.get()) |pool| {
-        const out_channels = weights.shape[0];
-        var wg: std.Thread.WaitGroup = .{};
-        for (0..thread_count) |thread_index| {
-            const oc_start = (out_channels * thread_index) / thread_count;
-            const oc_end = (out_channels * (thread_index + 1)) / thread_count;
-            if (oc_start == oc_end) continue;
-
-            const task = tasks.Conv2DTask{
-                .input = input,
-                .weights = weights,
-                .bias = bias,
-                .output = output,
-                .options = options,
-                .oc_start = oc_start,
-                .oc_end = oc_end,
-            };
-            if (thread_index + 1 == thread_count) {
-                Impl.worker(task);
-            } else {
-                pool.spawnWg(&wg, Impl.worker, .{task});
-            }
-        }
-        wg.wait();
-        return;
-    }
-
-    var threads: [common.max_supported_conv_threads - 1]std.Thread = undefined;
-    var spawned: usize = 0;
     const out_channels = weights.shape[0];
-
-    for (0..thread_count) |thread_index| {
-        const oc_start = (out_channels * thread_index) / thread_count;
-        const oc_end = (out_channels * (thread_index + 1)) / thread_count;
-        if (oc_start == oc_end) continue;
-
-        if (thread_index + 1 == thread_count) {
-            try Impl.range(input, weights, bias, output, options, oc_start, oc_end);
-        } else {
-            threads[spawned] = std.Thread.spawn(.{}, Impl.worker, .{
-                tasks.Conv2DTask{
-                    .input = input,
-                    .weights = weights,
-                    .bias = bias,
-                    .output = output,
-                    .options = options,
-                    .oc_start = oc_start,
-                    .oc_end = oc_end,
-                },
-            }) catch {
-                try Impl.range(input, weights, bias, output, options, oc_start, oc_end);
-                continue;
-            };
-            spawned += 1;
-        }
-    }
-
-    for (threads[0..spawned]) |thread| thread.join();
+    const ctx = StrideContext{
+        .input = input,
+        .weights = weights,
+        .bias = bias,
+        .output = output,
+        .options = options,
+    };
+    return parallel.runByOutputChannel(
+        StrideContext,
+        &ctx,
+        out_channels,
+        thread_count,
+        tasks.Conv2DTask,
+        Impl.makeTask,
+        Impl.worker,
+        Impl.runRange,
+    );
 }
+
+const StrideContext = struct {
+    input: *const common.Tensor,
+    weights: *const common.Tensor,
+    bias: ?[]const f32,
+    output: *common.Tensor,
+    options: common.Conv2DOptions,
+};
 
 const Stride1 = struct {
     fn range(
@@ -473,6 +440,22 @@ const Stride1 = struct {
     fn worker(task: tasks.Conv2DTask) void {
         range(task.input, task.weights, task.bias, task.output, task.options, task.oc_start, task.oc_end) catch unreachable;
     }
+
+    fn makeTask(ctx: *const StrideContext, oc_start: usize, oc_end: usize) tasks.Conv2DTask {
+        return .{
+            .input = ctx.input,
+            .weights = ctx.weights,
+            .bias = ctx.bias,
+            .output = ctx.output,
+            .options = ctx.options,
+            .oc_start = oc_start,
+            .oc_end = oc_end,
+        };
+    }
+
+    fn runRange(ctx: *const StrideContext, oc_start: usize, oc_end: usize) common.OpError!void {
+        return range(ctx.input, ctx.weights, ctx.bias, ctx.output, ctx.options, oc_start, oc_end);
+    }
 };
 
 const Stride2 = struct {
@@ -841,5 +824,21 @@ const Stride2 = struct {
 
     fn worker(task: tasks.Conv2DTask) void {
         range(task.input, task.weights, task.bias, task.output, task.options, task.oc_start, task.oc_end) catch unreachable;
+    }
+
+    fn makeTask(ctx: *const StrideContext, oc_start: usize, oc_end: usize) tasks.Conv2DTask {
+        return .{
+            .input = ctx.input,
+            .weights = ctx.weights,
+            .bias = ctx.bias,
+            .output = ctx.output,
+            .options = ctx.options,
+            .oc_start = oc_start,
+            .oc_end = oc_end,
+        };
+    }
+
+    fn runRange(ctx: *const StrideContext, oc_start: usize, oc_end: usize) common.OpError!void {
+        return range(ctx.input, ctx.weights, ctx.bias, ctx.output, ctx.options, oc_start, oc_end);
     }
 };

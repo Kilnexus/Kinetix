@@ -1,7 +1,7 @@
 const std = @import("std");
 const common = @import("common.zig");
+const parallel = @import("parallel.zig");
 const tasks = @import("tasks.zig");
-const thread_pool = @import("engine_global_thread_pool");
 
 const PointwisePackKey = struct {
     ptr: usize,
@@ -212,66 +212,25 @@ fn conv2dPointwiseParallel(
     thread_count: usize,
     apply_silu: bool,
 ) common.OpError!void {
-    if (thread_pool.get()) |pool| {
-        const out_channels = weights.shape[0];
-        var wg: std.Thread.WaitGroup = .{};
-        for (0..thread_count) |thread_index| {
-            const oc_start = (out_channels * thread_index) / thread_count;
-            const oc_end = (out_channels * (thread_index + 1)) / thread_count;
-            if (oc_start == oc_end) continue;
-
-            const task = tasks.Conv2DPointwiseTask{
-                .input = input,
-                .weights = weights,
-                .bias = bias,
-                .output = output,
-                .groups = groups,
-                .oc_start = oc_start,
-                .oc_end = oc_end,
-                .apply_silu = apply_silu,
-            };
-            if (thread_index + 1 == thread_count) {
-                conv2dPointwiseWorker(task);
-            } else {
-                pool.spawnWg(&wg, conv2dPointwiseWorker, .{task});
-            }
-        }
-        wg.wait();
-        return;
-    }
-
-    var threads: [common.max_supported_conv_threads - 1]std.Thread = undefined;
-    var spawned: usize = 0;
     const out_channels = weights.shape[0];
-
-    for (0..thread_count) |thread_index| {
-        const oc_start = (out_channels * thread_index) / thread_count;
-        const oc_end = (out_channels * (thread_index + 1)) / thread_count;
-        if (oc_start == oc_end) continue;
-
-        if (thread_index + 1 == thread_count) {
-            try conv2dPointwiseRange(input, weights, bias, output, groups, oc_start, oc_end, apply_silu);
-        } else {
-            threads[spawned] = std.Thread.spawn(.{}, conv2dPointwiseWorker, .{
-                tasks.Conv2DPointwiseTask{
-                    .input = input,
-                    .weights = weights,
-                    .bias = bias,
-                    .output = output,
-                    .groups = groups,
-                    .oc_start = oc_start,
-                    .oc_end = oc_end,
-                    .apply_silu = apply_silu,
-                },
-            }) catch {
-                try conv2dPointwiseRange(input, weights, bias, output, groups, oc_start, oc_end, apply_silu);
-                continue;
-            };
-            spawned += 1;
-        }
-    }
-
-    for (threads[0..spawned]) |thread| thread.join();
+    const ctx = PointwiseContext{
+        .input = input,
+        .weights = weights,
+        .bias = bias,
+        .output = output,
+        .groups = groups,
+        .apply_silu = apply_silu,
+    };
+    return parallel.runByOutputChannel(
+        PointwiseContext,
+        &ctx,
+        out_channels,
+        thread_count,
+        tasks.Conv2DPointwiseTask,
+        makePointwiseTask,
+        conv2dPointwiseWorker,
+        runPointwiseRange,
+    );
 }
 
 fn conv2dPointwiseConcatParallel(
@@ -283,66 +242,25 @@ fn conv2dPointwiseConcatParallel(
     thread_count: usize,
     apply_silu: bool,
 ) common.OpError!void {
-    if (thread_pool.get()) |pool| {
-        const out_channels = weights.shape[0];
-        var wg: std.Thread.WaitGroup = .{};
-        for (0..thread_count) |thread_index| {
-            const oc_start = (out_channels * thread_index) / thread_count;
-            const oc_end = (out_channels * (thread_index + 1)) / thread_count;
-            if (oc_start == oc_end) continue;
-
-            const task = tasks.Conv2DPointwiseConcatTask{
-                .inputs = inputs,
-                .input_channel_offsets = input_channel_offsets,
-                .weights = weights,
-                .bias = bias,
-                .output = output,
-                .oc_start = oc_start,
-                .oc_end = oc_end,
-                .apply_silu = apply_silu,
-            };
-            if (thread_index + 1 == thread_count) {
-                conv2dPointwiseConcatWorker(task);
-            } else {
-                pool.spawnWg(&wg, conv2dPointwiseConcatWorker, .{task});
-            }
-        }
-        wg.wait();
-        return;
-    }
-
-    var threads: [common.max_supported_conv_threads - 1]std.Thread = undefined;
-    var spawned: usize = 0;
     const out_channels = weights.shape[0];
-
-    for (0..thread_count) |thread_index| {
-        const oc_start = (out_channels * thread_index) / thread_count;
-        const oc_end = (out_channels * (thread_index + 1)) / thread_count;
-        if (oc_start == oc_end) continue;
-
-        if (thread_index + 1 == thread_count) {
-            try conv2dPointwiseConcatRange(inputs, input_channel_offsets, weights, bias, output, oc_start, oc_end, apply_silu);
-        } else {
-            threads[spawned] = std.Thread.spawn(.{}, conv2dPointwiseConcatWorker, .{
-                tasks.Conv2DPointwiseConcatTask{
-                    .inputs = inputs,
-                    .input_channel_offsets = input_channel_offsets,
-                    .weights = weights,
-                    .bias = bias,
-                    .output = output,
-                    .oc_start = oc_start,
-                    .oc_end = oc_end,
-                    .apply_silu = apply_silu,
-                },
-            }) catch {
-                try conv2dPointwiseConcatRange(inputs, input_channel_offsets, weights, bias, output, oc_start, oc_end, apply_silu);
-                continue;
-            };
-            spawned += 1;
-        }
-    }
-
-    for (threads[0..spawned]) |thread| thread.join();
+    const ctx = PointwiseConcatContext{
+        .inputs = inputs,
+        .input_channel_offsets = input_channel_offsets,
+        .weights = weights,
+        .bias = bias,
+        .output = output,
+        .apply_silu = apply_silu,
+    };
+    return parallel.runByOutputChannel(
+        PointwiseConcatContext,
+        &ctx,
+        out_channels,
+        thread_count,
+        tasks.Conv2DPointwiseConcatTask,
+        makePointwiseConcatTask,
+        conv2dPointwiseConcatWorker,
+        runPointwiseConcatRange,
+    );
 }
 
 pub fn conv2dPointwiseRange(
@@ -966,4 +884,65 @@ fn conv2dPointwiseConcatWorker(task: tasks.Conv2DPointwiseConcatTask) void {
         task.oc_end,
         task.apply_silu,
     ) catch unreachable;
+}
+
+const PointwiseContext = struct {
+    input: *const common.Tensor,
+    weights: *const common.Tensor,
+    bias: ?[]const f32,
+    output: *common.Tensor,
+    groups: usize,
+    apply_silu: bool,
+};
+
+const PointwiseConcatContext = struct {
+    inputs: []const *const common.Tensor,
+    input_channel_offsets: []const usize,
+    weights: *const common.Tensor,
+    bias: ?[]const f32,
+    output: *common.Tensor,
+    apply_silu: bool,
+};
+
+fn makePointwiseTask(ctx: *const PointwiseContext, oc_start: usize, oc_end: usize) tasks.Conv2DPointwiseTask {
+    return .{
+        .input = ctx.input,
+        .weights = ctx.weights,
+        .bias = ctx.bias,
+        .output = ctx.output,
+        .groups = ctx.groups,
+        .oc_start = oc_start,
+        .oc_end = oc_end,
+        .apply_silu = ctx.apply_silu,
+    };
+}
+
+fn makePointwiseConcatTask(ctx: *const PointwiseConcatContext, oc_start: usize, oc_end: usize) tasks.Conv2DPointwiseConcatTask {
+    return .{
+        .inputs = ctx.inputs,
+        .input_channel_offsets = ctx.input_channel_offsets,
+        .weights = ctx.weights,
+        .bias = ctx.bias,
+        .output = ctx.output,
+        .oc_start = oc_start,
+        .oc_end = oc_end,
+        .apply_silu = ctx.apply_silu,
+    };
+}
+
+fn runPointwiseRange(ctx: *const PointwiseContext, oc_start: usize, oc_end: usize) common.OpError!void {
+    return conv2dPointwiseRange(ctx.input, ctx.weights, ctx.bias, ctx.output, ctx.groups, oc_start, oc_end, ctx.apply_silu);
+}
+
+fn runPointwiseConcatRange(ctx: *const PointwiseConcatContext, oc_start: usize, oc_end: usize) common.OpError!void {
+    return conv2dPointwiseConcatRange(
+        ctx.inputs,
+        ctx.input_channel_offsets,
+        ctx.weights,
+        ctx.bias,
+        ctx.output,
+        oc_start,
+        oc_end,
+        ctx.apply_silu,
+    );
 }
