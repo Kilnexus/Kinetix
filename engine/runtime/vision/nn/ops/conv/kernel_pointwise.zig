@@ -294,113 +294,69 @@ pub fn conv2dPointwiseRange(
             const pairable = oc + 1 < oc_end and (oc + 1) / out_per_group == group_idx;
 
             if (quadable) {
-                const out0_slice = output.data[output_batch_base + oc * plane ..][0..plane];
-                const out1_slice = output.data[output_batch_base + (oc + 1) * plane ..][0..plane];
-                const out2_slice = output.data[output_batch_base + (oc + 2) * plane ..][0..plane];
-                const out3_slice = output.data[output_batch_base + (oc + 3) * plane ..][0..plane];
-                const bias0: f32 = if (bias) |bias_values| bias_values[oc] else 0.0;
-                const bias1: f32 = if (bias) |bias_values| bias_values[oc + 1] else 0.0;
-                const bias2: f32 = if (bias) |bias_values| bias_values[oc + 2] else 0.0;
-                const bias3: f32 = if (bias) |bias_values| bias_values[oc + 3] else 0.0;
-                const weight0_base = oc * in_per_group;
-                const weight1_base = (oc + 1) * in_per_group;
-                const weight2_base = (oc + 2) * in_per_group;
-                const weight3_base = (oc + 3) * in_per_group;
-                var i: usize = 0;
-                while (i + common.simd_lane_count <= plane) : (i += common.simd_lane_count) {
-                    var acc0 = @as(common.F32xN, @splat(bias0));
-                    var acc1 = @as(common.F32xN, @splat(bias1));
-                    var acc2 = @as(common.F32xN, @splat(bias2));
-                    var acc3 = @as(common.F32xN, @splat(bias3));
-                    for (0..in_per_group) |ic_local| {
-                        const input_slice = input.data[input_batch_base + (in_channel_start + ic_local) * plane ..][0..plane];
-                        const src = common.loadF32xN(input_slice, i);
-                        acc0 += src * @as(common.F32xN, @splat(weights.data[weight0_base + ic_local]));
-                        acc1 += src * @as(common.F32xN, @splat(weights.data[weight1_base + ic_local]));
-                        acc2 += src * @as(common.F32xN, @splat(weights.data[weight2_base + ic_local]));
-                        acc3 += src * @as(common.F32xN, @splat(weights.data[weight3_base + ic_local]));
-                    }
-                    common.storeF32xN(out0_slice, i, common.maybeApplySiluVector(acc0, apply_silu));
-                    common.storeF32xN(out1_slice, i, common.maybeApplySiluVector(acc1, apply_silu));
-                    common.storeF32xN(out2_slice, i, common.maybeApplySiluVector(acc2, apply_silu));
-                    common.storeF32xN(out3_slice, i, common.maybeApplySiluVector(acc3, apply_silu));
-                }
-                while (i < plane) : (i += 1) {
-                    var acc0: f32 = bias0;
-                    var acc1: f32 = bias1;
-                    var acc2: f32 = bias2;
-                    var acc3: f32 = bias3;
-                    for (0..in_per_group) |ic_local| {
-                        const src = input.data[input_batch_base + (in_channel_start + ic_local) * plane + i];
-                        acc0 += src * weights.data[weight0_base + ic_local];
-                        acc1 += src * weights.data[weight1_base + ic_local];
-                        acc2 += src * weights.data[weight2_base + ic_local];
-                        acc3 += src * weights.data[weight3_base + ic_local];
-                    }
-                    out0_slice[i] = common.maybeApplySilu(acc0, apply_silu);
-                    out1_slice[i] = common.maybeApplySilu(acc1, apply_silu);
-                    out2_slice[i] = common.maybeApplySilu(acc2, apply_silu);
-                    out3_slice[i] = common.maybeApplySilu(acc3, apply_silu);
-                }
+                runPointwiseBlock(
+                    4,
+                    DensePointwiseAccessor{
+                        .weights = weights,
+                        .lane_base = oc,
+                        .in_per_group = in_per_group,
+                    },
+                    input,
+                    output,
+                    input_batch_base,
+                    output_batch_base,
+                    in_channel_start,
+                    in_per_group,
+                    plane,
+                    oc,
+                    bias,
+                    apply_silu,
+                );
                 oc += 4;
                 continue;
             }
 
             if (pairable) {
-                const out0_slice = output.data[output_batch_base + oc * plane ..][0..plane];
-                const out1_slice = output.data[output_batch_base + (oc + 1) * plane ..][0..plane];
-                const bias0: f32 = if (bias) |bias_values| bias_values[oc] else 0.0;
-                const bias1: f32 = if (bias) |bias_values| bias_values[oc + 1] else 0.0;
-                const weight0_base = oc * in_per_group;
-                const weight1_base = (oc + 1) * in_per_group;
-                var i: usize = 0;
-                while (i + common.simd_lane_count <= plane) : (i += common.simd_lane_count) {
-                    var acc0 = @as(common.F32xN, @splat(bias0));
-                    var acc1 = @as(common.F32xN, @splat(bias1));
-                    for (0..in_per_group) |ic_local| {
-                        const input_slice = input.data[input_batch_base + (in_channel_start + ic_local) * plane ..][0..plane];
-                        const src = common.loadF32xN(input_slice, i);
-                        acc0 += src * @as(common.F32xN, @splat(weights.data[weight0_base + ic_local]));
-                        acc1 += src * @as(common.F32xN, @splat(weights.data[weight1_base + ic_local]));
-                    }
-                    common.storeF32xN(out0_slice, i, common.maybeApplySiluVector(acc0, apply_silu));
-                    common.storeF32xN(out1_slice, i, common.maybeApplySiluVector(acc1, apply_silu));
-                }
-                while (i < plane) : (i += 1) {
-                    var acc0: f32 = bias0;
-                    var acc1: f32 = bias1;
-                    for (0..in_per_group) |ic_local| {
-                        const src = input.data[input_batch_base + (in_channel_start + ic_local) * plane + i];
-                        acc0 += src * weights.data[weight0_base + ic_local];
-                        acc1 += src * weights.data[weight1_base + ic_local];
-                    }
-                    out0_slice[i] = common.maybeApplySilu(acc0, apply_silu);
-                    out1_slice[i] = common.maybeApplySilu(acc1, apply_silu);
-                }
+                runPointwiseBlock(
+                    2,
+                    DensePointwiseAccessor{
+                        .weights = weights,
+                        .lane_base = oc,
+                        .in_per_group = in_per_group,
+                    },
+                    input,
+                    output,
+                    input_batch_base,
+                    output_batch_base,
+                    in_channel_start,
+                    in_per_group,
+                    plane,
+                    oc,
+                    bias,
+                    apply_silu,
+                );
                 oc += 2;
                 continue;
             }
 
-            const out_slice = output.data[output_batch_base + oc * plane ..][0..plane];
-            const bias_value: f32 = if (bias) |bias_values| bias_values[oc] else 0.0;
-            const weight_base = oc * in_per_group;
-            var i: usize = 0;
-            while (i + common.simd_lane_count <= plane) : (i += common.simd_lane_count) {
-                var acc = @as(common.F32xN, @splat(bias_value));
-                for (0..in_per_group) |ic_local| {
-                    const input_slice = input.data[input_batch_base + (in_channel_start + ic_local) * plane ..][0..plane];
-                    const src = common.loadF32xN(input_slice, i);
-                    acc += src * @as(common.F32xN, @splat(weights.data[weight_base + ic_local]));
-                }
-                common.storeF32xN(out_slice, i, common.maybeApplySiluVector(acc, apply_silu));
-            }
-            while (i < plane) : (i += 1) {
-                var acc: f32 = bias_value;
-                for (0..in_per_group) |ic_local| {
-                    acc += input.data[input_batch_base + (in_channel_start + ic_local) * plane + i] * weights.data[weight_base + ic_local];
-                }
-                out_slice[i] = common.maybeApplySilu(acc, apply_silu);
-            }
+            runPointwiseBlock(
+                1,
+                DensePointwiseAccessor{
+                    .weights = weights,
+                    .lane_base = oc,
+                    .in_per_group = in_per_group,
+                },
+                input,
+                output,
+                input_batch_base,
+                output_batch_base,
+                in_channel_start,
+                in_per_group,
+                plane,
+                oc,
+                bias,
+                apply_silu,
+            );
             oc += 1;
         }
     }
@@ -435,135 +391,63 @@ pub fn conv2dPointwiseConcatRange(
             const pairable = oc + 1 < oc_end;
 
             if (quadable) {
-                const out0_slice = output.data[output_batch_base + oc * plane ..][0..plane];
-                const out1_slice = output.data[output_batch_base + (oc + 1) * plane ..][0..plane];
-                const out2_slice = output.data[output_batch_base + (oc + 2) * plane ..][0..plane];
-                const out3_slice = output.data[output_batch_base + (oc + 3) * plane ..][0..plane];
-                const bias0: f32 = if (bias) |bias_values| bias_values[oc] else 0.0;
-                const bias1: f32 = if (bias) |bias_values| bias_values[oc + 1] else 0.0;
-                const bias2: f32 = if (bias) |bias_values| bias_values[oc + 2] else 0.0;
-                const bias3: f32 = if (bias) |bias_values| bias_values[oc + 3] else 0.0;
-                const weight0_base = oc * weights.shape[1];
-                const weight1_base = (oc + 1) * weights.shape[1];
-                const weight2_base = (oc + 2) * weights.shape[1];
-                const weight3_base = (oc + 3) * weights.shape[1];
-                var i: usize = 0;
-                while (i + common.simd_lane_count <= plane) : (i += common.simd_lane_count) {
-                    var acc0 = @as(common.F32xN, @splat(bias0));
-                    var acc1 = @as(common.F32xN, @splat(bias1));
-                    var acc2 = @as(common.F32xN, @splat(bias2));
-                    var acc3 = @as(common.F32xN, @splat(bias3));
-                    for (inputs, input_channel_offsets) |input, channel_offset| {
-                        const input_batch_base = n * input.shape[1] * plane;
-                        for (0..input.shape[1]) |ic| {
-                            const input_slice = input.data[input_batch_base + ic * plane ..][0..plane];
-                            const weight_index = channel_offset + ic;
-                            const src = common.loadF32xN(input_slice, i);
-                            acc0 += src * @as(common.F32xN, @splat(weights.data[weight0_base + weight_index]));
-                            acc1 += src * @as(common.F32xN, @splat(weights.data[weight1_base + weight_index]));
-                            acc2 += src * @as(common.F32xN, @splat(weights.data[weight2_base + weight_index]));
-                            acc3 += src * @as(common.F32xN, @splat(weights.data[weight3_base + weight_index]));
-                        }
-                    }
-                    common.storeF32xN(out0_slice, i, common.maybeApplySiluVector(acc0, apply_silu));
-                    common.storeF32xN(out1_slice, i, common.maybeApplySiluVector(acc1, apply_silu));
-                    common.storeF32xN(out2_slice, i, common.maybeApplySiluVector(acc2, apply_silu));
-                    common.storeF32xN(out3_slice, i, common.maybeApplySiluVector(acc3, apply_silu));
-                }
-                while (i < plane) : (i += 1) {
-                    var acc0: f32 = bias0;
-                    var acc1: f32 = bias1;
-                    var acc2: f32 = bias2;
-                    var acc3: f32 = bias3;
-                    for (inputs, input_channel_offsets) |input, channel_offset| {
-                        const input_batch_base = n * input.shape[1] * plane;
-                        for (0..input.shape[1]) |ic| {
-                            const src = input.data[input_batch_base + ic * plane + i];
-                            const weight_index = channel_offset + ic;
-                            acc0 += src * weights.data[weight0_base + weight_index];
-                            acc1 += src * weights.data[weight1_base + weight_index];
-                            acc2 += src * weights.data[weight2_base + weight_index];
-                            acc3 += src * weights.data[weight3_base + weight_index];
-                        }
-                    }
-                    out0_slice[i] = common.maybeApplySilu(acc0, apply_silu);
-                    out1_slice[i] = common.maybeApplySilu(acc1, apply_silu);
-                    out2_slice[i] = common.maybeApplySilu(acc2, apply_silu);
-                    out3_slice[i] = common.maybeApplySilu(acc3, apply_silu);
-                }
+                runPointwiseConcatBlock(
+                    4,
+                    DensePointwiseConcatAccessor{
+                        .weights = weights,
+                        .lane_base = oc,
+                    },
+                    inputs,
+                    input_channel_offsets,
+                    output,
+                    output_batch_base,
+                    plane,
+                    oc,
+                    bias,
+                    apply_silu,
+                    n,
+                );
                 oc += 4;
                 continue;
             }
 
             if (pairable) {
-                const out0_slice = output.data[output_batch_base + oc * plane ..][0..plane];
-                const out1_slice = output.data[output_batch_base + (oc + 1) * plane ..][0..plane];
-                const bias0: f32 = if (bias) |bias_values| bias_values[oc] else 0.0;
-                const bias1: f32 = if (bias) |bias_values| bias_values[oc + 1] else 0.0;
-                const weight0_base = oc * weights.shape[1];
-                const weight1_base = (oc + 1) * weights.shape[1];
-                var i: usize = 0;
-                while (i + common.simd_lane_count <= plane) : (i += common.simd_lane_count) {
-                    var acc0 = @as(common.F32xN, @splat(bias0));
-                    var acc1 = @as(common.F32xN, @splat(bias1));
-                    for (inputs, input_channel_offsets) |input, channel_offset| {
-                        const input_batch_base = n * input.shape[1] * plane;
-                        for (0..input.shape[1]) |ic| {
-                            const input_slice = input.data[input_batch_base + ic * plane ..][0..plane];
-                            const weight_index = channel_offset + ic;
-                            const src = common.loadF32xN(input_slice, i);
-                            acc0 += src * @as(common.F32xN, @splat(weights.data[weight0_base + weight_index]));
-                            acc1 += src * @as(common.F32xN, @splat(weights.data[weight1_base + weight_index]));
-                        }
-                    }
-                    common.storeF32xN(out0_slice, i, common.maybeApplySiluVector(acc0, apply_silu));
-                    common.storeF32xN(out1_slice, i, common.maybeApplySiluVector(acc1, apply_silu));
-                }
-                while (i < plane) : (i += 1) {
-                    var acc0: f32 = bias0;
-                    var acc1: f32 = bias1;
-                    for (inputs, input_channel_offsets) |input, channel_offset| {
-                        const input_batch_base = n * input.shape[1] * plane;
-                        for (0..input.shape[1]) |ic| {
-                            const src = input.data[input_batch_base + ic * plane + i];
-                            const weight_index = channel_offset + ic;
-                            acc0 += src * weights.data[weight0_base + weight_index];
-                            acc1 += src * weights.data[weight1_base + weight_index];
-                        }
-                    }
-                    out0_slice[i] = common.maybeApplySilu(acc0, apply_silu);
-                    out1_slice[i] = common.maybeApplySilu(acc1, apply_silu);
-                }
+                runPointwiseConcatBlock(
+                    2,
+                    DensePointwiseConcatAccessor{
+                        .weights = weights,
+                        .lane_base = oc,
+                    },
+                    inputs,
+                    input_channel_offsets,
+                    output,
+                    output_batch_base,
+                    plane,
+                    oc,
+                    bias,
+                    apply_silu,
+                    n,
+                );
                 oc += 2;
                 continue;
             }
 
-            const out_slice = output.data[output_batch_base + oc * plane ..][0..plane];
-            const bias_value: f32 = if (bias) |bias_values| bias_values[oc] else 0.0;
-            const weight_base = oc * weights.shape[1];
-            var i: usize = 0;
-            while (i + common.simd_lane_count <= plane) : (i += common.simd_lane_count) {
-                var acc = @as(common.F32xN, @splat(bias_value));
-                for (inputs, input_channel_offsets) |input, channel_offset| {
-                    const input_batch_base = n * input.shape[1] * plane;
-                    for (0..input.shape[1]) |ic| {
-                        const input_slice = input.data[input_batch_base + ic * plane ..][0..plane];
-                        const src = common.loadF32xN(input_slice, i);
-                        acc += src * @as(common.F32xN, @splat(weights.data[weight_base + channel_offset + ic]));
-                    }
-                }
-                common.storeF32xN(out_slice, i, common.maybeApplySiluVector(acc, apply_silu));
-            }
-            while (i < plane) : (i += 1) {
-                var acc: f32 = bias_value;
-                for (inputs, input_channel_offsets) |input, channel_offset| {
-                    const input_batch_base = n * input.shape[1] * plane;
-                    for (0..input.shape[1]) |ic| {
-                        acc += input.data[input_batch_base + ic * plane + i] * weights.data[weight_base + channel_offset + ic];
-                    }
-                }
-                out_slice[i] = common.maybeApplySilu(acc, apply_silu);
-            }
+            runPointwiseConcatBlock(
+                1,
+                DensePointwiseConcatAccessor{
+                    .weights = weights,
+                    .lane_base = oc,
+                },
+                inputs,
+                input_channel_offsets,
+                output,
+                output_batch_base,
+                plane,
+                oc,
+                bias,
+                apply_silu,
+                n,
+            );
             oc += 1;
         }
     }
@@ -601,113 +485,159 @@ fn conv2dPointwiseRangePacked(
                 (oc + 1) / out_per_group == group_idx;
 
             if (quadable) {
-                const out0_slice = output.data[output_batch_base + oc * plane ..][0..plane];
-                const out1_slice = output.data[output_batch_base + (oc + 1) * plane ..][0..plane];
-                const out2_slice = output.data[output_batch_base + (oc + 2) * plane ..][0..plane];
-                const out3_slice = output.data[output_batch_base + (oc + 3) * plane ..][0..plane];
-                const bias0: f32 = if (bias) |bias_values| bias_values[oc] else 0.0;
-                const bias1: f32 = if (bias) |bias_values| bias_values[oc + 1] else 0.0;
-                const bias2: f32 = if (bias) |bias_values| bias_values[oc + 2] else 0.0;
-                const bias3: f32 = if (bias) |bias_values| bias_values[oc + 3] else 0.0;
-                var i: usize = 0;
-                while (i + common.simd_lane_count <= plane) : (i += common.simd_lane_count) {
-                    var acc0 = @as(common.F32xN, @splat(bias0));
-                    var acc1 = @as(common.F32xN, @splat(bias1));
-                    var acc2 = @as(common.F32xN, @splat(bias2));
-                    var acc3 = @as(common.F32xN, @splat(bias3));
-                    for (0..in_per_group) |ic_local| {
-                        const input_slice = input.data[input_batch_base + (in_channel_start + ic_local) * plane ..][0..plane];
-                        const src = common.loadF32xN(input_slice, i);
-                        const packed_base = (group_idx * in_per_group + ic_local) * out_per_group + oc_in_group;
-                        acc0 += src * @as(common.F32xN, @splat(pack_weights.data[packed_base]));
-                        acc1 += src * @as(common.F32xN, @splat(pack_weights.data[packed_base + 1]));
-                        acc2 += src * @as(common.F32xN, @splat(pack_weights.data[packed_base + 2]));
-                        acc3 += src * @as(common.F32xN, @splat(pack_weights.data[packed_base + 3]));
-                    }
-                    common.storeF32xN(out0_slice, i, common.maybeApplySiluVector(acc0, apply_silu));
-                    common.storeF32xN(out1_slice, i, common.maybeApplySiluVector(acc1, apply_silu));
-                    common.storeF32xN(out2_slice, i, common.maybeApplySiluVector(acc2, apply_silu));
-                    common.storeF32xN(out3_slice, i, common.maybeApplySiluVector(acc3, apply_silu));
-                }
-                while (i < plane) : (i += 1) {
-                    var acc0: f32 = bias0;
-                    var acc1: f32 = bias1;
-                    var acc2: f32 = bias2;
-                    var acc3: f32 = bias3;
-                    for (0..in_per_group) |ic_local| {
-                        const src = input.data[input_batch_base + (in_channel_start + ic_local) * plane + i];
-                        const packed_base = (group_idx * in_per_group + ic_local) * out_per_group + oc_in_group;
-                        acc0 += src * pack_weights.data[packed_base];
-                        acc1 += src * pack_weights.data[packed_base + 1];
-                        acc2 += src * pack_weights.data[packed_base + 2];
-                        acc3 += src * pack_weights.data[packed_base + 3];
-                    }
-                    out0_slice[i] = common.maybeApplySilu(acc0, apply_silu);
-                    out1_slice[i] = common.maybeApplySilu(acc1, apply_silu);
-                    out2_slice[i] = common.maybeApplySilu(acc2, apply_silu);
-                    out3_slice[i] = common.maybeApplySilu(acc3, apply_silu);
-                }
+                runPointwiseBlock(
+                    4,
+                    PackedPointwiseAccessor{
+                        .data = pack_weights.data,
+                        .group_idx = group_idx,
+                        .in_per_group = in_per_group,
+                        .out_per_group = out_per_group,
+                        .oc_in_group = oc_in_group,
+                    },
+                    input,
+                    output,
+                    input_batch_base,
+                    output_batch_base,
+                    in_channel_start,
+                    in_per_group,
+                    plane,
+                    oc,
+                    bias,
+                    apply_silu,
+                );
                 oc += 4;
                 continue;
             }
 
             if (pairable) {
-                const out0_slice = output.data[output_batch_base + oc * plane ..][0..plane];
-                const out1_slice = output.data[output_batch_base + (oc + 1) * plane ..][0..plane];
-                const bias0: f32 = if (bias) |bias_values| bias_values[oc] else 0.0;
-                const bias1: f32 = if (bias) |bias_values| bias_values[oc + 1] else 0.0;
-                var i: usize = 0;
-                while (i + common.simd_lane_count <= plane) : (i += common.simd_lane_count) {
-                    var acc0 = @as(common.F32xN, @splat(bias0));
-                    var acc1 = @as(common.F32xN, @splat(bias1));
-                    for (0..in_per_group) |ic_local| {
-                        const input_slice = input.data[input_batch_base + (in_channel_start + ic_local) * plane ..][0..plane];
-                        const src = common.loadF32xN(input_slice, i);
-                        const packed_base = (group_idx * in_per_group + ic_local) * out_per_group + oc_in_group;
-                        acc0 += src * @as(common.F32xN, @splat(pack_weights.data[packed_base]));
-                        acc1 += src * @as(common.F32xN, @splat(pack_weights.data[packed_base + 1]));
-                    }
-                    common.storeF32xN(out0_slice, i, common.maybeApplySiluVector(acc0, apply_silu));
-                    common.storeF32xN(out1_slice, i, common.maybeApplySiluVector(acc1, apply_silu));
-                }
-                while (i < plane) : (i += 1) {
-                    var acc0: f32 = bias0;
-                    var acc1: f32 = bias1;
-                    for (0..in_per_group) |ic_local| {
-                        const src = input.data[input_batch_base + (in_channel_start + ic_local) * plane + i];
-                        const packed_base = (group_idx * in_per_group + ic_local) * out_per_group + oc_in_group;
-                        acc0 += src * pack_weights.data[packed_base];
-                        acc1 += src * pack_weights.data[packed_base + 1];
-                    }
-                    out0_slice[i] = common.maybeApplySilu(acc0, apply_silu);
-                    out1_slice[i] = common.maybeApplySilu(acc1, apply_silu);
-                }
+                runPointwiseBlock(
+                    2,
+                    PackedPointwiseAccessor{
+                        .data = pack_weights.data,
+                        .group_idx = group_idx,
+                        .in_per_group = in_per_group,
+                        .out_per_group = out_per_group,
+                        .oc_in_group = oc_in_group,
+                    },
+                    input,
+                    output,
+                    input_batch_base,
+                    output_batch_base,
+                    in_channel_start,
+                    in_per_group,
+                    plane,
+                    oc,
+                    bias,
+                    apply_silu,
+                );
                 oc += 2;
                 continue;
             }
 
-            const out_slice = output.data[output_batch_base + oc * plane ..][0..plane];
-            const bias_value: f32 = if (bias) |bias_values| bias_values[oc] else 0.0;
-            var i: usize = 0;
-            while (i + common.simd_lane_count <= plane) : (i += common.simd_lane_count) {
-                var acc = @as(common.F32xN, @splat(bias_value));
-                for (0..in_per_group) |ic_local| {
-                    const input_slice = input.data[input_batch_base + (in_channel_start + ic_local) * plane ..][0..plane];
-                    const src = common.loadF32xN(input_slice, i);
-                    const packed_base = (group_idx * in_per_group + ic_local) * out_per_group + oc_in_group;
-                    acc += src * @as(common.F32xN, @splat(pack_weights.data[packed_base]));
-                }
-                common.storeF32xN(out_slice, i, common.maybeApplySiluVector(acc, apply_silu));
-            }
-            while (i < plane) : (i += 1) {
-                var acc: f32 = bias_value;
-                for (0..in_per_group) |ic_local| {
-                    const packed_base = (group_idx * in_per_group + ic_local) * out_per_group + oc_in_group;
-                    acc += input.data[input_batch_base + (in_channel_start + ic_local) * plane + i] * pack_weights.data[packed_base];
-                }
-                out_slice[i] = common.maybeApplySilu(acc, apply_silu);
-            }
+            runPointwiseBlock(
+                1,
+                PackedPointwiseAccessor{
+                    .data = pack_weights.data,
+                    .group_idx = group_idx,
+                    .in_per_group = in_per_group,
+                    .out_per_group = out_per_group,
+                    .oc_in_group = oc_in_group,
+                },
+                input,
+                output,
+                input_batch_base,
+                output_batch_base,
+                in_channel_start,
+                in_per_group,
+                plane,
+                oc,
+                bias,
+                apply_silu,
+            );
             oc += 1;
+        }
+    }
+}
+
+const DensePointwiseAccessor = struct {
+    weights: *const common.Tensor,
+    lane_base: usize,
+    in_per_group: usize,
+
+    inline fn weight(self: @This(), ic_local: usize, lane: usize) f32 {
+        return self.weights.data[(self.lane_base + lane) * self.in_per_group + ic_local];
+    }
+};
+
+const PackedPointwiseAccessor = struct {
+    data: []const f32,
+    group_idx: usize,
+    in_per_group: usize,
+    out_per_group: usize,
+    oc_in_group: usize,
+
+    inline fn weight(self: @This(), ic_local: usize, lane: usize) f32 {
+        const base = (self.group_idx * self.in_per_group + ic_local) * self.out_per_group + self.oc_in_group;
+        return self.data[base + lane];
+    }
+};
+
+fn runPointwiseBlock(
+    comptime lanes: usize,
+    accessor: anytype,
+    input: *const common.Tensor,
+    output: *common.Tensor,
+    input_batch_base: usize,
+    output_batch_base: usize,
+    in_channel_start: usize,
+    in_per_group: usize,
+    plane: usize,
+    oc: usize,
+    bias: ?[]const f32,
+    apply_silu: bool,
+) void {
+    var out_slices: [lanes][]f32 = undefined;
+    var bias_values: [lanes]f32 = undefined;
+    inline for (0..lanes) |lane| {
+        out_slices[lane] = output.data[output_batch_base + (oc + lane) * plane ..][0..plane];
+        bias_values[lane] = if (bias) |bias_values_slice| bias_values_slice[oc + lane] else 0.0;
+    }
+
+    var i: usize = 0;
+    while (i + common.simd_lane_count <= plane) : (i += common.simd_lane_count) {
+        var acc: [lanes]common.F32xN = undefined;
+        inline for (0..lanes) |lane| {
+            acc[lane] = @as(common.F32xN, @splat(bias_values[lane]));
+        }
+
+        for (0..in_per_group) |ic_local| {
+            const input_slice = input.data[input_batch_base + (in_channel_start + ic_local) * plane ..][0..plane];
+            const src = common.loadF32xN(input_slice, i);
+            inline for (0..lanes) |lane| {
+                acc[lane] += src * @as(common.F32xN, @splat(accessor.weight(ic_local, lane)));
+            }
+        }
+
+        inline for (0..lanes) |lane| {
+            common.storeF32xN(out_slices[lane], i, common.maybeApplySiluVector(acc[lane], apply_silu));
+        }
+    }
+
+    while (i < plane) : (i += 1) {
+        var acc: [lanes]f32 = undefined;
+        inline for (0..lanes) |lane| {
+            acc[lane] = bias_values[lane];
+        }
+
+        for (0..in_per_group) |ic_local| {
+            const src = input.data[input_batch_base + (in_channel_start + ic_local) * plane + i];
+            inline for (0..lanes) |lane| {
+                acc[lane] += src * accessor.weight(ic_local, lane);
+            }
+        }
+
+        inline for (0..lanes) |lane| {
+            out_slices[lane][i] = common.maybeApplySilu(acc[lane], apply_silu);
         }
     }
 }
@@ -734,137 +664,153 @@ fn conv2dPointwiseConcatRangePacked(
             const pairable = oc + 1 < oc_end;
 
             if (quadable) {
-                const out0_slice = output.data[output_batch_base + oc * plane ..][0..plane];
-                const out1_slice = output.data[output_batch_base + (oc + 1) * plane ..][0..plane];
-                const out2_slice = output.data[output_batch_base + (oc + 2) * plane ..][0..plane];
-                const out3_slice = output.data[output_batch_base + (oc + 3) * plane ..][0..plane];
-                const bias0: f32 = if (bias) |bias_values| bias_values[oc] else 0.0;
-                const bias1: f32 = if (bias) |bias_values| bias_values[oc + 1] else 0.0;
-                const bias2: f32 = if (bias) |bias_values| bias_values[oc + 2] else 0.0;
-                const bias3: f32 = if (bias) |bias_values| bias_values[oc + 3] else 0.0;
-                var i: usize = 0;
-                while (i + common.simd_lane_count <= plane) : (i += common.simd_lane_count) {
-                    var acc0 = @as(common.F32xN, @splat(bias0));
-                    var acc1 = @as(common.F32xN, @splat(bias1));
-                    var acc2 = @as(common.F32xN, @splat(bias2));
-                    var acc3 = @as(common.F32xN, @splat(bias3));
-                    for (inputs, input_channel_offsets) |input, channel_offset| {
-                        const input_batch_base = n * input.shape[1] * plane;
-                        var packed_base = channel_offset * out_channels + oc;
-                        for (0..input.shape[1]) |ic| {
-                            const input_slice = input.data[input_batch_base + ic * plane ..][0..plane];
-                            const src = common.loadF32xN(input_slice, i);
-                            acc0 += src * @as(common.F32xN, @splat(pack_weights.data[packed_base]));
-                            acc1 += src * @as(common.F32xN, @splat(pack_weights.data[packed_base + 1]));
-                            acc2 += src * @as(common.F32xN, @splat(pack_weights.data[packed_base + 2]));
-                            acc3 += src * @as(common.F32xN, @splat(pack_weights.data[packed_base + 3]));
-                            packed_base += out_channels;
-                        }
-                    }
-                    common.storeF32xN(out0_slice, i, common.maybeApplySiluVector(acc0, apply_silu));
-                    common.storeF32xN(out1_slice, i, common.maybeApplySiluVector(acc1, apply_silu));
-                    common.storeF32xN(out2_slice, i, common.maybeApplySiluVector(acc2, apply_silu));
-                    common.storeF32xN(out3_slice, i, common.maybeApplySiluVector(acc3, apply_silu));
-                }
-                while (i < plane) : (i += 1) {
-                    var acc0: f32 = bias0;
-                    var acc1: f32 = bias1;
-                    var acc2: f32 = bias2;
-                    var acc3: f32 = bias3;
-                    for (inputs, input_channel_offsets) |input, channel_offset| {
-                        const input_batch_base = n * input.shape[1] * plane;
-                        var packed_base = channel_offset * out_channels + oc;
-                        for (0..input.shape[1]) |ic| {
-                            const src = input.data[input_batch_base + ic * plane + i];
-                            acc0 += src * pack_weights.data[packed_base];
-                            acc1 += src * pack_weights.data[packed_base + 1];
-                            acc2 += src * pack_weights.data[packed_base + 2];
-                            acc3 += src * pack_weights.data[packed_base + 3];
-                            packed_base += out_channels;
-                        }
-                    }
-                    out0_slice[i] = common.maybeApplySilu(acc0, apply_silu);
-                    out1_slice[i] = common.maybeApplySilu(acc1, apply_silu);
-                    out2_slice[i] = common.maybeApplySilu(acc2, apply_silu);
-                    out3_slice[i] = common.maybeApplySilu(acc3, apply_silu);
-                }
+                runPointwiseConcatBlock(
+                    4,
+                    PackedPointwiseConcatAccessor{
+                        .data = pack_weights.data,
+                        .out_channels = out_channels,
+                        .lane_base = oc,
+                    },
+                    inputs,
+                    input_channel_offsets,
+                    output,
+                    output_batch_base,
+                    plane,
+                    oc,
+                    bias,
+                    apply_silu,
+                    n,
+                );
                 oc += 4;
                 continue;
             }
 
             if (pairable) {
-                const out0_slice = output.data[output_batch_base + oc * plane ..][0..plane];
-                const out1_slice = output.data[output_batch_base + (oc + 1) * plane ..][0..plane];
-                const bias0: f32 = if (bias) |bias_values| bias_values[oc] else 0.0;
-                const bias1: f32 = if (bias) |bias_values| bias_values[oc + 1] else 0.0;
-                var i: usize = 0;
-                while (i + common.simd_lane_count <= plane) : (i += common.simd_lane_count) {
-                    var acc0 = @as(common.F32xN, @splat(bias0));
-                    var acc1 = @as(common.F32xN, @splat(bias1));
-                    for (inputs, input_channel_offsets) |input, channel_offset| {
-                        const input_batch_base = n * input.shape[1] * plane;
-                        var packed_base = channel_offset * out_channels + oc;
-                        for (0..input.shape[1]) |ic| {
-                            const input_slice = input.data[input_batch_base + ic * plane ..][0..plane];
-                            const src = common.loadF32xN(input_slice, i);
-                            acc0 += src * @as(common.F32xN, @splat(pack_weights.data[packed_base]));
-                            acc1 += src * @as(common.F32xN, @splat(pack_weights.data[packed_base + 1]));
-                            packed_base += out_channels;
-                        }
-                    }
-                    common.storeF32xN(out0_slice, i, common.maybeApplySiluVector(acc0, apply_silu));
-                    common.storeF32xN(out1_slice, i, common.maybeApplySiluVector(acc1, apply_silu));
-                }
-                while (i < plane) : (i += 1) {
-                    var acc0: f32 = bias0;
-                    var acc1: f32 = bias1;
-                    for (inputs, input_channel_offsets) |input, channel_offset| {
-                        const input_batch_base = n * input.shape[1] * plane;
-                        var packed_base = channel_offset * out_channels + oc;
-                        for (0..input.shape[1]) |ic| {
-                            const src = input.data[input_batch_base + ic * plane + i];
-                            acc0 += src * pack_weights.data[packed_base];
-                            acc1 += src * pack_weights.data[packed_base + 1];
-                            packed_base += out_channels;
-                        }
-                    }
-                    out0_slice[i] = common.maybeApplySilu(acc0, apply_silu);
-                    out1_slice[i] = common.maybeApplySilu(acc1, apply_silu);
-                }
+                runPointwiseConcatBlock(
+                    2,
+                    PackedPointwiseConcatAccessor{
+                        .data = pack_weights.data,
+                        .out_channels = out_channels,
+                        .lane_base = oc,
+                    },
+                    inputs,
+                    input_channel_offsets,
+                    output,
+                    output_batch_base,
+                    plane,
+                    oc,
+                    bias,
+                    apply_silu,
+                    n,
+                );
                 oc += 2;
                 continue;
             }
 
-            const out_slice = output.data[output_batch_base + oc * plane ..][0..plane];
-            const bias_value: f32 = if (bias) |bias_values| bias_values[oc] else 0.0;
-            var i: usize = 0;
-            while (i + common.simd_lane_count <= plane) : (i += common.simd_lane_count) {
-                var acc = @as(common.F32xN, @splat(bias_value));
-                for (inputs, input_channel_offsets) |input, channel_offset| {
-                    const input_batch_base = n * input.shape[1] * plane;
-                    var packed_base = channel_offset * out_channels + oc;
-                    for (0..input.shape[1]) |ic| {
-                        const input_slice = input.data[input_batch_base + ic * plane ..][0..plane];
-                        const src = common.loadF32xN(input_slice, i);
-                        acc += src * @as(common.F32xN, @splat(pack_weights.data[packed_base]));
-                        packed_base += out_channels;
-                    }
-                }
-                common.storeF32xN(out_slice, i, common.maybeApplySiluVector(acc, apply_silu));
-            }
-            while (i < plane) : (i += 1) {
-                var acc: f32 = bias_value;
-                for (inputs, input_channel_offsets) |input, channel_offset| {
-                    const input_batch_base = n * input.shape[1] * plane;
-                    var packed_base = channel_offset * out_channels + oc;
-                    for (0..input.shape[1]) |ic| {
-                        acc += input.data[input_batch_base + ic * plane + i] * pack_weights.data[packed_base];
-                        packed_base += out_channels;
-                    }
-                }
-                out_slice[i] = common.maybeApplySilu(acc, apply_silu);
-            }
+            runPointwiseConcatBlock(
+                1,
+                PackedPointwiseConcatAccessor{
+                    .data = pack_weights.data,
+                    .out_channels = out_channels,
+                    .lane_base = oc,
+                },
+                inputs,
+                input_channel_offsets,
+                output,
+                output_batch_base,
+                plane,
+                oc,
+                bias,
+                apply_silu,
+                n,
+            );
             oc += 1;
+        }
+    }
+}
+
+const DensePointwiseConcatAccessor = struct {
+    weights: *const common.Tensor,
+    lane_base: usize,
+
+    inline fn weight(self: @This(), channel_index: usize, lane: usize) f32 {
+        return self.weights.data[(self.lane_base + lane) * self.weights.shape[1] + channel_index];
+    }
+};
+
+const PackedPointwiseConcatAccessor = struct {
+    data: []const f32,
+    out_channels: usize,
+    lane_base: usize,
+
+    inline fn weight(self: @This(), channel_index: usize, lane: usize) f32 {
+        return self.data[channel_index * self.out_channels + self.lane_base + lane];
+    }
+};
+
+fn runPointwiseConcatBlock(
+    comptime lanes: usize,
+    accessor: anytype,
+    inputs: []const *const common.Tensor,
+    input_channel_offsets: []const usize,
+    output: *common.Tensor,
+    output_batch_base: usize,
+    plane: usize,
+    oc: usize,
+    bias: ?[]const f32,
+    apply_silu: bool,
+    batch_index: usize,
+) void {
+    var out_slices: [lanes][]f32 = undefined;
+    var bias_values: [lanes]f32 = undefined;
+    inline for (0..lanes) |lane| {
+        out_slices[lane] = output.data[output_batch_base + (oc + lane) * plane ..][0..plane];
+        bias_values[lane] = if (bias) |bias_values_slice| bias_values_slice[oc + lane] else 0.0;
+    }
+
+    var i: usize = 0;
+    while (i + common.simd_lane_count <= plane) : (i += common.simd_lane_count) {
+        var acc: [lanes]common.F32xN = undefined;
+        inline for (0..lanes) |lane| {
+            acc[lane] = @as(common.F32xN, @splat(bias_values[lane]));
+        }
+
+        for (inputs, input_channel_offsets) |input, channel_offset| {
+            const input_batch_base = batch_index * input.shape[1] * plane;
+            for (0..input.shape[1]) |ic| {
+                const input_slice = input.data[input_batch_base + ic * plane ..][0..plane];
+                const src = common.loadF32xN(input_slice, i);
+                const channel_index = channel_offset + ic;
+                inline for (0..lanes) |lane| {
+                    acc[lane] += src * @as(common.F32xN, @splat(accessor.weight(channel_index, lane)));
+                }
+            }
+        }
+
+        inline for (0..lanes) |lane| {
+            common.storeF32xN(out_slices[lane], i, common.maybeApplySiluVector(acc[lane], apply_silu));
+        }
+    }
+
+    while (i < plane) : (i += 1) {
+        var acc: [lanes]f32 = undefined;
+        inline for (0..lanes) |lane| {
+            acc[lane] = bias_values[lane];
+        }
+
+        for (inputs, input_channel_offsets) |input, channel_offset| {
+            const input_batch_base = batch_index * input.shape[1] * plane;
+            for (0..input.shape[1]) |ic| {
+                const channel_index = channel_offset + ic;
+                const src = input.data[input_batch_base + ic * plane + i];
+                inline for (0..lanes) |lane| {
+                    acc[lane] += src * accessor.weight(channel_index, lane);
+                }
+            }
+        }
+
+        inline for (0..lanes) |lane| {
+            out_slices[lane][i] = common.maybeApplySilu(acc[lane], apply_silu);
         }
     }
 }
