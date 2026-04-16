@@ -325,6 +325,43 @@ test "runtime session can batch swiftocr requests through the unified executor" 
     try std.testing.expectEqualStrings("ocr_shared_infer", results.items[1].note);
 }
 
+test "runtime session can normalize and validate chandra document requests" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makeDir("chandra-ocr-2");
+    var model_dir = try tmp.dir.openDir("chandra-ocr-2", .{});
+    defer model_dir.close();
+
+    try writeTmpFile(model_dir, "config.json", "{\"model_type\":\"qwen3_vl\"}");
+    try writeTmpFile(model_dir, "tokenizer.json", "{}");
+    try writeTmpFile(tmp.dir, "demo.pdf", "%PDF-1.7");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, "chandra-ocr-2");
+    defer std.testing.allocator.free(root_path);
+    const pdf_path = try tmp.dir.realpathAlloc(std.testing.allocator, "demo.pdf");
+    defer std.testing.allocator.free(pdf_path);
+
+    var session = RuntimeSession.init(std.testing.allocator);
+    defer session.deinit();
+
+    var handle = try session.openModel(.{ .model_dir = root_path });
+    defer handle.deinit();
+
+    var plan = try session.plan(&handle, .{
+        .operation = "render-markdown",
+        .input = .{ .document_path = pdf_path },
+    });
+    defer plan.deinit();
+
+    var result = try session.execute(&handle, &plan);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(types.ProviderKey.chandra_ocr, handle.normalized.provider_key);
+    try std.testing.expectEqual(types.ExecutionOrigin.shared_adapter, result.origin);
+    try std.testing.expectEqual(types.ExecutionNote.validated_only, result.note);
+}
+
 fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {
     var file = try dir.createFile(relative_path, .{});
     defer file.close();

@@ -1,4 +1,5 @@
 const std = @import("std");
+const chandra_shared = @import("../providers/chandra_shared.zig");
 const task = @import("../../core/task.zig");
 const handle_mod = @import("../model/handle.zig");
 const ocr_shared = @import("../providers/ocr_shared.zig");
@@ -20,6 +21,7 @@ pub const Executor = struct {
             .qwen3_text => try executeQwen3(self.allocator, handle, plan.requests[0]),
             .yolo_vision => try executeYoloVision(self.allocator, handle, plan.requests[0]),
             .swiftocr_ocr => try executeSwiftOCR(self.allocator, handle, plan.requests[0]),
+            .chandra_ocr => try executeChandraOCR(self.allocator, handle, plan.requests[0]),
             else => error.RuntimeExecutionNotImplemented,
         };
     }
@@ -29,7 +31,7 @@ pub const Executor = struct {
 
         return switch (handle.normalized.provider_key) {
             .qwen3_text => try executeQwen3Batch(self.allocator, handle, plan.requests),
-            .yolo_vision, .swiftocr_ocr => try executeBatchSequential(self.allocator, handle, plan.requests),
+            .yolo_vision, .swiftocr_ocr, .chandra_ocr => try executeBatchSequential(self.allocator, handle, plan.requests),
             else => error.RuntimeExecutionNotImplemented,
         };
     }
@@ -118,6 +120,11 @@ fn executeSwiftOCR(
     handle: *const handle_mod.ModelHandle,
     request: types.RuntimeRequest,
 ) !types.RuntimeResult {
+    switch (request.input) {
+        .none, .image_path => {},
+        else => return error.InvalidInputPayload,
+    }
+
     const model_path = handle.normalized.artifacts.ocr_model_path orelse return error.MissingOCRModelArtifact;
     const infer_output = try ocr_shared.maybeRunInfer(
         allocator,
@@ -135,6 +142,30 @@ fn executeSwiftOCR(
     return .{
         .origin = .shared_adapter,
         .note = if (infer_output != null) .ocr_shared_infer else .ocr_model_ready,
+        .output = .{ .json = output },
+    };
+}
+
+fn executeChandraOCR(
+    allocator: std.mem.Allocator,
+    handle: *const handle_mod.ModelHandle,
+    request: types.RuntimeRequest,
+) !types.RuntimeResult {
+    switch (request.input) {
+        .none, .image_path, .document_path => {},
+        else => return error.InvalidInputPayload,
+    }
+    if (request.execution != .sync) return error.UnsupportedExecutionMode;
+
+    const output = try chandra_shared.buildOutputJson(allocator, .{
+        .operation = request.operation,
+        .model_family = handle.normalized.descriptor.family,
+        .model_path = handle.normalized.artifacts.model_dir,
+        .input_path = request.input.asString(),
+    });
+    return .{
+        .origin = .shared_adapter,
+        .note = .validated_only,
         .output = .{ .json = output },
     };
 }
@@ -157,6 +188,7 @@ fn executeBatchSequential(
         result.* = switch (handle.normalized.provider_key) {
             .yolo_vision => try executeYoloVision(allocator, handle, request),
             .swiftocr_ocr => try executeSwiftOCR(allocator, handle, request),
+            .chandra_ocr => try executeChandraOCR(allocator, handle, request),
             else => return error.RuntimeExecutionNotImplemented,
         };
         initialized += 1;

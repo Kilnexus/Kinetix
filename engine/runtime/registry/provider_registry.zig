@@ -12,6 +12,7 @@ const builtin_descriptors = [_]ProviderDescriptor{
     .{ .key = .bert_text, .modality = .text, .family = "bert" },
     .{ .key = .yolo_vision, .modality = .vision, .family = "yolo" },
     .{ .key = .swiftocr_ocr, .modality = .ocr, .family = "swiftocr" },
+    .{ .key = .chandra_ocr, .modality = .ocr, .family = "chandra" },
     .{ .key = .generic, .modality = .multimodal, .family = "generic" },
 };
 

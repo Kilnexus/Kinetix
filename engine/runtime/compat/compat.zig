@@ -5,6 +5,7 @@ const qwen3 = @import("providers/qwen3.zig");
 const bert = @import("providers/bert.zig");
 const yolo = @import("providers/yolo.zig");
 const swiftocr = @import("providers/swiftocr.zig");
+const chandra = @import("providers/chandra.zig");
 const generic = @import("providers/generic.zig");
 const types = @import("../types.zig");
 
@@ -33,6 +34,7 @@ pub fn normalizeCatalog(
     if (try bert.tryNormalize(allocator, catalog, preferred_weights)) |model| return model;
     if (try yolo.tryNormalize(allocator, catalog, preferred_weights)) |model| return model;
     if (try swiftocr.tryNormalize(allocator, catalog, preferred_weights)) |model| return model;
+    if (try chandra.tryNormalize(allocator, catalog, preferred_weights)) |model| return model;
     if (try generic.tryNormalize(allocator, catalog, preferred_weights)) |model| return model;
     return error.UnsupportedModelDirectory;
 }
@@ -89,6 +91,29 @@ test "compat normalizes swiftocr bundles into a runtime model" {
 
     try std.testing.expectEqual(types.ProviderKey.swiftocr_ocr, model.provider_key);
     try std.testing.expectEqual(types.Modality.ocr, model.descriptor.modality);
+    try std.testing.expectEqual(types.CompatibilityStatus.degraded, model.compat.status);
+}
+
+test "compat normalizes chandra huggingface directories into a runtime model" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makeDir("chandra-ocr-2");
+    var model_dir = try tmp.dir.openDir("chandra-ocr-2", .{});
+    defer model_dir.close();
+
+    try writeTmpFile(model_dir, "config.json", "{\"model_type\":\"qwen3_vl\"}");
+    try writeTmpFile(model_dir, "tokenizer.json", "{}");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, "chandra-ocr-2");
+    defer std.testing.allocator.free(root_path);
+
+    var model = try normalizeModel(std.testing.allocator, root_path, .auto);
+    defer model.deinit();
+
+    try std.testing.expectEqual(types.ProviderKey.chandra_ocr, model.provider_key);
+    try std.testing.expectEqual(types.Modality.ocr, model.descriptor.modality);
+    try std.testing.expectEqualStrings("chandra", model.descriptor.family);
     try std.testing.expectEqual(types.CompatibilityStatus.degraded, model.compat.status);
 }
 

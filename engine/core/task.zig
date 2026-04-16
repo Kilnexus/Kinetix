@@ -31,6 +31,7 @@ pub const InputPayload = union(enum) {
     none,
     text: []const u8,
     image_path: []const u8,
+    document_path: []const u8,
     audio_path: []const u8,
     video_path: []const u8,
 
@@ -39,6 +40,7 @@ pub const InputPayload = union(enum) {
             .none => null,
             .text => |value| value,
             .image_path => |value| value,
+            .document_path => |value| value,
             .audio_path => |value| value,
             .video_path => |value| value,
         };

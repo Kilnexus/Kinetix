@@ -404,10 +404,16 @@ fn inferInputPayload(modality: task.Modality, input: ?[]const u8) task.InputPayl
     const value = input orelse return .none;
     return switch (modality) {
         .text, .multimodal => .{ .text = value },
-        .vision, .ocr => .{ .image_path = value },
+        .vision => .{ .image_path = value },
+        .ocr => if (isDocumentPath(value)) .{ .document_path = value } else .{ .image_path = value },
         .audio, .tts => .{ .audio_path = value },
         .video => .{ .video_path = value },
     };
+}
+
+fn isDocumentPath(path: []const u8) bool {
+    return std.mem.endsWith(u8, path, ".pdf") or
+        std.mem.endsWith(u8, path, ".PDF");
 }
 
 fn executeWithUnifiedRuntime(
@@ -632,6 +638,12 @@ test "execution context reuses one opened runtime handle across multiple text re
     try std.testing.expectEqual(runtime_types.ExecutionOrigin.native_single_bridge, second.origin);
     try std.testing.expectEqualStrings("stub-native-single", first.output.text);
     try std.testing.expectEqualStrings("stub-native-single", second.output.text);
+}
+
+test "ocr input inference maps pdf paths to document payloads" {
+    const payload = inferInputPayload(.ocr, "demo.pdf");
+    try std.testing.expectEqual(task.InputPayload.document_path, std.meta.activeTag(payload));
+    try std.testing.expectEqualStrings("demo.pdf", payload.asString().?);
 }
 
 fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {

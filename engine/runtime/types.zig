@@ -86,6 +86,7 @@ pub const InputKind = enum {
     none,
     text,
     image_path,
+    document_path,
     audio_path,
     video_path,
 };
@@ -95,6 +96,7 @@ pub const ProviderKey = enum {
     bert_text,
     yolo_vision,
     swiftocr_ocr,
+    chandra_ocr,
     generic,
 
     pub fn name(self: ProviderKey) []const u8 {
@@ -103,6 +105,7 @@ pub const ProviderKey = enum {
             .bert_text => "bert_text",
             .yolo_vision => "yolo_vision",
             .swiftocr_ocr => "swiftocr_ocr",
+            .chandra_ocr => "chandra_ocr",
             .generic => "generic",
         };
     }
@@ -119,6 +122,7 @@ pub const NormalizedFormat = enum {
     text_decoder,
     vision_graph,
     ocr_bundle,
+    document_vlm,
     generic,
 };
 
@@ -132,6 +136,8 @@ pub const CompatibilityWarning = enum {
     legacy_graph_bridge_required,
     native_batch_unavailable,
     ocr_pipeline_skeleton,
+    external_runtime_required,
+    document_input_partial,
 };
 
 pub const CompatibilityRewrite = enum {
@@ -291,6 +297,7 @@ pub fn inputKind(payload: InputPayload) InputKind {
         .none => .none,
         .text => .text,
         .image_path => .image_path,
+        .document_path => .document_path,
         .audio_path => .audio_path,
         .video_path => .video_path,
     };
