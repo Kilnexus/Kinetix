@@ -98,6 +98,7 @@ fn addLegacyImports(
         .target = target,
         .optimize = optimize,
     });
+    engine_root.addImport("Pixio", pixio);
 
     const graph = b.createModule(.{
         .root_source_file = b.path("engine/artifacts/vision_graph.zig"),

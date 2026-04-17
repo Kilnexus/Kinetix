@@ -79,9 +79,36 @@ pub const Readiness = struct {
     output_tensor_count: usize = 0,
 };
 
+const PreprocessSummary = struct {
+    image_width: usize,
+    image_height: usize,
+    resized_width: usize,
+    resized_height: usize,
+    visual_token_count: usize,
+};
+
 pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
     if (context.execution != .sync) return error.UnsupportedExecutionMode;
-    return try buildIncompleteOutputJson(allocator, context, inspect(context.model_path));
+    const readiness = inspect(context.model_path);
+    var summary: ?PreprocessSummary = null;
+
+    if (readiness.has_image_processor_config and isRasterImagePath(context.input_path)) {
+        var image_processor = try preprocess.loadImageProcessorConfig(allocator, context.model_path);
+        defer image_processor.deinit();
+
+        var prepared = try preprocess.loadImageInput(allocator, context.input_path, image_processor.value);
+        defer prepared.deinit();
+
+        summary = .{
+            .image_width = prepared.grid.input_width,
+            .image_height = prepared.grid.input_height,
+            .resized_width = prepared.grid.resized_width,
+            .resized_height = prepared.grid.resized_height,
+            .visual_token_count = prepared.grid.token_count,
+        };
+    }
+
+    return try buildIncompleteOutputJson(allocator, context, readiness, summary);
 }
 
 pub fn inspect(model_path: []const u8) Readiness {
@@ -151,6 +178,7 @@ fn buildIncompleteOutputJson(
     allocator: std.mem.Allocator,
     context: Context,
     readiness: Readiness,
+    preprocess_summary: ?PreprocessSummary,
 ) ![]u8 {
     const ReadinessReceipt = struct {
         has_config: bool,
@@ -186,6 +214,9 @@ fn buildIncompleteOutputJson(
         loaded_tensors: ?usize,
         image_width: ?usize,
         image_height: ?usize,
+        resized_width: ?usize,
+        resized_height: ?usize,
+        visual_token_count: ?usize,
         error_message: []const u8,
         readiness: ReadinessReceipt,
     };
@@ -199,16 +230,19 @@ fn buildIncompleteOutputJson(
         .backend = "kinetix_native",
         .method = "native",
         .requested_output = requestedOutput(context.operation),
-        .native_stage = "model_loading",
+        .native_stage = if (preprocess_summary != null) "image_preprocessing" else "model_loading",
         .content = null,
         .markdown = null,
         .html = null,
         .json_output = null,
-        .page_count = null,
+        .page_count = if (preprocess_summary != null) 1 else null,
         .total_token_count = null,
         .loaded_tensors = null,
-        .image_width = null,
-        .image_height = null,
+        .image_width = if (preprocess_summary) |summary| summary.image_width else null,
+        .image_height = if (preprocess_summary) |summary| summary.image_height else null,
+        .resized_width = if (preprocess_summary) |summary| summary.resized_width else null,
+        .resized_height = if (preprocess_summary) |summary| summary.resized_height else null,
+        .visual_token_count = if (preprocess_summary) |summary| summary.visual_token_count else null,
         .error_message = "Chandra native inference is not complete yet; model config, weight manifest, and preprocessing readiness are available.",
         .readiness = .{
             .has_config = readiness.has_config,
@@ -237,6 +271,17 @@ fn requestedOutput(operation: []const u8) []const u8 {
     if (std.mem.eql(u8, operation, "render-html")) return "html";
     if (std.mem.eql(u8, operation, "render-json")) return "json";
     return "markdown";
+}
+
+fn isRasterImagePath(path: []const u8) bool {
+    const extension = std.fs.path.extension(path);
+    return std.ascii.eqlIgnoreCase(extension, ".png") or
+        std.ascii.eqlIgnoreCase(extension, ".jpg") or
+        std.ascii.eqlIgnoreCase(extension, ".jpeg") or
+        std.ascii.eqlIgnoreCase(extension, ".bmp") or
+        std.ascii.eqlIgnoreCase(extension, ".gif") or
+        std.ascii.eqlIgnoreCase(extension, ".ico") or
+        std.ascii.eqlIgnoreCase(extension, ".webp");
 }
 
 fn hasAnyFile(model_path: []const u8, names: []const []const u8) bool {
