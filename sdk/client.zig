@@ -168,6 +168,16 @@ pub const OCRResult = struct {
     loaded_tensors: ?usize,
     image_width: ?usize,
     image_height: ?usize,
+    backend: ?[]u8,
+    method: ?[]u8,
+    requested_output: ?[]u8,
+    content: ?[]u8,
+    markdown: ?[]u8,
+    html: ?[]u8,
+    json_output: ?[]u8,
+    page_count: ?usize,
+    total_token_count: ?usize,
+    error_message: ?[]u8,
 
     pub fn deinit(self: *OCRResult, allocator: std.mem.Allocator) void {
         allocator.free(self.adapter_id);
@@ -176,6 +186,14 @@ pub const OCRResult = struct {
         allocator.free(self.model_family);
         allocator.free(self.model_path);
         if (self.input_path) |value| allocator.free(value);
+        if (self.backend) |value| allocator.free(value);
+        if (self.method) |value| allocator.free(value);
+        if (self.requested_output) |value| allocator.free(value);
+        if (self.content) |value| allocator.free(value);
+        if (self.markdown) |value| allocator.free(value);
+        if (self.html) |value| allocator.free(value);
+        if (self.json_output) |value| allocator.free(value);
+        if (self.error_message) |value| allocator.free(value);
         self.* = undefined;
     }
 };
@@ -202,6 +220,16 @@ const ParsedOCRReceipt = struct {
     loaded_tensors: ?usize,
     image_width: ?usize,
     image_height: ?usize,
+    backend: ?[]const u8 = null,
+    method: ?[]const u8 = null,
+    requested_output: ?[]const u8 = null,
+    content: ?[]const u8 = null,
+    markdown: ?[]const u8 = null,
+    html: ?[]const u8 = null,
+    json_output: ?[]const u8 = null,
+    page_count: ?usize = null,
+    total_token_count: ?usize = null,
+    error_message: ?[]const u8 = null,
 };
 
 pub const TextModel = struct {
@@ -674,6 +702,16 @@ fn copyOCRResult(allocator: std.mem.Allocator, result: runtime_types.ExecutionRe
         .loaded_tensors = parsed.value.loaded_tensors,
         .image_width = parsed.value.image_width,
         .image_height = parsed.value.image_height,
+        .backend = try dupeOptionalString(allocator, parsed.value.backend),
+        .method = try dupeOptionalString(allocator, parsed.value.method),
+        .requested_output = try dupeOptionalString(allocator, parsed.value.requested_output),
+        .content = try dupeOptionalString(allocator, parsed.value.content),
+        .markdown = try dupeOptionalString(allocator, parsed.value.markdown),
+        .html = try dupeOptionalString(allocator, parsed.value.html),
+        .json_output = try dupeOptionalString(allocator, parsed.value.json_output),
+        .page_count = parsed.value.page_count,
+        .total_token_count = parsed.value.total_token_count,
+        .error_message = try dupeOptionalString(allocator, parsed.value.error_message),
     };
 }
 

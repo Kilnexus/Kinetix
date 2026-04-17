@@ -1,5 +1,5 @@
 const std = @import("std");
-const chandra_shared = @import("../providers/chandra_shared.zig");
+const chandra_native = @import("../providers/chandra_native.zig");
 const task = @import("../../core/task.zig");
 const handle_mod = @import("../model/handle.zig");
 const ocr_shared = @import("../providers/ocr_shared.zig");
@@ -152,20 +152,21 @@ fn executeChandraOCR(
     request: types.RuntimeRequest,
 ) !types.RuntimeResult {
     switch (request.input) {
-        .none, .image_path, .document_path => {},
+        .image_path, .document_path => {},
         else => return error.InvalidInputPayload,
     }
-    if (request.execution != .sync) return error.UnsupportedExecutionMode;
-
-    const output = try chandra_shared.buildOutputJson(allocator, .{
+    const input_path = request.input.asString() orelse return error.MissingInputPayload;
+    const context = chandra_native.Context{
         .operation = request.operation,
-        .model_family = handle.normalized.descriptor.family,
         .model_path = handle.normalized.artifacts.model_dir,
-        .input_path = request.input.asString(),
-    });
+        .input_path = input_path,
+        .execution = request.execution,
+        .max_output_tokens = request.generation.max_tokens,
+    };
+    const output = try chandra_native.execute(allocator, context);
     return .{
         .origin = .shared_adapter,
-        .note = .validated_only,
+        .note = .ocr_chandra_native,
         .output = .{ .json = output },
     };
 }

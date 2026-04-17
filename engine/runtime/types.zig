@@ -63,6 +63,7 @@ pub const ExecutionNote = enum {
     vision_shared_detect,
     ocr_model_ready,
     ocr_shared_infer,
+    ocr_chandra_native,
 };
 
 pub const ExecutionResult = struct {

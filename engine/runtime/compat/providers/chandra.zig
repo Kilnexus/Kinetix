@@ -18,7 +18,6 @@ pub fn tryNormalize(
     catalog: *const catalog_mod.ArtifactCatalog,
     preferred_weights: types.WeightScheme,
 ) !?normalized.NormalizedModel {
-    _ = preferred_weights;
     if (!catalog.has(.config)) return null;
 
     const basename = std.fs.path.basename(catalog.modelDir());
@@ -27,7 +26,11 @@ pub fn tryNormalize(
     const config_path = catalog.find(.config).?.absolute_path;
     const model_type = try provider_common.readModelTypeAlloc(allocator, config_path);
     defer if (model_type) |owned| allocator.free(owned);
-    if (model_type == null or !std.mem.eql(u8, model_type.?, "qwen3_vl")) return null;
+    if (model_type == null or !std.mem.eql(u8, model_type.?, "qwen3_5")) return null;
+
+    if (!catalog.has(.tokenizer_json)) return null;
+    if (catalog.resolveAutoScheme() == .auto and !catalog.has(.safetensors)) return null;
+    const selection = try catalog.resolveWeights(preferred_weights);
 
     const descriptor = normalized.RuntimeModelDescriptor{
         .allocator = allocator,
@@ -43,7 +46,9 @@ pub fn tryNormalize(
         owned.deinit();
     }
 
-    const artifacts = try normalized.RuntimeArtifactSet.initFromCatalog(allocator, catalog, .{});
+    const artifacts = try normalized.RuntimeArtifactSet.initFromCatalog(allocator, catalog, .{
+        .selected_weights_path = selection.path,
+    });
     errdefer {
         var owned = artifacts;
         owned.deinit();
@@ -52,7 +57,7 @@ pub fn tryNormalize(
     const compat = try report_mod.CompatibilityReport.init(
         allocator,
         .degraded,
-        &.{ .external_runtime_required, .document_input_partial },
+        &.{.external_runtime_required},
         &.{},
     );
     errdefer {
@@ -68,7 +73,7 @@ pub fn tryNormalize(
             .supports_async = false,
             .supports_stream = false,
             .supports_batch = false,
-            .supports_native_exec = false,
+            .supports_native_exec = true,
             .supported_operations = &operations,
             .accepted_inputs = &accepted_inputs,
         },

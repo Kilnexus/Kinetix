@@ -97,12 +97,7 @@ fn addLegacyImports(
         .root_source_file = b.path("../Pixio/src/Pixio.zig"),
         .target = target,
         .optimize = optimize,
-        .link_libc = if (target.result.os.tag == .windows) true else null,
     });
-    if (target.result.os.tag == .windows) {
-        pixio.linkSystemLibrary("ole32", .{});
-        pixio.linkSystemLibrary("windowscodecs", .{});
-    }
 
     const graph = b.createModule(.{
         .root_source_file = b.path("engine/artifacts/vision_graph.zig"),

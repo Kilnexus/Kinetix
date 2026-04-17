@@ -325,7 +325,7 @@ test "runtime session can batch swiftocr requests through the unified executor" 
     try std.testing.expectEqualStrings("ocr_shared_infer", results.items[1].note);
 }
 
-test "runtime session can normalize and validate chandra document requests" {
+test "runtime session reports native chandra readiness without external bridge" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -333,8 +333,59 @@ test "runtime session can normalize and validate chandra document requests" {
     var model_dir = try tmp.dir.openDir("chandra-ocr-2", .{});
     defer model_dir.close();
 
-    try writeTmpFile(model_dir, "config.json", "{\"model_type\":\"qwen3_vl\"}");
+    try writeTmpFile(model_dir, "config.json",
+        \\{
+        \\  "model_type": "qwen3_5",
+        \\  "image_token_id": 248056,
+        \\  "vision_start_token_id": 248053,
+        \\  "vision_end_token_id": 248054,
+        \\  "text_config": {
+        \\    "model_type": "qwen3_5_text",
+        \\    "hidden_size": 2560,
+        \\    "intermediate_size": 9216,
+        \\    "num_hidden_layers": 32,
+        \\    "num_attention_heads": 16,
+        \\    "num_key_value_heads": 4,
+        \\    "head_dim": 256,
+        \\    "vocab_size": 248320,
+        \\    "max_position_embeddings": 262144
+        \\  },
+        \\  "vision_config": {
+        \\    "model_type": "qwen3_5",
+        \\    "depth": 24,
+        \\    "hidden_size": 1024,
+        \\    "intermediate_size": 4096,
+        \\    "num_heads": 16,
+        \\    "out_hidden_size": 2560,
+        \\    "patch_size": 16,
+        \\    "spatial_merge_size": 2,
+        \\    "temporal_patch_size": 2,
+        \\    "in_channels": 3
+        \\  }
+        \\}
+    );
     try writeTmpFile(model_dir, "tokenizer.json", "{}");
+    try writeTmpFile(model_dir, "preprocessor_config.json",
+        \\{
+        \\  "merge_size": 2,
+        \\  "patch_size": 16,
+        \\  "temporal_patch_size": 2,
+        \\  "size": {
+        \\    "longest_edge": 16777216,
+        \\    "shortest_edge": 65536
+        \\  }
+        \\}
+    );
+    try writeTmpFile(model_dir, "model.safetensors.index.json",
+        \\{
+        \\  "weight_map": {
+        \\    "model.embed_tokens.weight": "model-00001.safetensors",
+        \\    "visual.patch_embed.proj.weight": "model-00001.safetensors",
+        \\    "visual.merger.mlp.0.weight": "model-00001.safetensors",
+        \\    "lm_head.weight": "model-00001.safetensors"
+        \\  }
+        \\}
+    );
     try writeTmpFile(tmp.dir, "demo.pdf", "%PDF-1.7");
 
     const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, "chandra-ocr-2");
@@ -357,9 +408,15 @@ test "runtime session can normalize and validate chandra document requests" {
     var result = try session.execute(&handle, &plan);
     defer result.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(types.ProviderKey.chandra_ocr, handle.normalized.provider_key);
-    try std.testing.expectEqual(types.ExecutionOrigin.shared_adapter, result.origin);
-    try std.testing.expectEqual(types.ExecutionNote.validated_only, result.note);
+    try std.testing.expectEqual(types.ExecutionNote.ocr_chandra_native, result.note);
+    const payload = switch (result.output) {
+        .json => |value| value,
+        else => return error.ExpectedJsonOutput,
+    };
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"status\":\"ocr_native_backend_incomplete\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"backend\":\"kinetix_native\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"has_visual_encoder\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"has_multimodal_projector\":true") != null);
 }
 
 fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {

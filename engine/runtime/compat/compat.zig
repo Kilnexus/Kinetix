@@ -102,8 +102,9 @@ test "compat normalizes chandra huggingface directories into a runtime model" {
     var model_dir = try tmp.dir.openDir("chandra-ocr-2", .{});
     defer model_dir.close();
 
-    try writeTmpFile(model_dir, "config.json", "{\"model_type\":\"qwen3_vl\"}");
+    try writeTmpFile(model_dir, "config.json", "{\"model_type\":\"qwen3_5\"}");
     try writeTmpFile(model_dir, "tokenizer.json", "{}");
+    try writeTmpFile(model_dir, "model.safetensors", "weights");
 
     const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, "chandra-ocr-2");
     defer std.testing.allocator.free(root_path);

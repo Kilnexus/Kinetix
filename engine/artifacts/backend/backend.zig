@@ -29,6 +29,7 @@ pub const ArtifactRole = enum {
     weights_bin,
     ocr_model,
     safetensors,
+    safetensors_index,
     q8_weights,
     q6_weights,
     q4_weights,
@@ -149,6 +150,7 @@ const known_artifacts = [_]ArtifactSpec{
     .{ .role = .graph_json, .relative_path = "graph.json" },
     .{ .role = .weights_bin, .relative_path = "weights.bin" },
     .{ .role = .safetensors, .relative_path = "model.safetensors" },
+    .{ .role = .safetensors_index, .relative_path = "model.safetensors.index.json" },
     .{ .role = .q8_weights, .relative_path = "model.q8.zinfer" },
     .{ .role = .q6_weights, .relative_path = "model.q6.zinfer" },
     .{ .role = .q4_weights, .relative_path = "model.q4.zinfer" },
@@ -191,21 +193,37 @@ fn discoverExtensionArtifacts(
     var iter = dir.iterate();
     while (try iter.next()) |entry| {
         if (entry.kind != .file) continue;
-        if (!std.mem.endsWith(u8, entry.name, ".swm")) continue;
-        if (containsRole(found.items, .ocr_model)) continue;
 
-        const relative_path = try allocator.dupe(u8, entry.name);
-        errdefer allocator.free(relative_path);
-        const absolute_path = try std.fs.path.join(allocator, &.{ model_dir, entry.name });
-        errdefer allocator.free(absolute_path);
+        if (std.mem.endsWith(u8, entry.name, ".swm") and !containsRole(found.items, .ocr_model)) {
+            try appendExtensionArtifact(allocator, model_dir, found, .ocr_model, entry.name);
+            continue;
+        }
 
-        try found.append(allocator, .{
-            .role = .ocr_model,
-            .relative_path = relative_path,
-            .absolute_path = absolute_path,
-            .owns_relative_path = true,
-        });
+        if (std.mem.endsWith(u8, entry.name, ".safetensors") and !containsRelativePath(found.items, entry.name)) {
+            try appendExtensionArtifact(allocator, model_dir, found, .safetensors, entry.name);
+            continue;
+        }
     }
+}
+
+fn appendExtensionArtifact(
+    allocator: std.mem.Allocator,
+    model_dir: []const u8,
+    found: *std.ArrayListUnmanaged(ArtifactLocation),
+    role: ArtifactRole,
+    entry_name: []const u8,
+) !void {
+    const relative_path = try allocator.dupe(u8, entry_name);
+    errdefer allocator.free(relative_path);
+    const absolute_path = try std.fs.path.join(allocator, &.{ model_dir, entry_name });
+    errdefer allocator.free(absolute_path);
+
+    try found.append(allocator, .{
+        .role = role,
+        .relative_path = relative_path,
+        .absolute_path = absolute_path,
+        .owns_relative_path = true,
+    });
 }
 
 fn containsRole(items: []const ArtifactLocation, role: ArtifactRole) bool {
@@ -213,4 +231,36 @@ fn containsRole(items: []const ArtifactLocation, role: ArtifactRole) bool {
         if (item.role == role) return true;
     }
     return false;
+}
+
+fn containsRelativePath(items: []const ArtifactLocation, relative_path: []const u8) bool {
+    for (items) |item| {
+        if (std.mem.eql(u8, item.relative_path, relative_path)) return true;
+    }
+    return false;
+}
+
+test "model catalog discovers sharded safetensors artifacts" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "model-00001-of-00002.safetensors", "a");
+    try writeTmpFile(tmp.dir, "model-00002-of-00002.safetensors", "b");
+    try writeTmpFile(tmp.dir, "model.safetensors.index.json", "{}");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var catalog = try ModelCatalog.discover(std.testing.allocator, root_path);
+    defer catalog.deinit();
+
+    try std.testing.expect(catalog.has(.safetensors));
+    try std.testing.expect(catalog.has(.safetensors_index));
+    try std.testing.expectEqual(WeightScheme.bf16, catalog.resolveAutoScheme());
+}
+
+fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {
+    var file = try dir.createFile(relative_path, .{});
+    defer file.close();
+    try file.writeAll(contents);
 }
