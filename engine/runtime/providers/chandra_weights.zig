@@ -54,6 +54,13 @@ pub const TensorManifest = struct {
     pub fn len(self: TensorManifest) usize {
         return self.tensors.len;
     }
+
+    pub fn findPatchEmbeddingWeight(self: TensorManifest) ?*const TensorRecord {
+        for (self.tensors) |*tensor| {
+            if (isPatchEmbeddingWeight(tensor.name)) return tensor;
+        }
+        return null;
+    }
 };
 
 pub fn loadManifest(allocator: std.mem.Allocator, model_path: []const u8) !TensorManifest {
@@ -152,6 +159,12 @@ pub fn classifyTensor(name: []const u8) TensorGroup {
     return .other;
 }
 
+pub fn isPatchEmbeddingWeight(name: []const u8) bool {
+    return (std.mem.indexOf(u8, name, "patch_embed") != null or
+        std.mem.indexOf(u8, name, "patch_embedding") != null) and
+        std.mem.endsWith(u8, name, ".weight");
+}
+
 fn isVisionTensor(name: []const u8) bool {
     return startsOrContains(name, "visual.") or
         startsOrContains(name, "vision_model.") or
@@ -248,6 +261,7 @@ test "chandra weight manifest parses safetensors index weight map" {
     try std.testing.expectEqual(@as(usize, 1), manifest.counts.vision);
     try std.testing.expectEqual(@as(usize, 1), manifest.counts.projector);
     try std.testing.expectEqual(@as(usize, 1), manifest.counts.output);
+    try std.testing.expect(manifest.findPatchEmbeddingWeight() != null);
 }
 
 fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {

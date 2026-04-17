@@ -49,9 +49,15 @@ pub const PatchGrid = struct {
     resized_height: usize,
     patch_width: usize,
     patch_height: usize,
+    patch_token_count: usize,
     merged_width: usize,
     merged_height: usize,
     token_count: usize,
+
+    pub fn patchSize(self: PatchGrid) usize {
+        if (self.patch_width == 0) return 0;
+        return self.resized_width / self.patch_width;
+    }
 };
 
 pub const PreparedImageInput = struct {
@@ -132,6 +138,7 @@ pub fn planPatchGrid(config: ImageProcessorConfig, width: usize, height: usize) 
         .resized_height = resized_height,
         .patch_width = patch_width,
         .patch_height = patch_height,
+        .patch_token_count = patch_width * patch_height,
         .merged_width = merged_width,
         .merged_height = merged_height,
         .token_count = merged_width * merged_height,
@@ -281,6 +288,7 @@ test "chandra preprocessor config parser accepts official qwen image processor s
     try std.testing.expectEqual(@as(usize, 1024), grid.resized_width);
     try std.testing.expectEqual(@as(usize, 768), grid.resized_height);
     try std.testing.expectEqual(@as(usize, 64), grid.patch_width);
+    try std.testing.expectEqual(@as(usize, 64 * 48), grid.patch_token_count);
     try std.testing.expectEqual(@as(usize, 24 * 32), grid.token_count);
 }
 
@@ -332,6 +340,7 @@ test "chandra image preprocessing produces normalized chw tensor and patch grid"
 
     try std.testing.expectEqual(@as(usize, 32), prepared.grid.resized_width);
     try std.testing.expectEqual(@as(usize, 32), prepared.grid.resized_height);
+    try std.testing.expectEqual(@as(usize, 4), prepared.grid.patch_token_count);
     try std.testing.expectEqual(@as(usize, 1), prepared.grid.token_count);
     try std.testing.expectEqual(@as(usize, 3), prepared.tensor.channels);
     try std.testing.expectEqual(@as(usize, 32), prepared.tensor.width);

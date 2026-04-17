@@ -1,6 +1,9 @@
 const std = @import("std");
+const imaging = @import("Pixio");
 const task = @import("../../core/task.zig");
 const preprocess = @import("chandra_preprocess.zig");
+const store = @import("chandra_store.zig");
+const vision = @import("chandra_vision.zig");
 const weights = @import("chandra_weights.zig");
 
 pub const TextConfig = struct {
@@ -70,6 +73,7 @@ pub const Readiness = struct {
     has_weights: bool,
     has_supported_config: bool,
     has_visual_encoder: bool,
+    has_patch_embedding_weight: bool,
     has_multimodal_projector: bool,
     has_document_preprocessor: bool,
     has_image_processor_config: bool,
@@ -84,7 +88,10 @@ const PreprocessSummary = struct {
     image_height: usize,
     resized_width: usize,
     resized_height: usize,
+    patch_token_count: usize,
     visual_token_count: usize,
+    patch_embedding_dim: ?usize = null,
+    patch_embedding_executed: bool = false,
 };
 
 pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
@@ -99,12 +106,34 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
         var prepared = try preprocess.loadImageInput(allocator, context.input_path, image_processor.value);
         defer prepared.deinit();
 
+        var patch_embedding_dim: ?usize = null;
+        var patch_embedding_executed = false;
+        if (readiness.has_patch_embedding_weight) {
+            var tensor_store = store.ChandraStore.open(allocator, context.model_path) catch null;
+            if (tensor_store) |*opened| {
+                defer opened.deinit();
+                var patch_weights = opened.loadPatchEmbeddingWeights(allocator) catch null;
+                if (patch_weights) |*loaded| {
+                    defer loaded.deinit();
+                    var embeddings = vision.patchEmbedImage(allocator, &prepared, loaded.weights) catch null;
+                    if (embeddings) |*value| {
+                        patch_embedding_dim = value.embedding_dim;
+                        patch_embedding_executed = true;
+                        value.deinit();
+                    }
+                }
+            }
+        }
+
         summary = .{
             .image_width = prepared.grid.input_width,
             .image_height = prepared.grid.input_height,
             .resized_width = prepared.grid.resized_width,
             .resized_height = prepared.grid.resized_height,
+            .patch_token_count = prepared.grid.patch_token_count,
             .visual_token_count = prepared.grid.token_count,
+            .patch_embedding_dim = patch_embedding_dim,
+            .patch_embedding_executed = patch_embedding_executed,
         };
     }
 
@@ -128,10 +157,12 @@ pub fn inspect(model_path: []const u8) Readiness {
 
     var weight_counts: weights.GroupCounts = .{};
     var has_weights = false;
+    var has_patch_embedding_weight = false;
     var manifest = weights.loadManifest(allocator, model_path) catch null;
     if (manifest) |*loaded| {
         has_weights = loaded.len() != 0;
         weight_counts = loaded.counts;
+        has_patch_embedding_weight = loaded.findPatchEmbeddingWeight() != null;
         loaded.deinit();
     }
 
@@ -148,6 +179,7 @@ pub fn inspect(model_path: []const u8) Readiness {
         .has_weights = has_weights,
         .has_supported_config = supported_config,
         .has_visual_encoder = weight_counts.vision != 0,
+        .has_patch_embedding_weight = has_patch_embedding_weight,
         .has_multimodal_projector = weight_counts.projector != 0,
         .has_document_preprocessor = has_image_processor_config,
         .has_image_processor_config = has_image_processor_config,
@@ -186,6 +218,7 @@ fn buildIncompleteOutputJson(
         has_weights: bool,
         has_supported_config: bool,
         has_visual_encoder: bool,
+        has_patch_embedding_weight: bool,
         has_multimodal_projector: bool,
         has_document_preprocessor: bool,
         has_image_processor_config: bool,
@@ -216,7 +249,10 @@ fn buildIncompleteOutputJson(
         image_height: ?usize,
         resized_width: ?usize,
         resized_height: ?usize,
+        patch_token_count: ?usize,
         visual_token_count: ?usize,
+        patch_embedding_dim: ?usize,
+        patch_embedding_executed: bool,
         error_message: []const u8,
         readiness: ReadinessReceipt,
     };
@@ -230,7 +266,10 @@ fn buildIncompleteOutputJson(
         .backend = "kinetix_native",
         .method = "native",
         .requested_output = requestedOutput(context.operation),
-        .native_stage = if (preprocess_summary != null) "image_preprocessing" else "model_loading",
+        .native_stage = if (preprocess_summary) |summary|
+            if (summary.patch_embedding_executed) "patch_embedding" else "image_preprocessing"
+        else
+            "model_loading",
         .content = null,
         .markdown = null,
         .html = null,
@@ -242,7 +281,10 @@ fn buildIncompleteOutputJson(
         .image_height = if (preprocess_summary) |summary| summary.image_height else null,
         .resized_width = if (preprocess_summary) |summary| summary.resized_width else null,
         .resized_height = if (preprocess_summary) |summary| summary.resized_height else null,
+        .patch_token_count = if (preprocess_summary) |summary| summary.patch_token_count else null,
         .visual_token_count = if (preprocess_summary) |summary| summary.visual_token_count else null,
+        .patch_embedding_dim = if (preprocess_summary) |summary| summary.patch_embedding_dim else null,
+        .patch_embedding_executed = if (preprocess_summary) |summary| summary.patch_embedding_executed else false,
         .error_message = "Chandra native inference is not complete yet; model config, weight manifest, and preprocessing readiness are available.",
         .readiness = .{
             .has_config = readiness.has_config,
@@ -250,6 +292,7 @@ fn buildIncompleteOutputJson(
             .has_weights = readiness.has_weights,
             .has_supported_config = readiness.has_supported_config,
             .has_visual_encoder = readiness.has_visual_encoder,
+            .has_patch_embedding_weight = readiness.has_patch_embedding_weight,
             .has_multimodal_projector = readiness.has_multimodal_projector,
             .has_document_preprocessor = readiness.has_document_preprocessor,
             .has_image_processor_config = readiness.has_image_processor_config,
@@ -415,6 +458,7 @@ test "native chandra inspect reports tensor manifest readiness" {
     try std.testing.expect(readiness.has_supported_config);
     try std.testing.expect(readiness.has_weights);
     try std.testing.expect(readiness.has_visual_encoder);
+    try std.testing.expect(readiness.has_patch_embedding_weight);
     try std.testing.expect(readiness.has_multimodal_projector);
     try std.testing.expect(readiness.has_image_processor_config);
     try std.testing.expect(readiness.has_document_preprocessor);
@@ -424,8 +468,124 @@ test "native chandra inspect reports tensor manifest readiness" {
     try std.testing.expectEqual(@as(usize, 1), readiness.output_tensor_count);
 }
 
+test "native chandra execute preprocesses image and runs patch embedding stage" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "config.json",
+        \\{
+        \\  "model_type": "qwen3_5",
+        \\  "image_token_id": 248056,
+        \\  "vision_start_token_id": 248053,
+        \\  "vision_end_token_id": 248054,
+        \\  "text_config": {
+        \\    "model_type": "qwen3_5_text",
+        \\    "hidden_size": 2,
+        \\    "intermediate_size": 8,
+        \\    "num_hidden_layers": 1,
+        \\    "num_attention_heads": 1,
+        \\    "num_key_value_heads": 1,
+        \\    "head_dim": 2,
+        \\    "vocab_size": 32,
+        \\    "max_position_embeddings": 1024
+        \\  },
+        \\  "vision_config": {
+        \\    "model_type": "qwen3_5",
+        \\    "depth": 1,
+        \\    "hidden_size": 2,
+        \\    "intermediate_size": 8,
+        \\    "num_heads": 1,
+        \\    "out_hidden_size": 2,
+        \\    "patch_size": 2,
+        \\    "spatial_merge_size": 1,
+        \\    "temporal_patch_size": 1,
+        \\    "in_channels": 3
+        \\  }
+        \\}
+    );
+    try writeTmpFile(tmp.dir, "tokenizer.json", "{}");
+    try writeTmpFile(tmp.dir, "preprocessor_config.json",
+        \\{
+        \\  "do_normalize": false,
+        \\  "do_rescale": false,
+        \\  "do_resize": false,
+        \\  "merge_size": 1,
+        \\  "patch_size": 2,
+        \\  "temporal_patch_size": 1,
+        \\  "size": {
+        \\    "longest_edge": 1024,
+        \\    "shortest_edge": 1
+        \\  }
+        \\}
+    );
+    try writeSyntheticPatchEmbeddingSafetensors(tmp.dir, "model.safetensors");
+
+    var image = try imaging.ImageU8.init(std.testing.allocator, 4, 2, 3);
+    defer image.deinit();
+    for (0..image.width * image.height) |pixel_index| {
+        const value: u8 = @intCast(pixel_index + 1);
+        image.data[pixel_index * 3] = value;
+        image.data[pixel_index * 3 + 1] = 0;
+        image.data[pixel_index * 3 + 2] = 0;
+    }
+    const encoded = try imaging.encodePngAlloc(std.testing.allocator, &image);
+    defer std.testing.allocator.free(encoded);
+    try tmp.dir.writeFile(.{ .sub_path = "input.png", .data = encoded });
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+    const image_path = try tmp.dir.realpathAlloc(std.testing.allocator, "input.png");
+    defer std.testing.allocator.free(image_path);
+
+    const payload = try execute(std.testing.allocator, .{
+        .operation = "render-markdown",
+        .model_path = root_path,
+        .input_path = image_path,
+        .execution = .sync,
+    });
+    defer std.testing.allocator.free(payload);
+
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"native_stage\":\"patch_embedding\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"patch_embedding_executed\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"patch_embedding_dim\":2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"patch_token_count\":2") != null);
+}
+
 fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {
     var file = try dir.createFile(relative_path, .{});
     defer file.close();
     try file.writeAll(contents);
+}
+
+fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []const u8) !void {
+    const header =
+        \\{"visual.patch_embed.proj.weight":{"dtype":"F32","shape":[2,3,1,2,2],"data_offsets":[0,96]},"visual.patch_embed.proj.bias":{"dtype":"F32","shape":[2],"data_offsets":[96,104]},"visual.merger.mlp.0.weight":{"dtype":"F32","shape":[2,2],"data_offsets":[104,120]},"model.embed_tokens.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[120,128]},"lm_head.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[128,136]}}
+    ;
+
+    const file = try dir.createFile(relative_path, .{});
+    defer file.close();
+
+    var length_prefix: [8]u8 = undefined;
+    std.mem.writeInt(u64, &length_prefix, header.len, .little);
+    try file.writeAll(&length_prefix);
+    try file.writeAll(header);
+
+    var payload: [136]u8 = undefined;
+    @memset(&payload, 0);
+
+    const patch_weights = [_]f32{
+        1, 1, 1, 1,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        2, 2, 2, 2,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+    };
+    for (patch_weights, 0..) |value, index| {
+        std.mem.writeInt(u32, payload[index * 4 .. index * 4 + 4][0..4], @bitCast(value), .little);
+    }
+    std.mem.writeInt(u32, payload[96..100], @bitCast(@as(f32, 0.0)), .little);
+    std.mem.writeInt(u32, payload[100..104], @bitCast(@as(f32, 1.0)), .little);
+
+    try file.writeAll(&payload);
 }
