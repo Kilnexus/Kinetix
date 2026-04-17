@@ -1,6 +1,7 @@
 const std = @import("std");
 const imaging = @import("Pixio");
 const preprocess = @import("chandra_preprocess.zig");
+const attention = @import("../text/attention/attention.zig");
 const cpu = @import("../text/core/cpu.zig");
 
 pub const PatchEmbeddingWeights = struct {
@@ -112,6 +113,28 @@ pub const LayerNormWeights = struct {
     weight: []const f32,
     bias: []const f32,
     dim: usize,
+};
+
+pub const VisualAttentionWeights = struct {
+    norm: LayerNormWeights,
+    qkv: LinearWeights,
+    proj: LinearWeights,
+    num_heads: usize,
+};
+
+pub const OwnedVisualAttentionWeights = struct {
+    allocator: std.mem.Allocator,
+    weights: VisualAttentionWeights,
+
+    pub fn deinit(self: *OwnedVisualAttentionWeights) void {
+        self.allocator.free(self.weights.norm.weight);
+        self.allocator.free(self.weights.norm.bias);
+        self.allocator.free(self.weights.qkv.data);
+        if (self.weights.qkv.bias) |bias| self.allocator.free(bias);
+        self.allocator.free(self.weights.proj.data);
+        if (self.weights.proj.bias) |bias| self.allocator.free(bias);
+        self.* = undefined;
+    }
 };
 
 pub const LinearMlpWeights = struct {
@@ -297,6 +320,73 @@ pub fn applyVisionBlockMlp(
     return output;
 }
 
+pub fn applyVisionBlockAttention(
+    allocator: std.mem.Allocator,
+    input: PatchEmbeddings,
+    weights: VisualAttentionWeights,
+    eps: f32,
+) !PatchEmbeddings {
+    try validateVisionBlockAttentionInputs(input, weights);
+
+    const token_dim = input.embedding_dim;
+    const qkv_dim = weights.qkv.out_features;
+    const head_dim = token_dim / weights.num_heads;
+
+    const normed = try allocator.alloc(f32, token_dim);
+    defer allocator.free(normed);
+    var qkv_buffer = try allocator.alloc(f32, input.token_count * qkv_dim);
+    defer allocator.free(qkv_buffer);
+    const scores = try allocator.alloc(f32, input.token_count);
+    defer allocator.free(scores);
+    const attended = try allocator.alloc(f32, token_dim);
+    defer allocator.free(attended);
+
+    var output = PatchEmbeddings{
+        .allocator = allocator,
+        .data = try allocator.alloc(f32, input.data.len),
+        .token_count = input.token_count,
+        .embedding_dim = input.embedding_dim,
+        .patch_width = input.patch_width,
+        .patch_height = input.patch_height,
+    };
+    errdefer output.deinit();
+
+    for (0..input.token_count) |token_index| {
+        const src = input.data[token_index * token_dim ..][0..token_dim];
+        const dst = qkv_buffer[token_index * qkv_dim ..][0..qkv_dim];
+        try cpu.layerNorm(normed, src, weights.norm.weight, weights.norm.bias, eps);
+        applyLinear(dst, normed, weights.qkv);
+    }
+
+    for (0..input.token_count) |query_index| {
+        @memset(attended, 0.0);
+
+        for (0..weights.num_heads) |head_index| {
+            const q_slice = qSlice(qkv_buffer, query_index, token_dim, head_index, head_dim);
+            for (0..input.token_count) |key_index| {
+                const k_slice = kSlice(qkv_buffer, key_index, token_dim, head_index, head_dim);
+                scores[key_index] = (try cpu.dot(q_slice, k_slice)) / @sqrt(@as(f32, @floatFromInt(head_dim)));
+            }
+            try attention.softmaxInPlace(scores);
+
+            const out_head = attended[head_index * head_dim ..][0..head_dim];
+            for (0..input.token_count) |value_index| {
+                const v_slice = vSlice(qkv_buffer, value_index, token_dim, head_index, head_dim);
+                try cpu.axpyInPlace(out_head, scores[value_index], v_slice);
+            }
+        }
+
+        const projected = output.data[query_index * token_dim ..][0..token_dim];
+        applyLinear(projected, attended, weights.proj);
+        const residual = input.data[query_index * token_dim ..][0..token_dim];
+        for (projected, residual) |*out, value| {
+            out.* += value;
+        }
+    }
+
+    return output;
+}
+
 fn validatePatchEmbeddingInputs(input: *const preprocess.PreparedImageInput, weights: PatchEmbeddingWeights) !void {
     if (weights.out_channels == 0 or weights.in_channels == 0) return error.InvalidPatchEmbeddingShape;
     if (weights.patch_size == 0 or weights.temporal_patch_size == 0) return error.InvalidPatchEmbeddingShape;
@@ -339,6 +429,23 @@ fn validateVisionBlockMlpInputs(input: PatchEmbeddings, weights: LinearMlpWeight
     }
 }
 
+fn validateVisionBlockAttentionInputs(input: PatchEmbeddings, weights: VisualAttentionWeights) !void {
+    if (weights.norm.dim != input.embedding_dim) return error.ShapeMismatch;
+    if (weights.norm.weight.len != input.embedding_dim or weights.norm.bias.len != input.embedding_dim) return error.ShapeMismatch;
+    if (weights.num_heads == 0 or input.embedding_dim % weights.num_heads != 0) return error.ShapeMismatch;
+    if (weights.qkv.data.len != weights.qkv.expectedLen()) return error.ShapeMismatch;
+    if (weights.proj.data.len != weights.proj.expectedLen()) return error.ShapeMismatch;
+    if (weights.qkv.in_features != input.embedding_dim) return error.ShapeMismatch;
+    if (weights.qkv.out_features != input.embedding_dim * 3) return error.ShapeMismatch;
+    if (weights.proj.in_features != input.embedding_dim or weights.proj.out_features != input.embedding_dim) return error.ShapeMismatch;
+    if (weights.qkv.bias) |bias| {
+        if (bias.len != weights.qkv.out_features) return error.ShapeMismatch;
+    }
+    if (weights.proj.bias) |bias| {
+        if (bias.len != weights.proj.out_features) return error.ShapeMismatch;
+    }
+}
+
 fn applyLinear(output: []f32, input: []const f32, weights: LinearWeights) void {
     for (0..weights.out_features) |row| {
         var sum = if (weights.bias) |bias| bias[row] else 0.0;
@@ -348,6 +455,21 @@ fn applyLinear(output: []f32, input: []const f32, weights: LinearWeights) void {
         }
         output[row] = sum;
     }
+}
+
+fn qSlice(qkv: []const f32, token_index: usize, dim: usize, head_index: usize, head_dim: usize) []const f32 {
+    const base = token_index * dim * 3 + head_index * head_dim;
+    return qkv[base .. base + head_dim];
+}
+
+fn kSlice(qkv: []const f32, token_index: usize, dim: usize, head_index: usize, head_dim: usize) []const f32 {
+    const base = token_index * dim * 3 + dim + head_index * head_dim;
+    return qkv[base .. base + head_dim];
+}
+
+fn vSlice(qkv: []const f32, token_index: usize, dim: usize, head_index: usize, head_dim: usize) []const f32 {
+    const base = token_index * dim * 3 + dim * 2 + head_index * head_dim;
+    return qkv[base .. base + head_dim];
 }
 
 fn tensorIndex(tensor: imaging.TensorF32CHW, channel: usize, y: usize, x: usize) usize {
@@ -547,4 +669,63 @@ test "chandra vision block mlp applies norm gelu mlp with residual" {
     try std.testing.expectApproxEqAbs(@as(f32, 1.317622), output.at(0, 1), 0.0001);
     try std.testing.expectApproxEqAbs(@as(f32, 2.158811), output.at(1, 0), 0.0001);
     try std.testing.expectApproxEqAbs(@as(f32, 3.317622), output.at(1, 1), 0.0001);
+}
+
+test "chandra vision block attention applies qkv proj attention with residual" {
+    var embeddings = PatchEmbeddings{
+        .allocator = std.testing.allocator,
+        .data = try std.testing.allocator.dupe(f32, &.{
+            1,  -1,
+            -1, 1,
+        }),
+        .token_count = 2,
+        .embedding_dim = 2,
+        .patch_width = 2,
+        .patch_height = 1,
+    };
+    defer embeddings.deinit();
+
+    const norm_weight = [_]f32{ 1, 1 };
+    const norm_bias = [_]f32{ 0, 0 };
+    const qkv = [_]f32{
+        1, 0,
+        0, 1,
+        1, 0,
+        0, 1,
+        1, 0,
+        0, 1,
+    };
+    const qkv_bias = [_]f32{ 0, 0, 0, 0, 0, 0 };
+    const proj = [_]f32{
+        1, 0,
+        0, 1,
+    };
+    const proj_bias = [_]f32{ 0, 0 };
+
+    var output = try applyVisionBlockAttention(std.testing.allocator, embeddings, .{
+        .norm = .{
+            .weight = &norm_weight,
+            .bias = &norm_bias,
+            .dim = 2,
+        },
+        .qkv = .{
+            .data = &qkv,
+            .bias = &qkv_bias,
+            .out_features = 6,
+            .in_features = 2,
+        },
+        .proj = .{
+            .data = &proj,
+            .bias = &proj_bias,
+            .out_features = 2,
+            .in_features = 2,
+        },
+        .num_heads = 1,
+    }, 1e-5);
+    defer output.deinit();
+
+    try std.testing.expectApproxEqAbs(@as(f32, 1.888386), output.at(0, 0), 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, -1.888386), output.at(0, 1), 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, -1.888386), output.at(1, 0), 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.888386), output.at(1, 1), 0.0001);
 }

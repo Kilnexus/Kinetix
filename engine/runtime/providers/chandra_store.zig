@@ -138,6 +138,45 @@ pub const ChandraStore = struct {
         };
     }
 
+    pub fn loadVisionBlockAttentionWeights(
+        self: *const ChandraStore,
+        allocator: std.mem.Allocator,
+        block_index: usize,
+        num_heads: usize,
+    ) !chandra_vision.OwnedVisualAttentionWeights {
+        const norm_weight_name = try std.fmt.allocPrint(allocator, "visual.blocks.{d}.norm1.weight", .{block_index});
+        defer allocator.free(norm_weight_name);
+        const norm_bias_name = try std.fmt.allocPrint(allocator, "visual.blocks.{d}.norm1.bias", .{block_index});
+        defer allocator.free(norm_bias_name);
+        const qkv_name = try std.fmt.allocPrint(allocator, "visual.blocks.{d}.attn.qkv.weight", .{block_index});
+        defer allocator.free(qkv_name);
+        const proj_name = try std.fmt.allocPrint(allocator, "visual.blocks.{d}.attn.proj.weight", .{block_index});
+        defer allocator.free(proj_name);
+
+        const norm_weight = try self.loadVectorTensor(norm_weight_name);
+        errdefer allocator.free(norm_weight);
+        const norm_bias = try self.loadVectorTensor(norm_bias_name);
+        errdefer allocator.free(norm_bias);
+        const qkv = try self.loadLinearWeights(allocator, &.{qkv_name});
+        errdefer qkv.deinit();
+        const proj = try self.loadLinearWeights(allocator, &.{proj_name});
+        errdefer proj.deinit();
+
+        return .{
+            .allocator = allocator,
+            .weights = .{
+                .norm = .{
+                    .weight = norm_weight,
+                    .bias = norm_bias,
+                    .dim = norm_weight.len,
+                },
+                .qkv = qkv.weights,
+                .proj = proj.weights,
+                .num_heads = num_heads,
+            },
+        };
+    }
+
     fn findPatchEmbeddingWeightName(self: *const ChandraStore) ?[]const u8 {
         for (self.files) |file| {
             var it = file.store.parsed.tensors.iterator();
@@ -435,4 +474,63 @@ test "chandra store loads visual block mlp weights from a synthetic safetensors 
     try std.testing.expectEqual(@as(usize, 2), loaded.weights.fc2.out_features);
     try std.testing.expectEqual(@as(f32, 1.0), loaded.weights.norm.weight[0]);
     try std.testing.expectEqual(@as(f32, 1.0), loaded.weights.fc1.data[0]);
+}
+
+test "chandra store loads visual block attention weights from a synthetic safetensors file" {
+    const header =
+        \\{"visual.blocks.0.norm1.weight":{"dtype":"F32","shape":[2],"data_offsets":[0,8]},"visual.blocks.0.norm1.bias":{"dtype":"F32","shape":[2],"data_offsets":[8,16]},"visual.blocks.0.attn.qkv.weight":{"dtype":"F32","shape":[6,2],"data_offsets":[16,64]},"visual.blocks.0.attn.qkv.bias":{"dtype":"F32","shape":[6],"data_offsets":[64,88]},"visual.blocks.0.attn.proj.weight":{"dtype":"F32","shape":[2,2],"data_offsets":[88,104]},"visual.blocks.0.attn.proj.bias":{"dtype":"F32","shape":[2],"data_offsets":[104,112]}}
+    ;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const model_dir_name = "model";
+    try tmp.dir.makeDir(model_dir_name);
+    var model_dir = try tmp.dir.openDir(model_dir_name, .{});
+    defer model_dir.close();
+
+    const file = try model_dir.createFile("model.safetensors", .{});
+    defer file.close();
+
+    var length_prefix: [8]u8 = undefined;
+    std.mem.writeInt(u64, &length_prefix, header.len, .little);
+    try file.writeAll(&length_prefix);
+    try file.writeAll(header);
+
+    var payload: [112]u8 = undefined;
+    const values = [_]f32{
+        1, 1,
+        0, 0,
+        1, 0,
+        0, 1,
+        1, 0,
+        0, 1,
+        1, 0,
+        0, 1,
+        0, 0,
+        0, 0,
+        0, 0,
+        1, 0,
+        0, 1,
+        0, 0,
+    };
+    for (values, 0..) |value, index| {
+        std.mem.writeInt(u32, payload[index * 4 .. index * 4 + 4][0..4], @bitCast(value), .little);
+    }
+    try file.writeAll(&payload);
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, model_dir_name);
+    defer std.testing.allocator.free(root_path);
+
+    var store = try ChandraStore.open(std.testing.allocator, root_path);
+    defer store.deinit();
+
+    var loaded = try store.loadVisionBlockAttentionWeights(std.testing.allocator, 0, 1);
+    defer loaded.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), loaded.weights.norm.dim);
+    try std.testing.expectEqual(@as(usize, 6), loaded.weights.qkv.out_features);
+    try std.testing.expectEqual(@as(usize, 2), loaded.weights.proj.out_features);
+    try std.testing.expectEqual(@as(usize, 1), loaded.weights.num_heads);
+    try std.testing.expectEqual(@as(f32, 1.0), loaded.weights.qkv.data[0]);
 }
