@@ -95,6 +95,49 @@ pub const ChandraStore = struct {
         };
     }
 
+    pub fn loadVisionBlockMlpWeights(
+        self: *const ChandraStore,
+        allocator: std.mem.Allocator,
+        block_index: usize,
+    ) !chandra_vision.OwnedLinearMlpWeights {
+        const norm_weight_name = try std.fmt.allocPrint(allocator, "visual.blocks.{d}.norm2.weight", .{block_index});
+        defer allocator.free(norm_weight_name);
+        const norm_bias_name = try std.fmt.allocPrint(allocator, "visual.blocks.{d}.norm2.bias", .{block_index});
+        defer allocator.free(norm_bias_name);
+
+        const fc1_qwen3 = try std.fmt.allocPrint(allocator, "visual.blocks.{d}.mlp.linear_fc1.weight", .{block_index});
+        defer allocator.free(fc1_qwen3);
+        const fc1_qwen2 = try std.fmt.allocPrint(allocator, "visual.blocks.{d}.mlp.fc1.weight", .{block_index});
+        defer allocator.free(fc1_qwen2);
+        const fc2_qwen3 = try std.fmt.allocPrint(allocator, "visual.blocks.{d}.mlp.linear_fc2.weight", .{block_index});
+        defer allocator.free(fc2_qwen3);
+        const fc2_qwen2 = try std.fmt.allocPrint(allocator, "visual.blocks.{d}.mlp.fc2.weight", .{block_index});
+        defer allocator.free(fc2_qwen2);
+
+        const norm_weight = try self.loadVectorTensor(norm_weight_name);
+        errdefer allocator.free(norm_weight);
+        const norm_bias = try self.loadVectorTensor(norm_bias_name);
+        errdefer allocator.free(norm_bias);
+
+        const fc1 = try self.loadLinearWeights(allocator, &.{ fc1_qwen3, fc1_qwen2 });
+        errdefer fc1.deinit();
+        const fc2 = try self.loadLinearWeights(allocator, &.{ fc2_qwen3, fc2_qwen2 });
+        errdefer fc2.deinit();
+
+        return .{
+            .allocator = allocator,
+            .weights = .{
+                .norm = .{
+                    .weight = norm_weight,
+                    .bias = norm_bias,
+                    .dim = norm_weight.len,
+                },
+                .fc1 = fc1.weights,
+                .fc2 = fc2.weights,
+            },
+        };
+    }
+
     fn findPatchEmbeddingWeightName(self: *const ChandraStore) ?[]const u8 {
         for (self.files) |file| {
             var it = file.store.parsed.tensors.iterator();
@@ -146,6 +189,13 @@ pub const ChandraStore = struct {
                 .in_features = in_features,
             },
         };
+    }
+
+    fn loadVectorTensor(self: *const ChandraStore, name: []const u8) ![]f32 {
+        const file_store = self.findStoreForTensor(name) orelse return error.TensorNotFound;
+        const info = file_store.getTensor(name) orelse return error.TensorNotFound;
+        if (info.rank() != 1) return error.InvalidTensorRank;
+        return try file_store.readElementsAsF32Alloc(name, 0, @intCast(try info.elementCount()));
     }
 
     fn findFirstTensorName(self: *const ChandraStore, candidates: []const []const u8) ?[]const u8 {
@@ -329,4 +379,60 @@ test "chandra store loads visual merger weights from a synthetic safetensors fil
     try std.testing.expectEqual(@as(usize, 2), loaded.weights.fc2.out_features);
     try std.testing.expectEqual(@as(f32, 1.0), loaded.weights.fc1.data[0]);
     try std.testing.expectEqual(@as(f32, -0.5), loaded.weights.fc2.bias.?[1]);
+}
+
+test "chandra store loads visual block mlp weights from a synthetic safetensors file" {
+    const header =
+        \\{"visual.blocks.0.norm2.weight":{"dtype":"F32","shape":[2],"data_offsets":[0,8]},"visual.blocks.0.norm2.bias":{"dtype":"F32","shape":[2],"data_offsets":[8,16]},"visual.blocks.0.mlp.linear_fc1.weight":{"dtype":"F32","shape":[3,2],"data_offsets":[16,40]},"visual.blocks.0.mlp.linear_fc1.bias":{"dtype":"F32","shape":[3],"data_offsets":[40,52]},"visual.blocks.0.mlp.linear_fc2.weight":{"dtype":"F32","shape":[2,3],"data_offsets":[52,76]},"visual.blocks.0.mlp.linear_fc2.bias":{"dtype":"F32","shape":[2],"data_offsets":[76,84]}}
+    ;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const model_dir_name = "model";
+    try tmp.dir.makeDir(model_dir_name);
+    var model_dir = try tmp.dir.openDir(model_dir_name, .{});
+    defer model_dir.close();
+
+    const file = try model_dir.createFile("model.safetensors", .{});
+    defer file.close();
+
+    var length_prefix: [8]u8 = undefined;
+    std.mem.writeInt(u64, &length_prefix, header.len, .little);
+    try file.writeAll(&length_prefix);
+    try file.writeAll(header);
+
+    var payload: [84]u8 = undefined;
+    const values = [_]f32{
+        1, 1,
+        0, 0,
+        1, 0,
+        0, 1,
+        1, 1,
+        0, 0,
+        0, 1,
+        0, 0,
+        0, 1,
+        1, 0,
+        0,
+    };
+    for (values, 0..) |value, index| {
+        std.mem.writeInt(u32, payload[index * 4 .. index * 4 + 4][0..4], @bitCast(value), .little);
+    }
+    try file.writeAll(&payload);
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, model_dir_name);
+    defer std.testing.allocator.free(root_path);
+
+    var store = try ChandraStore.open(std.testing.allocator, root_path);
+    defer store.deinit();
+
+    var loaded = try store.loadVisionBlockMlpWeights(std.testing.allocator, 0);
+    defer loaded.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), loaded.weights.norm.dim);
+    try std.testing.expectEqual(@as(usize, 3), loaded.weights.fc1.out_features);
+    try std.testing.expectEqual(@as(usize, 2), loaded.weights.fc2.out_features);
+    try std.testing.expectEqual(@as(f32, 1.0), loaded.weights.norm.weight[0]);
+    try std.testing.expectEqual(@as(f32, 1.0), loaded.weights.fc1.data[0]);
 }

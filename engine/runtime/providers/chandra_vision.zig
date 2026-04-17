@@ -108,6 +108,33 @@ pub const VisualTokens = struct {
     }
 };
 
+pub const LayerNormWeights = struct {
+    weight: []const f32,
+    bias: []const f32,
+    dim: usize,
+};
+
+pub const LinearMlpWeights = struct {
+    norm: LayerNormWeights,
+    fc1: LinearWeights,
+    fc2: LinearWeights,
+};
+
+pub const OwnedLinearMlpWeights = struct {
+    allocator: std.mem.Allocator,
+    weights: LinearMlpWeights,
+
+    pub fn deinit(self: *OwnedLinearMlpWeights) void {
+        self.allocator.free(self.weights.norm.weight);
+        self.allocator.free(self.weights.norm.bias);
+        self.allocator.free(self.weights.fc1.data);
+        if (self.weights.fc1.bias) |bias| self.allocator.free(bias);
+        self.allocator.free(self.weights.fc2.data);
+        if (self.weights.fc2.bias) |bias| self.allocator.free(bias);
+        self.* = undefined;
+    }
+};
+
 pub fn patchEmbedImage(
     allocator: std.mem.Allocator,
     input: *const preprocess.PreparedImageInput,
@@ -230,6 +257,46 @@ pub fn applyVisualMerger(
     return output;
 }
 
+pub fn applyVisionBlockMlp(
+    allocator: std.mem.Allocator,
+    input: PatchEmbeddings,
+    weights: LinearMlpWeights,
+    eps: f32,
+) !PatchEmbeddings {
+    try validateVisionBlockMlpInputs(input, weights);
+
+    const normed = try allocator.alloc(f32, input.embedding_dim);
+    defer allocator.free(normed);
+    const hidden = try allocator.alloc(f32, weights.fc1.out_features);
+    defer allocator.free(hidden);
+
+    var output = PatchEmbeddings{
+        .allocator = allocator,
+        .data = try allocator.alloc(f32, input.data.len),
+        .token_count = input.token_count,
+        .embedding_dim = input.embedding_dim,
+        .patch_width = input.patch_width,
+        .patch_height = input.patch_height,
+    };
+    errdefer output.deinit();
+
+    for (0..input.token_count) |token_index| {
+        const src = input.data[token_index * input.embedding_dim ..][0..input.embedding_dim];
+        const dst = output.data[token_index * input.embedding_dim ..][0..input.embedding_dim];
+
+        try cpu.layerNorm(normed, src, weights.norm.weight, weights.norm.bias, eps);
+        applyLinear(hidden, normed, weights.fc1);
+        cpu.geluInPlace(hidden);
+        applyLinear(dst, hidden, weights.fc2);
+
+        for (dst, src) |*out, residual| {
+            out.* += residual;
+        }
+    }
+
+    return output;
+}
+
 fn validatePatchEmbeddingInputs(input: *const preprocess.PreparedImageInput, weights: PatchEmbeddingWeights) !void {
     if (weights.out_channels == 0 or weights.in_channels == 0) return error.InvalidPatchEmbeddingShape;
     if (weights.patch_size == 0 or weights.temporal_patch_size == 0) return error.InvalidPatchEmbeddingShape;
@@ -248,6 +315,22 @@ fn validateVisualMergerInputs(grouped: MergedPatchGroups, weights: VisualMergerW
     if (weights.fc1.in_features != grouped.merged_dim) return error.ShapeMismatch;
     if (weights.fc2.in_features != weights.fc1.out_features) return error.ShapeMismatch;
     if (weights.fc1.out_features == 0 or weights.fc2.out_features == 0) return error.ShapeMismatch;
+    if (weights.fc1.bias) |bias| {
+        if (bias.len != weights.fc1.out_features) return error.ShapeMismatch;
+    }
+    if (weights.fc2.bias) |bias| {
+        if (bias.len != weights.fc2.out_features) return error.ShapeMismatch;
+    }
+}
+
+fn validateVisionBlockMlpInputs(input: PatchEmbeddings, weights: LinearMlpWeights) !void {
+    if (weights.norm.dim != input.embedding_dim) return error.ShapeMismatch;
+    if (weights.norm.weight.len != input.embedding_dim or weights.norm.bias.len != input.embedding_dim) return error.ShapeMismatch;
+    if (weights.fc1.data.len != weights.fc1.expectedLen()) return error.ShapeMismatch;
+    if (weights.fc2.data.len != weights.fc2.expectedLen()) return error.ShapeMismatch;
+    if (weights.fc1.in_features != input.embedding_dim) return error.ShapeMismatch;
+    if (weights.fc2.in_features != weights.fc1.out_features) return error.ShapeMismatch;
+    if (weights.fc2.out_features != input.embedding_dim) return error.ShapeMismatch;
     if (weights.fc1.bias) |bias| {
         if (bias.len != weights.fc1.out_features) return error.ShapeMismatch;
     }
@@ -409,4 +492,59 @@ test "chandra visual merger projects grouped patches into visual tokens" {
     try std.testing.expectEqual(@as(usize, 2), tokens.embedding_dim);
     try std.testing.expectApproxEqAbs(@as(f32, 1.341192), tokens.at(0, 0), 0.0001);
     try std.testing.expectApproxEqAbs(@as(f32, 4.295359), tokens.at(0, 1), 0.0001);
+}
+
+test "chandra vision block mlp applies norm gelu mlp with residual" {
+    var embeddings = PatchEmbeddings{
+        .allocator = std.testing.allocator,
+        .data = try std.testing.allocator.dupe(f32, &.{
+            1, 2,
+            3, 4,
+        }),
+        .token_count = 2,
+        .embedding_dim = 2,
+        .patch_width = 2,
+        .patch_height = 1,
+    };
+    defer embeddings.deinit();
+
+    const norm_weight = [_]f32{ 1, 1 };
+    const norm_bias = [_]f32{ 0, 0 };
+    const fc1 = [_]f32{
+        1, 0,
+        0, 1,
+        1, 1,
+    };
+    const fc1_bias = [_]f32{ 0, 0, 0 };
+    const fc2 = [_]f32{
+        1, 0, 0,
+        0, 1, 1,
+    };
+    const fc2_bias = [_]f32{ 0, 0 };
+
+    var output = try applyVisionBlockMlp(std.testing.allocator, embeddings, .{
+        .norm = .{
+            .weight = &norm_weight,
+            .bias = &norm_bias,
+            .dim = 2,
+        },
+        .fc1 = .{
+            .data = &fc1,
+            .bias = &fc1_bias,
+            .out_features = 3,
+            .in_features = 2,
+        },
+        .fc2 = .{
+            .data = &fc2,
+            .bias = &fc2_bias,
+            .out_features = 2,
+            .in_features = 3,
+        },
+    }, 1e-5);
+    defer output.deinit();
+
+    try std.testing.expectApproxEqAbs(@as(f32, 0.158811), output.at(0, 0), 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.317622), output.at(0, 1), 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.158811), output.at(1, 0), 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.317622), output.at(1, 1), 0.0001);
 }

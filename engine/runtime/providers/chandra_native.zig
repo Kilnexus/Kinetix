@@ -92,6 +92,8 @@ const PreprocessSummary = struct {
     visual_token_count: usize,
     patch_embedding_dim: ?usize = null,
     patch_embedding_executed: bool = false,
+    visual_block_dim: ?usize = null,
+    visual_block_mlp_executed: bool = false,
     visual_token_dim: ?usize = null,
     visual_merger_executed: bool = false,
 };
@@ -110,6 +112,8 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
 
         var patch_embedding_dim: ?usize = null;
         var patch_embedding_executed = false;
+        var visual_block_dim: ?usize = null;
+        var visual_block_mlp_executed = false;
         var visual_token_dim: ?usize = null;
         var visual_merger_executed = false;
         if (readiness.has_patch_embedding_weight) {
@@ -124,7 +128,21 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
                         patch_embedding_dim = value.embedding_dim;
                         patch_embedding_executed = true;
 
-                        var grouped = vision.mergeSpatialPatches(allocator, value.*, image_processor.value.merge_size) catch null;
+                        var merged_input = value.*;
+                        var transformed: ?vision.PatchEmbeddings = null;
+                        var block_weights = opened.loadVisionBlockMlpWeights(allocator, 0) catch null;
+                        if (block_weights) |*block| {
+                            defer block.deinit();
+                            transformed = vision.applyVisionBlockMlp(allocator, value.*, block.weights, 1e-5) catch null;
+                            if (transformed) |*token_features| {
+                                visual_block_dim = token_features.embedding_dim;
+                                visual_block_mlp_executed = true;
+                                merged_input = token_features.*;
+                            }
+                        }
+                        defer if (transformed) |*token_features| token_features.deinit();
+
+                        var grouped = vision.mergeSpatialPatches(allocator, merged_input, image_processor.value.merge_size) catch null;
                         if (grouped) |*merged| {
                             defer merged.deinit();
                             var merger_weights = opened.loadVisualMergerWeights(allocator) catch null;
@@ -154,6 +172,8 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
             .visual_token_count = prepared.grid.token_count,
             .patch_embedding_dim = patch_embedding_dim,
             .patch_embedding_executed = patch_embedding_executed,
+            .visual_block_dim = visual_block_dim,
+            .visual_block_mlp_executed = visual_block_mlp_executed,
             .visual_token_dim = visual_token_dim,
             .visual_merger_executed = visual_merger_executed,
         };
@@ -275,6 +295,8 @@ fn buildIncompleteOutputJson(
         visual_token_count: ?usize,
         patch_embedding_dim: ?usize,
         patch_embedding_executed: bool,
+        visual_block_dim: ?usize,
+        visual_block_mlp_executed: bool,
         visual_token_dim: ?usize,
         visual_merger_executed: bool,
         error_message: []const u8,
@@ -293,6 +315,8 @@ fn buildIncompleteOutputJson(
         .native_stage = if (preprocess_summary) |summary|
             if (summary.visual_merger_executed)
                 "visual_merger"
+            else if (summary.visual_block_mlp_executed)
+                "visual_block_mlp"
             else if (summary.patch_embedding_executed)
                 "patch_embedding"
             else
@@ -314,6 +338,8 @@ fn buildIncompleteOutputJson(
         .visual_token_count = if (preprocess_summary) |summary| summary.visual_token_count else null,
         .patch_embedding_dim = if (preprocess_summary) |summary| summary.patch_embedding_dim else null,
         .patch_embedding_executed = if (preprocess_summary) |summary| summary.patch_embedding_executed else false,
+        .visual_block_dim = if (preprocess_summary) |summary| summary.visual_block_dim else null,
+        .visual_block_mlp_executed = if (preprocess_summary) |summary| summary.visual_block_mlp_executed else false,
         .visual_token_dim = if (preprocess_summary) |summary| summary.visual_token_dim else null,
         .visual_merger_executed = if (preprocess_summary) |summary| summary.visual_merger_executed else false,
         .error_message = "Chandra native inference is not complete yet; model config, weight manifest, and preprocessing readiness are available.",
@@ -592,7 +618,7 @@ fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8
 
 fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []const u8) !void {
     const header =
-        \\{"visual.patch_embed.proj.weight":{"dtype":"F32","shape":[2,3,1,2,2],"data_offsets":[0,96]},"visual.patch_embed.proj.bias":{"dtype":"F32","shape":[2],"data_offsets":[96,104]},"visual.merger.mlp.0.weight":{"dtype":"F32","shape":[3,2],"data_offsets":[104,128]},"visual.merger.mlp.0.bias":{"dtype":"F32","shape":[3],"data_offsets":[128,140]},"visual.merger.mlp.2.weight":{"dtype":"F32","shape":[2,3],"data_offsets":[140,164]},"visual.merger.mlp.2.bias":{"dtype":"F32","shape":[2],"data_offsets":[164,172]},"model.embed_tokens.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[172,180]},"lm_head.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[180,188]}}
+        \\{"visual.patch_embed.proj.weight":{"dtype":"F32","shape":[2,3,1,2,2],"data_offsets":[0,96]},"visual.patch_embed.proj.bias":{"dtype":"F32","shape":[2],"data_offsets":[96,104]},"visual.blocks.0.norm2.weight":{"dtype":"F32","shape":[2],"data_offsets":[104,112]},"visual.blocks.0.norm2.bias":{"dtype":"F32","shape":[2],"data_offsets":[112,120]},"visual.blocks.0.mlp.linear_fc1.weight":{"dtype":"F32","shape":[3,2],"data_offsets":[120,144]},"visual.blocks.0.mlp.linear_fc1.bias":{"dtype":"F32","shape":[3],"data_offsets":[144,156]},"visual.blocks.0.mlp.linear_fc2.weight":{"dtype":"F32","shape":[2,3],"data_offsets":[156,180]},"visual.blocks.0.mlp.linear_fc2.bias":{"dtype":"F32","shape":[2],"data_offsets":[180,188]},"visual.merger.mlp.0.weight":{"dtype":"F32","shape":[3,2],"data_offsets":[188,212]},"visual.merger.mlp.0.bias":{"dtype":"F32","shape":[3],"data_offsets":[212,224]},"visual.merger.mlp.2.weight":{"dtype":"F32","shape":[2,3],"data_offsets":[224,248]},"visual.merger.mlp.2.bias":{"dtype":"F32","shape":[2],"data_offsets":[248,256]},"model.embed_tokens.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[256,264]},"lm_head.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[264,272]}}
     ;
 
     const file = try dir.createFile(relative_path, .{});
@@ -603,7 +629,7 @@ fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []con
     try file.writeAll(&length_prefix);
     try file.writeAll(header);
 
-    var payload: [188]u8 = undefined;
+    var payload: [272]u8 = undefined;
     @memset(&payload, 0);
 
     const patch_weights = [_]f32{
@@ -620,29 +646,62 @@ fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []con
     std.mem.writeInt(u32, payload[96..100], @bitCast(@as(f32, 0.0)), .little);
     std.mem.writeInt(u32, payload[100..104], @bitCast(@as(f32, 1.0)), .little);
 
+    const block_norm_weight = [_]f32{ 1, 1 };
+    for (block_norm_weight, 0..) |value, index| {
+        const start = 104 + index * 4;
+        std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
+    }
+    const block_norm_bias = [_]f32{ 0, 0 };
+    for (block_norm_bias, 0..) |value, index| {
+        const start = 112 + index * 4;
+        std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
+    }
+    const block_fc1 = [_]f32{
+        1, 0,
+        0, 1,
+        1, 1,
+    };
+    for (block_fc1, 0..) |value, index| {
+        const start = 120 + index * 4;
+        std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
+    }
+    std.mem.writeInt(u32, payload[144..148], @bitCast(@as(f32, 0.0)), .little);
+    std.mem.writeInt(u32, payload[148..152], @bitCast(@as(f32, 0.0)), .little);
+    std.mem.writeInt(u32, payload[152..156], @bitCast(@as(f32, 0.5)), .little);
+    const block_fc2 = [_]f32{
+        1, 0, 0,
+        0, 1, 1,
+    };
+    for (block_fc2, 0..) |value, index| {
+        const start = 156 + index * 4;
+        std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
+    }
+    std.mem.writeInt(u32, payload[180..184], @bitCast(@as(f32, 0.0)), .little);
+    std.mem.writeInt(u32, payload[184..188], @bitCast(@as(f32, 0.0)), .little);
+
     const merger_fc1 = [_]f32{
         1, 0,
         0, 1,
         1, 1,
     };
     for (merger_fc1, 0..) |value, index| {
-        const start = 104 + index * 4;
+        const start = 188 + index * 4;
         std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
     }
-    std.mem.writeInt(u32, payload[128..132], @bitCast(@as(f32, 0.0)), .little);
-    std.mem.writeInt(u32, payload[132..136], @bitCast(@as(f32, 0.0)), .little);
-    std.mem.writeInt(u32, payload[136..140], @bitCast(@as(f32, 0.5)), .little);
+    std.mem.writeInt(u32, payload[212..216], @bitCast(@as(f32, 0.0)), .little);
+    std.mem.writeInt(u32, payload[216..220], @bitCast(@as(f32, 0.0)), .little);
+    std.mem.writeInt(u32, payload[220..224], @bitCast(@as(f32, 0.5)), .little);
 
     const merger_fc2 = [_]f32{
         1, 0, 0,
         0, 1, 1,
     };
     for (merger_fc2, 0..) |value, index| {
-        const start = 140 + index * 4;
+        const start = 224 + index * 4;
         std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
     }
-    std.mem.writeInt(u32, payload[164..168], @bitCast(@as(f32, 0.25)), .little);
-    std.mem.writeInt(u32, payload[168..172], @bitCast(@as(f32, -0.25)), .little);
+    std.mem.writeInt(u32, payload[248..252], @bitCast(@as(f32, 0.25)), .little);
+    std.mem.writeInt(u32, payload[252..256], @bitCast(@as(f32, -0.25)), .little);
 
     try file.writeAll(&payload);
 }
