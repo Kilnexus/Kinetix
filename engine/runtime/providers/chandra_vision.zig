@@ -1,6 +1,7 @@
 const std = @import("std");
 const imaging = @import("Pixio");
 const preprocess = @import("chandra_preprocess.zig");
+const cpu = @import("../text/core/cpu.zig");
 
 pub const PatchEmbeddingWeights = struct {
     data: []const f32,
@@ -59,6 +60,51 @@ pub const MergedPatchGroups = struct {
 
     pub fn at(self: MergedPatchGroups, token_index: usize, offset: usize) f32 {
         return self.data[token_index * self.merged_dim + offset];
+    }
+};
+
+pub const LinearWeights = struct {
+    data: []const f32,
+    bias: ?[]const f32 = null,
+    out_features: usize,
+    in_features: usize,
+
+    pub fn expectedLen(self: LinearWeights) usize {
+        return self.out_features * self.in_features;
+    }
+};
+
+pub const VisualMergerWeights = struct {
+    fc1: LinearWeights,
+    fc2: LinearWeights,
+};
+
+pub const OwnedVisualMergerWeights = struct {
+    allocator: std.mem.Allocator,
+    weights: VisualMergerWeights,
+
+    pub fn deinit(self: *OwnedVisualMergerWeights) void {
+        self.allocator.free(self.weights.fc1.data);
+        if (self.weights.fc1.bias) |bias| self.allocator.free(bias);
+        self.allocator.free(self.weights.fc2.data);
+        if (self.weights.fc2.bias) |bias| self.allocator.free(bias);
+        self.* = undefined;
+    }
+};
+
+pub const VisualTokens = struct {
+    allocator: std.mem.Allocator,
+    data: []f32,
+    token_count: usize,
+    embedding_dim: usize,
+
+    pub fn deinit(self: *VisualTokens) void {
+        self.allocator.free(self.data);
+        self.* = undefined;
+    }
+
+    pub fn at(self: VisualTokens, token_index: usize, channel: usize) f32 {
+        return self.data[token_index * self.embedding_dim + channel];
     }
 };
 
@@ -153,6 +199,37 @@ pub fn mergeSpatialPatches(
     return output;
 }
 
+pub fn applyVisualMerger(
+    allocator: std.mem.Allocator,
+    grouped: MergedPatchGroups,
+    weights: VisualMergerWeights,
+) !VisualTokens {
+    try validateVisualMergerInputs(grouped, weights);
+
+    var hidden = try allocator.alloc(f32, grouped.token_count * weights.fc1.out_features);
+    defer allocator.free(hidden);
+
+    var output = VisualTokens{
+        .allocator = allocator,
+        .data = try allocator.alloc(f32, grouped.token_count * weights.fc2.out_features),
+        .token_count = grouped.token_count,
+        .embedding_dim = weights.fc2.out_features,
+    };
+    errdefer output.deinit();
+
+    for (0..grouped.token_count) |token_index| {
+        const input_row = grouped.data[token_index * grouped.merged_dim ..][0..grouped.merged_dim];
+        const hidden_row = hidden[token_index * weights.fc1.out_features ..][0..weights.fc1.out_features];
+        applyLinear(hidden_row, input_row, weights.fc1);
+        cpu.geluInPlace(hidden_row);
+
+        const output_row = output.data[token_index * weights.fc2.out_features ..][0..weights.fc2.out_features];
+        applyLinear(output_row, hidden_row, weights.fc2);
+    }
+
+    return output;
+}
+
 fn validatePatchEmbeddingInputs(input: *const preprocess.PreparedImageInput, weights: PatchEmbeddingWeights) !void {
     if (weights.out_channels == 0 or weights.in_channels == 0) return error.InvalidPatchEmbeddingShape;
     if (weights.patch_size == 0 or weights.temporal_patch_size == 0) return error.InvalidPatchEmbeddingShape;
@@ -163,6 +240,31 @@ fn validatePatchEmbeddingInputs(input: *const preprocess.PreparedImageInput, wei
     if (input.tensor.channels != weights.in_channels) return error.InvalidChannelCount;
     if (input.grid.patchSize() != weights.patch_size) return error.ShapeMismatch;
     if (input.grid.resized_width != input.tensor.width or input.grid.resized_height != input.tensor.height) return error.ShapeMismatch;
+}
+
+fn validateVisualMergerInputs(grouped: MergedPatchGroups, weights: VisualMergerWeights) !void {
+    if (weights.fc1.data.len != weights.fc1.expectedLen()) return error.ShapeMismatch;
+    if (weights.fc2.data.len != weights.fc2.expectedLen()) return error.ShapeMismatch;
+    if (weights.fc1.in_features != grouped.merged_dim) return error.ShapeMismatch;
+    if (weights.fc2.in_features != weights.fc1.out_features) return error.ShapeMismatch;
+    if (weights.fc1.out_features == 0 or weights.fc2.out_features == 0) return error.ShapeMismatch;
+    if (weights.fc1.bias) |bias| {
+        if (bias.len != weights.fc1.out_features) return error.ShapeMismatch;
+    }
+    if (weights.fc2.bias) |bias| {
+        if (bias.len != weights.fc2.out_features) return error.ShapeMismatch;
+    }
+}
+
+fn applyLinear(output: []f32, input: []const f32, weights: LinearWeights) void {
+    for (0..weights.out_features) |row| {
+        var sum = if (weights.bias) |bias| bias[row] else 0.0;
+        const row_base = row * weights.in_features;
+        for (0..weights.in_features) |col| {
+            sum += weights.data[row_base + col] * input[col];
+        }
+        output[row] = sum;
+    }
 }
 
 fn tensorIndex(tensor: imaging.TensorF32CHW, channel: usize, y: usize, x: usize) usize {
@@ -262,4 +364,49 @@ test "chandra patch merger groups neighboring patch embeddings" {
     try std.testing.expectEqual(@as(f32, 30), merged.at(0, 5));
     try std.testing.expectEqual(@as(f32, 4), merged.at(0, 6));
     try std.testing.expectEqual(@as(f32, 40), merged.at(0, 7));
+}
+
+test "chandra visual merger projects grouped patches into visual tokens" {
+    var grouped = MergedPatchGroups{
+        .allocator = std.testing.allocator,
+        .data = try std.testing.allocator.dupe(f32, &.{ 1, 2, 3, 4 }),
+        .token_count = 1,
+        .merged_dim = 4,
+        .merged_width = 1,
+        .merged_height = 1,
+    };
+    defer grouped.deinit();
+
+    const fc1 = [_]f32{
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+    };
+    const fc1_bias = [_]f32{ 0, 1, -1 };
+    const fc2 = [_]f32{
+        1, 0, 0,
+        0, 1, 1,
+    };
+    const fc2_bias = [_]f32{ 0.5, -0.5 };
+
+    var tokens = try applyVisualMerger(std.testing.allocator, grouped, .{
+        .fc1 = .{
+            .data = &fc1,
+            .bias = &fc1_bias,
+            .out_features = 3,
+            .in_features = 4,
+        },
+        .fc2 = .{
+            .data = &fc2,
+            .bias = &fc2_bias,
+            .out_features = 2,
+            .in_features = 3,
+        },
+    });
+    defer tokens.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), tokens.token_count);
+    try std.testing.expectEqual(@as(usize, 2), tokens.embedding_dim);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.341192), tokens.at(0, 0), 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 4.295359), tokens.at(0, 1), 0.0001);
 }

@@ -92,6 +92,8 @@ const PreprocessSummary = struct {
     visual_token_count: usize,
     patch_embedding_dim: ?usize = null,
     patch_embedding_executed: bool = false,
+    visual_token_dim: ?usize = null,
+    visual_merger_executed: bool = false,
 };
 
 pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
@@ -108,6 +110,8 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
 
         var patch_embedding_dim: ?usize = null;
         var patch_embedding_executed = false;
+        var visual_token_dim: ?usize = null;
+        var visual_merger_executed = false;
         if (readiness.has_patch_embedding_weight) {
             var tensor_store = store.ChandraStore.open(allocator, context.model_path) catch null;
             if (tensor_store) |*opened| {
@@ -119,6 +123,22 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
                     if (embeddings) |*value| {
                         patch_embedding_dim = value.embedding_dim;
                         patch_embedding_executed = true;
+
+                        var grouped = vision.mergeSpatialPatches(allocator, value.*, image_processor.value.merge_size) catch null;
+                        if (grouped) |*merged| {
+                            defer merged.deinit();
+                            var merger_weights = opened.loadVisualMergerWeights(allocator) catch null;
+                            if (merger_weights) |*projector| {
+                                defer projector.deinit();
+                                var visual_tokens = vision.applyVisualMerger(allocator, merged.*, projector.weights) catch null;
+                                if (visual_tokens) |*tokens| {
+                                    visual_token_dim = tokens.embedding_dim;
+                                    visual_merger_executed = true;
+                                    tokens.deinit();
+                                }
+                            }
+                        }
+
                         value.deinit();
                     }
                 }
@@ -134,6 +154,8 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
             .visual_token_count = prepared.grid.token_count,
             .patch_embedding_dim = patch_embedding_dim,
             .patch_embedding_executed = patch_embedding_executed,
+            .visual_token_dim = visual_token_dim,
+            .visual_merger_executed = visual_merger_executed,
         };
     }
 
@@ -253,6 +275,8 @@ fn buildIncompleteOutputJson(
         visual_token_count: ?usize,
         patch_embedding_dim: ?usize,
         patch_embedding_executed: bool,
+        visual_token_dim: ?usize,
+        visual_merger_executed: bool,
         error_message: []const u8,
         readiness: ReadinessReceipt,
     };
@@ -267,7 +291,12 @@ fn buildIncompleteOutputJson(
         .method = "native",
         .requested_output = requestedOutput(context.operation),
         .native_stage = if (preprocess_summary) |summary|
-            if (summary.patch_embedding_executed) "patch_embedding" else "image_preprocessing"
+            if (summary.visual_merger_executed)
+                "visual_merger"
+            else if (summary.patch_embedding_executed)
+                "patch_embedding"
+            else
+                "image_preprocessing"
         else
             "model_loading",
         .content = null,
@@ -285,6 +314,8 @@ fn buildIncompleteOutputJson(
         .visual_token_count = if (preprocess_summary) |summary| summary.visual_token_count else null,
         .patch_embedding_dim = if (preprocess_summary) |summary| summary.patch_embedding_dim else null,
         .patch_embedding_executed = if (preprocess_summary) |summary| summary.patch_embedding_executed else false,
+        .visual_token_dim = if (preprocess_summary) |summary| summary.visual_token_dim else null,
+        .visual_merger_executed = if (preprocess_summary) |summary| summary.visual_merger_executed else false,
         .error_message = "Chandra native inference is not complete yet; model config, weight manifest, and preprocessing readiness are available.",
         .readiness = .{
             .has_config = readiness.has_config,
@@ -545,9 +576,11 @@ test "native chandra execute preprocesses image and runs patch embedding stage" 
     });
     defer std.testing.allocator.free(payload);
 
-    try std.testing.expect(std.mem.indexOf(u8, payload, "\"native_stage\":\"patch_embedding\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"native_stage\":\"visual_merger\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"patch_embedding_executed\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"patch_embedding_dim\":2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"visual_merger_executed\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"visual_token_dim\":2") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"patch_token_count\":2") != null);
 }
 
@@ -559,7 +592,7 @@ fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8
 
 fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []const u8) !void {
     const header =
-        \\{"visual.patch_embed.proj.weight":{"dtype":"F32","shape":[2,3,1,2,2],"data_offsets":[0,96]},"visual.patch_embed.proj.bias":{"dtype":"F32","shape":[2],"data_offsets":[96,104]},"visual.merger.mlp.0.weight":{"dtype":"F32","shape":[2,2],"data_offsets":[104,120]},"model.embed_tokens.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[120,128]},"lm_head.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[128,136]}}
+        \\{"visual.patch_embed.proj.weight":{"dtype":"F32","shape":[2,3,1,2,2],"data_offsets":[0,96]},"visual.patch_embed.proj.bias":{"dtype":"F32","shape":[2],"data_offsets":[96,104]},"visual.merger.mlp.0.weight":{"dtype":"F32","shape":[3,2],"data_offsets":[104,128]},"visual.merger.mlp.0.bias":{"dtype":"F32","shape":[3],"data_offsets":[128,140]},"visual.merger.mlp.2.weight":{"dtype":"F32","shape":[2,3],"data_offsets":[140,164]},"visual.merger.mlp.2.bias":{"dtype":"F32","shape":[2],"data_offsets":[164,172]},"model.embed_tokens.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[172,180]},"lm_head.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[180,188]}}
     ;
 
     const file = try dir.createFile(relative_path, .{});
@@ -570,7 +603,7 @@ fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []con
     try file.writeAll(&length_prefix);
     try file.writeAll(header);
 
-    var payload: [136]u8 = undefined;
+    var payload: [188]u8 = undefined;
     @memset(&payload, 0);
 
     const patch_weights = [_]f32{
@@ -586,6 +619,30 @@ fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []con
     }
     std.mem.writeInt(u32, payload[96..100], @bitCast(@as(f32, 0.0)), .little);
     std.mem.writeInt(u32, payload[100..104], @bitCast(@as(f32, 1.0)), .little);
+
+    const merger_fc1 = [_]f32{
+        1, 0,
+        0, 1,
+        1, 1,
+    };
+    for (merger_fc1, 0..) |value, index| {
+        const start = 104 + index * 4;
+        std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
+    }
+    std.mem.writeInt(u32, payload[128..132], @bitCast(@as(f32, 0.0)), .little);
+    std.mem.writeInt(u32, payload[132..136], @bitCast(@as(f32, 0.0)), .little);
+    std.mem.writeInt(u32, payload[136..140], @bitCast(@as(f32, 0.5)), .little);
+
+    const merger_fc2 = [_]f32{
+        1, 0, 0,
+        0, 1, 1,
+    };
+    for (merger_fc2, 0..) |value, index| {
+        const start = 140 + index * 4;
+        std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
+    }
+    std.mem.writeInt(u32, payload[164..168], @bitCast(@as(f32, 0.25)), .little);
+    std.mem.writeInt(u32, payload[168..172], @bitCast(@as(f32, -0.25)), .little);
 
     try file.writeAll(&payload);
 }
