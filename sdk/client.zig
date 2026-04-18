@@ -982,6 +982,30 @@ test "client detect returns typed detection result" {
     try std.testing.expectEqual(@as(usize, 1), result.detections[0].class_id);
 }
 
+test "client detect smoke test runs compat yolo11n on bundled bus image" {
+    std.fs.cwd().access("models/vision/compat_yolo11n/graph.json", .{}) catch return error.SkipZigTest;
+    std.fs.cwd().access("models/vision/compat_yolo11n/weights.bin", .{}) catch return error.SkipZigTest;
+    std.fs.cwd().access("testdata/vision/bus.jpg", .{}) catch return error.SkipZigTest;
+
+    const model_dir = try std.fs.cwd().realpathAlloc(std.testing.allocator, "models/vision/compat_yolo11n");
+    defer std.testing.allocator.free(model_dir);
+    const image_path = try std.fs.cwd().realpathAlloc(std.testing.allocator, "testdata/vision/bus.jpg");
+    defer std.testing.allocator.free(image_path);
+
+    const client = KinetixClient.init(std.testing.allocator);
+    var result = try client.detect(model_dir, image_path, .{});
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("detect_completed", result.status);
+    try std.testing.expectEqualStrings("yolo", result.model_family);
+    try std.testing.expectEqual(runtime_types.ExecutionOrigin.shared_adapter, result.origin);
+    try std.testing.expectEqual(runtime_types.ExecutionNote.vision_shared_detect, result.note);
+    try std.testing.expect(result.candidate_count != null);
+    try std.testing.expect(result.candidate_count.? >= result.detections.len);
+    try std.testing.expect(result.detections.len >= 1);
+    try std.testing.expect(result.detections[0].score >= 0.25);
+}
+
 test "client inferOCR returns typed result" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
