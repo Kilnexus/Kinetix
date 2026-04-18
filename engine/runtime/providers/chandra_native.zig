@@ -9,6 +9,7 @@ const decoder_runtime = @import("../text/decoder_runtime.zig");
 const decoder_family = @import("../text/decoder_family.zig");
 const text_backend_scheme = @import("../text/backend_scheme.zig");
 const kv_cache = @import("../text/kv_cache.zig");
+const streaming = @import("../text/streaming.zig");
 
 pub const TextConfig = struct {
     model_type: []const u8,
@@ -112,12 +113,46 @@ const PreprocessSummary = struct {
     text_prefill_executed: bool = false,
     decoder_logits_dim: ?usize = null,
     decoder_next_token_id: ?usize = null,
+    text_decode_executed: bool = false,
+    decoded_token_count: usize = 0,
+    generated_output: ?[]u8 = null,
+
+    pub fn deinit(self: *PreprocessSummary, allocator: std.mem.Allocator) void {
+        if (self.generated_output) |value| allocator.free(value);
+        self.* = undefined;
+    }
+};
+
+const MultimodalPositionPlan = struct {
+    vision_start_position: usize,
+    visual_start_position: usize,
+    vision_end_position: usize,
+    prompt_start_position: usize,
+    generation_start_position: usize,
+    total_prefill_tokens: usize,
+
+    fn init(visual_token_count: usize, prompt_token_count: usize) MultimodalPositionPlan {
+        const vision_start_position: usize = 0;
+        const visual_start_position = vision_start_position + 1;
+        const vision_end_position = visual_start_position + visual_token_count;
+        const prompt_start_position = vision_end_position + 1;
+        const generation_start_position = prompt_start_position + prompt_token_count;
+        return .{
+            .vision_start_position = vision_start_position,
+            .visual_start_position = visual_start_position,
+            .vision_end_position = vision_end_position,
+            .prompt_start_position = prompt_start_position,
+            .generation_start_position = generation_start_position,
+            .total_prefill_tokens = generation_start_position,
+        };
+    }
 };
 
 pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
     if (context.execution != .sync) return error.UnsupportedExecutionMode;
     const readiness = inspect(context.model_path);
     var summary: ?PreprocessSummary = null;
+    defer if (summary) |*value| value.deinit(allocator);
 
     if (readiness.has_image_processor_config and isRasterImagePath(context.input_path)) {
         var image_processor = try preprocess.loadImageProcessorConfig(allocator, context.model_path);
@@ -160,6 +195,9 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
         var text_prefill_executed = false;
         var decoder_logits_dim: ?usize = null;
         var decoder_next_token_id: ?usize = null;
+        var text_decode_executed = false;
+        var decoded_token_count: usize = 0;
+        var generated_output: ?[]u8 = null;
         if (readiness.has_patch_embedding_weight) {
             var tensor_store = store.ChandraStore.open(allocator, context.model_path) catch null;
             if (tensor_store) |*opened| {
@@ -246,8 +284,8 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
                                                 runtime.cfg.architecture,
                                                 context.model_path,
                                             ) catch null;
+                                            defer if (tokenizer) |*loaded_tokenizer| loaded_tokenizer.deinit();
                                             if (tokenizer) |*loaded_tokenizer| {
-                                                defer loaded_tokenizer.deinit();
                                                 const prompt_text = decoder_family.renderSingleUserPromptAlloc(
                                                     allocator,
                                                     runtime.cfg.architecture,
@@ -271,12 +309,12 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
                                                 }
                                             }
 
+                                            const position_plan = MultimodalPositionPlan.init(tokens.token_count, text_prompt_token_count);
                                             const resolved_kv_cache_scheme = kv_cache.resolveScheme(.auto, runtime.backendName());
-                                            const total_prefill_tokens = tokens.token_count + 2 + text_prompt_token_count;
                                             var cache = kv_cache.ModelCache.initWithLayout(
                                                 allocator,
                                                 runtime.cfg.num_hidden_layers,
-                                                total_prefill_tokens + (context.max_output_tokens orelse 0),
+                                                position_plan.total_prefill_tokens + (context.max_output_tokens orelse 64),
                                                 runtime.cfg.num_key_value_heads,
                                                 runtime.cfg.head_dim,
                                                 resolved_kv_cache_scheme,
@@ -284,40 +322,104 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
                                             ) catch null;
                                             if (cache) |*model_cache| {
                                                 defer model_cache.deinit();
-                                                var workspace = runtime.initWorkspace(total_prefill_tokens + (context.max_output_tokens orelse 0)) catch null;
+                                                var workspace = runtime.initWorkspace(position_plan.total_prefill_tokens + (context.max_output_tokens orelse 64)) catch null;
                                                 if (workspace) |*decoder_workspace| {
                                                     defer decoder_workspace.deinit();
 
-                                                    const current_logits = runtime.forwardTokenId(
+                                                    const current_logits = runtime.forwardTokenIdAtPosition(
                                                         decoder_workspace,
                                                         model_cache,
                                                         config.value.vision_start_token_id,
+                                                        position_plan.vision_start_position,
                                                     ) catch null;
                                                     if (current_logits) |start_logits| {
                                                         var latest_logits = start_logits;
-                                                        latest_logits = runtime.prefillEmbeddings(
-                                                            decoder_workspace,
-                                                            model_cache,
-                                                            tokens.data,
+                                                        const visual_positions = allocSequentialPositions(
+                                                            allocator,
+                                                            position_plan.visual_start_position,
                                                             tokens.token_count,
-                                                        ) catch latest_logits;
-                                                        latest_logits = runtime.forwardTokenId(
+                                                        ) catch null;
+                                                        defer if (visual_positions) |positions| allocator.free(positions);
+                                                        if (visual_positions) |positions| {
+                                                            latest_logits = runtime.prefillEmbeddingsAtPositions(
+                                                                decoder_workspace,
+                                                                model_cache,
+                                                                tokens.data,
+                                                                tokens.token_count,
+                                                                positions,
+                                                            ) catch latest_logits;
+                                                        }
+                                                        latest_logits = runtime.forwardTokenIdAtPosition(
                                                             decoder_workspace,
                                                             model_cache,
                                                             config.value.vision_end_token_id,
+                                                            position_plan.vision_end_position,
                                                         ) catch latest_logits;
                                                         if (prompt_token_ids) |ids| {
-                                                            latest_logits = runtime.prefillTokenIds(
-                                                                decoder_workspace,
-                                                                model_cache,
-                                                                ids,
-                                                            ) catch latest_logits;
+                                                            const prompt_positions = allocSequentialPositions(
+                                                                allocator,
+                                                                position_plan.prompt_start_position,
+                                                                ids.len,
+                                                            ) catch null;
+                                                            defer if (prompt_positions) |positions| allocator.free(positions);
+                                                            if (prompt_positions) |positions| {
+                                                                latest_logits = runtime.prefillTokenIdsAtPositions(
+                                                                    decoder_workspace,
+                                                                    model_cache,
+                                                                    ids,
+                                                                    positions,
+                                                                ) catch latest_logits;
+                                                            }
                                                         }
 
-                                                        text_prefill_token_count = total_prefill_tokens;
+                                                        text_prefill_token_count = position_plan.total_prefill_tokens;
                                                         text_prefill_executed = true;
                                                         decoder_logits_dim = latest_logits.len;
                                                         decoder_next_token_id = decoder_family.argMaxLogit(latest_logits) catch null;
+
+                                                        if (tokenizer) |*loaded_tokenizer| {
+                                                            var generated_ids = std.ArrayListUnmanaged(u32).empty;
+                                                            defer generated_ids.deinit(allocator);
+
+                                                            var step: usize = 0;
+                                                            const max_output_tokens = context.max_output_tokens orelse 64;
+                                                            while (step < max_output_tokens) : (step += 1) {
+                                                                const next_token = decoder_family.argMaxLogit(latest_logits) catch break;
+                                                                if (decoder_family.isEosToken(runtime.cfg.architecture, next_token)) break;
+                                                                const next_token_u32 = std.math.cast(u32, next_token) orelse break;
+                                                                try generated_ids.append(allocator, next_token_u32);
+                                                                latest_logits = runtime.forwardTokenIdAtPosition(
+                                                                    decoder_workspace,
+                                                                    model_cache,
+                                                                    next_token,
+                                                                    position_plan.generation_start_position + step,
+                                                                ) catch break;
+                                                            }
+
+                                                            decoder_logits_dim = latest_logits.len;
+                                                            decoder_next_token_id = decoder_family.argMaxLogit(latest_logits) catch decoder_next_token_id;
+                                                            decoded_token_count = generated_ids.items.len;
+                                                            text_decode_executed = generated_ids.items.len != 0;
+
+                                                            if (generated_ids.items.len != 0) {
+                                                                const decoded = loaded_tokenizer.decodeAlloc(allocator, generated_ids.items) catch null;
+                                                                if (decoded) |text| {
+                                                                    const effective_stops = decoder_family.effectiveStopSequencesAlloc(
+                                                                        allocator,
+                                                                        runtime.cfg.architecture,
+                                                                        &.{},
+                                                                    ) catch null;
+                                                                    if (effective_stops) |stops| {
+                                                                        defer allocator.free(stops);
+                                                                        const analysis = streaming.analyzeGeneratedText(text, stops);
+                                                                        generated_output = try allocator.dupe(u8, text[0..analysis.response_len]);
+                                                                    } else {
+                                                                        generated_output = try allocator.dupe(u8, text);
+                                                                    }
+                                                                    allocator.free(text);
+                                                                }
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
@@ -360,6 +462,9 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
             .text_prefill_executed = text_prefill_executed,
             .decoder_logits_dim = decoder_logits_dim,
             .decoder_next_token_id = decoder_next_token_id,
+            .text_decode_executed = text_decode_executed,
+            .decoded_token_count = decoded_token_count,
+            .generated_output = generated_output,
         };
     }
 
@@ -495,6 +600,8 @@ fn buildIncompleteOutputJson(
         text_prefill_executed: bool,
         decoder_logits_dim: ?usize,
         decoder_next_token_id: ?usize,
+        text_decode_executed: bool,
+        decoded_token_count: usize,
         error_message: []const u8,
         readiness: ReadinessReceipt,
     };
@@ -509,7 +616,9 @@ fn buildIncompleteOutputJson(
         .method = "native",
         .requested_output = requestedOutput(context.operation),
         .native_stage = if (preprocess_summary) |summary|
-            if (summary.text_prefill_executed)
+            if (summary.text_decode_executed)
+                "text_decode"
+            else if (summary.text_prefill_executed)
                 "text_prefill"
             else if (summary.visual_merger_executed)
                 "visual_merger"
@@ -527,12 +636,33 @@ fn buildIncompleteOutputJson(
                 "image_preprocessing"
         else
             "model_loading",
-        .content = null,
-        .markdown = null,
-        .html = null,
-        .json_output = null,
+        .content = if (preprocess_summary) |summary| summary.generated_output else null,
+        .markdown = if (preprocess_summary) |summary|
+            if (std.mem.eql(u8, context.operation, "render-markdown"))
+                summary.generated_output
+            else
+                null
+        else
+            null,
+        .html = if (preprocess_summary) |summary|
+            if (std.mem.eql(u8, context.operation, "render-html"))
+                summary.generated_output
+            else
+                null
+        else
+            null,
+        .json_output = if (preprocess_summary) |summary|
+            if (std.mem.eql(u8, context.operation, "render-json"))
+                summary.generated_output
+            else
+                null
+        else
+            null,
         .page_count = if (preprocess_summary != null) 1 else null,
-        .total_token_count = null,
+        .total_token_count = if (preprocess_summary) |summary|
+            summary.text_prefill_token_count + summary.decoded_token_count
+        else
+            null,
         .loaded_tensors = null,
         .image_width = if (preprocess_summary) |summary| summary.image_width else null,
         .image_height = if (preprocess_summary) |summary| summary.image_height else null,
@@ -558,6 +688,8 @@ fn buildIncompleteOutputJson(
         .text_prefill_executed = if (preprocess_summary) |summary| summary.text_prefill_executed else false,
         .decoder_logits_dim = if (preprocess_summary) |summary| summary.decoder_logits_dim else null,
         .decoder_next_token_id = if (preprocess_summary) |summary| summary.decoder_next_token_id else null,
+        .text_decode_executed = if (preprocess_summary) |summary| summary.text_decode_executed else false,
+        .decoded_token_count = if (preprocess_summary) |summary| summary.decoded_token_count else 0,
         .error_message = "Chandra native inference is not complete yet; model config, weight manifest, and preprocessing readiness are available.",
         .readiness = .{
             .has_config = readiness.has_config,
@@ -594,6 +726,18 @@ fn instructionForOperation(operation: []const u8) []const u8 {
     if (std.mem.eql(u8, operation, "render-html")) return "Read the document image and transcribe it as semantic HTML.";
     if (std.mem.eql(u8, operation, "render-json")) return "Read the document image and transcribe it as structured JSON.";
     return "Read the document image and transcribe all visible text.";
+}
+
+fn allocSequentialPositions(
+    allocator: std.mem.Allocator,
+    start: usize,
+    count: usize,
+) ![]usize {
+    const positions = try allocator.alloc(usize, count);
+    for (positions, 0..) |*position, index| {
+        position.* = start + index;
+    }
+    return positions;
 }
 
 fn isRasterImagePath(path: []const u8) bool {

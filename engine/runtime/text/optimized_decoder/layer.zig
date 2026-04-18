@@ -102,6 +102,7 @@ pub const LayerWeights = struct {
         parallel_pool: *parallel_rows.Pool,
         workspace: *workspace_mod.Workspace,
         cache: *kv_cache_cache.LayerKVCache,
+        position: usize,
         hidden_in: []const f32,
         hidden_out: []f32,
     ) !void {
@@ -119,7 +120,6 @@ pub const LayerWeights = struct {
             try cpu.rmsNormRepeated(workspace.k_proj, workspace.k_proj, self.spec.num_key_value_heads, self.spec.head_dim, weight, self.spec.rms_norm_eps);
         }
 
-        const position = cache.len;
         try gqa_attention.applyRoPEToProjectedHeadsWithTableInPlace(
             self.spec.attentionSpec(),
             workspace.q_proj,

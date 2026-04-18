@@ -106,6 +106,16 @@ pub const Runtime = struct {
         cache: *kv_cache_cache.ModelCache,
         token_id: usize,
     ) ![]f32 {
+        return try self.forwardTokenIdAtPosition(workspace, cache, token_id, nextPosition(cache));
+    }
+
+    pub fn forwardTokenIdAtPosition(
+        self: *Runtime,
+        workspace: *workspace_mod.Workspace,
+        cache: *kv_cache_cache.ModelCache,
+        token_id: usize,
+        position: usize,
+    ) ![]f32 {
         if (token_id >= self.cfg.vocab_size) return error.TokenIdOutOfBounds;
         try self.backend.readRowIntoTensor(
             self.embed_tokens_tensor,
@@ -114,7 +124,7 @@ pub const Runtime = struct {
             workspace.io_scratch,
         );
 
-        return try self.forwardEmbedding(workspace, cache, workspace.hidden_a);
+        return try self.forwardEmbeddingAtPosition(workspace, cache, workspace.hidden_a, position);
     }
 
     pub fn forwardEmbedding(
@@ -122,6 +132,16 @@ pub const Runtime = struct {
         workspace: *workspace_mod.Workspace,
         cache: *kv_cache_cache.ModelCache,
         embedding: []const f32,
+    ) ![]f32 {
+        return try self.forwardEmbeddingAtPosition(workspace, cache, embedding, nextPosition(cache));
+    }
+
+    pub fn forwardEmbeddingAtPosition(
+        self: *Runtime,
+        workspace: *workspace_mod.Workspace,
+        cache: *kv_cache_cache.ModelCache,
+        embedding: []const f32,
+        position: usize,
     ) ![]f32 {
         if (embedding.len != self.cfg.hidden_size) return error.SizeMismatch;
         @memcpy(workspace.hidden_a, embedding);
@@ -135,6 +155,7 @@ pub const Runtime = struct {
                 &self.parallel_pool,
                 workspace,
                 &cache.layers[layer_index],
+                position,
                 hidden_in,
                 hidden_out,
             );
@@ -174,6 +195,23 @@ pub const Runtime = struct {
         return last_logits;
     }
 
+    pub fn prefillTokenIdsAtPositions(
+        self: *Runtime,
+        workspace: *workspace_mod.Workspace,
+        cache: *kv_cache_cache.ModelCache,
+        token_ids: []const usize,
+        positions: []const usize,
+    ) ![]f32 {
+        if (token_ids.len == 0) return error.EmptyPrompt;
+        if (token_ids.len != positions.len) return error.SizeMismatch;
+
+        var last_logits: []f32 = undefined;
+        for (token_ids, positions) |token_id, position| {
+            last_logits = try self.forwardTokenIdAtPosition(workspace, cache, token_id, position);
+        }
+        return last_logits;
+    }
+
     pub fn prefillEmbeddings(
         self: *Runtime,
         workspace: *workspace_mod.Workspace,
@@ -181,17 +219,36 @@ pub const Runtime = struct {
         embeddings: []const f32,
         token_count: usize,
     ) ![]f32 {
+        const positions = try self.allocator.alloc(usize, token_count);
+        defer self.allocator.free(positions);
+        const start = nextPosition(cache);
+        for (positions, 0..) |*position, index| {
+            position.* = start + index;
+        }
+        return try self.prefillEmbeddingsAtPositions(workspace, cache, embeddings, token_count, positions);
+    }
+
+    pub fn prefillEmbeddingsAtPositions(
+        self: *Runtime,
+        workspace: *workspace_mod.Workspace,
+        cache: *kv_cache_cache.ModelCache,
+        embeddings: []const f32,
+        token_count: usize,
+        positions: []const usize,
+    ) ![]f32 {
         if (token_count == 0) return error.EmptyPrompt;
+        if (token_count != positions.len) return error.SizeMismatch;
         const expected_len = try std.math.mul(usize, token_count, self.cfg.hidden_size);
         if (embeddings.len != expected_len) return error.SizeMismatch;
 
         var last_logits: []f32 = undefined;
         for (0..token_count) |token_index| {
             const start = token_index * self.cfg.hidden_size;
-            last_logits = try self.forwardEmbedding(
+            last_logits = try self.forwardEmbeddingAtPosition(
                 workspace,
                 cache,
                 embeddings[start .. start + self.cfg.hidden_size],
+                positions[token_index],
             );
         }
         return last_logits;
@@ -205,3 +262,8 @@ pub const Runtime = struct {
         return self.backend.artifactBytes();
     }
 };
+
+fn nextPosition(cache: *const kv_cache_cache.ModelCache) usize {
+    if (cache.layers.len == 0) return 0;
+    return cache.layers[0].len;
+}
