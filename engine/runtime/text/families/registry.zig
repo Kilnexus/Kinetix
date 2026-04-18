@@ -181,7 +181,18 @@ fn detectArchitectureFromConfigFile(
     const model_type_value = parsed.value.object.get("model_type") orelse return error.MissingModelType;
     if (model_type_value != .string) return error.InvalidModelType;
 
-    return detectArchitecture(model_type_value.string) orelse error.UnsupportedModelType;
+    if (detectArchitecture(model_type_value.string)) |architecture| return architecture;
+
+    if (parsed.value.object.get("text_config")) |text_config_value| {
+        if (text_config_value == .object) {
+            if (text_config_value.object.get("model_type")) |text_model_type_value| {
+                if (text_model_type_value != .string) return error.InvalidModelType;
+                if (std.mem.eql(u8, text_model_type_value.string, "qwen3_5_text")) return .qwen3;
+            }
+        }
+    }
+
+    return error.UnsupportedModelType;
 }
 
 fn readFileAllocAtPath(
@@ -202,4 +213,36 @@ test "registry detects known family architectures" {
     try testing.expectEqual(Architecture.qwen3, detectArchitecture("qwen3").?);
     try testing.expectEqual(Architecture.bert, detectArchitecture("bert").?);
     try testing.expect(detectArchitecture("unknown-model") == null);
+}
+
+test "registry detects qwen3 architecture from chandra wrapped config" {
+    const testing = std.testing;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{
+        .sub_path = "config.json",
+        .data =
+        \\{
+        \\  "model_type": "qwen3_5",
+        \\  "text_config": {
+        \\    "model_type": "qwen3_5_text",
+        \\    "hidden_size": 2560,
+        \\    "intermediate_size": 9216,
+        \\    "num_hidden_layers": 32,
+        \\    "num_attention_heads": 16,
+        \\    "num_key_value_heads": 4,
+        \\    "head_dim": 160,
+        \\    "vocab_size": 248320,
+        \\    "max_position_embeddings": 262144
+        \\  }
+        \\}
+        ,
+    });
+
+    const path = try tmp.dir.realpathAlloc(testing.allocator, "config.json");
+    defer testing.allocator.free(path);
+
+    try testing.expectEqual(Architecture.qwen3, try detectArchitectureFromConfigFile(testing.allocator, path));
 }

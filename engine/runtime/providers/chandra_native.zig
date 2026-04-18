@@ -90,14 +90,17 @@ const PreprocessSummary = struct {
     resized_height: usize,
     patch_token_count: usize,
     visual_token_count: usize,
+    vision_block_depth: usize = 0,
     patch_embedding_dim: ?usize = null,
     patch_embedding_executed: bool = false,
     visual_position_dim: ?usize = null,
     visual_position_embedding_executed: bool = false,
     visual_attention_dim: ?usize = null,
     visual_block_attention_executed: bool = false,
+    visual_attention_blocks_executed: usize = 0,
     visual_block_dim: ?usize = null,
     visual_block_mlp_executed: bool = false,
+    visual_mlp_blocks_executed: usize = 0,
     visual_token_dim: ?usize = null,
     visual_merger_executed: bool = false,
 };
@@ -114,14 +117,33 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
         var prepared = try preprocess.loadImageInput(allocator, context.input_path, image_processor.value);
         defer prepared.deinit();
 
+        var parsed_config: ?ParsedConfig = null;
+        const config_path = std.fs.path.join(allocator, &.{ context.model_path, "config.json" }) catch null;
+        defer if (config_path) |path| allocator.free(path);
+        if (config_path) |path| {
+            parsed_config = loadConfigFromFile(allocator, path) catch null;
+        }
+        defer if (parsed_config) |*config| config.deinit();
+
+        const vision_block_depth = if (parsed_config) |config|
+            config.value.vision_config.depth
+        else
+            0;
+        const vision_num_heads = if (parsed_config) |config|
+            @max(@as(usize, 1), config.value.vision_config.num_heads)
+        else
+            1;
+
         var patch_embedding_dim: ?usize = null;
         var patch_embedding_executed = false;
         var visual_position_dim: ?usize = null;
         var visual_position_embedding_executed = false;
         var visual_attention_dim: ?usize = null;
         var visual_block_attention_executed = false;
+        var visual_attention_blocks_executed: usize = 0;
         var visual_block_dim: ?usize = null;
         var visual_block_mlp_executed = false;
+        var visual_mlp_blocks_executed: usize = 0;
         var visual_token_dim: ?usize = null;
         var visual_merger_executed = false;
         if (readiness.has_patch_embedding_weight) {
@@ -137,43 +159,50 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
                         patch_embedding_executed = true;
 
                         var merged_input = value.*;
-                        var transformed_pos: ?vision.PatchEmbeddings = null;
-                        var transformed_attention: ?vision.PatchEmbeddings = null;
-                        var transformed_mlp: ?vision.PatchEmbeddings = null;
+                        var current_owned: ?vision.PatchEmbeddings = null;
+                        defer if (current_owned) |*owned| owned.deinit();
+
                         var pos_weights = opened.loadVisualPositionEmbeddings(allocator, value.embedding_dim) catch null;
                         if (pos_weights) |*pos| {
                             defer pos.deinit();
-                            transformed_pos = vision.applyPositionEmbeddings(allocator, value.*, pos.weights) catch null;
-                            if (transformed_pos) |*token_features| {
-                                visual_position_dim = token_features.embedding_dim;
+                            const positioned = vision.applyPositionEmbeddings(allocator, value.*, pos.weights) catch null;
+                            if (positioned) |token_features| {
+                                current_owned = token_features;
+                                merged_input = current_owned.?;
+                                visual_position_dim = merged_input.embedding_dim;
                                 visual_position_embedding_executed = true;
-                                merged_input = token_features.*;
-                            }
-                        }
-                        var attention_weights = opened.loadVisionBlockAttentionWeights(allocator, 0, readNumHeads(context.model_path)) catch null;
-                        if (attention_weights) |*attn| {
-                            defer attn.deinit();
-                            transformed_attention = vision.applyVisionBlockAttention(allocator, merged_input, attn.weights, 1e-5) catch null;
-                            if (transformed_attention) |*token_features| {
-                                visual_attention_dim = token_features.embedding_dim;
-                                visual_block_attention_executed = true;
-                                merged_input = token_features.*;
                             }
                         }
 
-                        var block_weights = opened.loadVisionBlockMlpWeights(allocator, 0) catch null;
-                        if (block_weights) |*block| {
-                            defer block.deinit();
-                            transformed_mlp = vision.applyVisionBlockMlp(allocator, merged_input, block.weights, 1e-5) catch null;
-                            if (transformed_mlp) |*token_features| {
-                                visual_block_dim = token_features.embedding_dim;
-                                visual_block_mlp_executed = true;
-                                merged_input = token_features.*;
-                            }
+                        for (0..vision_block_depth) |block_index| {
+                            const block_attention = blk: {
+                                var attn = opened.loadVisionBlockAttentionWeights(allocator, block_index, vision_num_heads) catch break;
+                                defer attn.deinit();
+
+                                const next = vision.applyVisionBlockAttention(allocator, merged_input, attn.weights, 1e-5) catch break;
+                                break :blk next;
+                            };
+                            if (current_owned) |*owned| owned.deinit();
+                            current_owned = block_attention;
+                            merged_input = current_owned.?;
+                            visual_attention_dim = merged_input.embedding_dim;
+                            visual_block_attention_executed = true;
+                            visual_attention_blocks_executed = block_index + 1;
+
+                            const block_mlp = blk: {
+                                var mlp = opened.loadVisionBlockMlpWeights(allocator, block_index) catch break;
+                                defer mlp.deinit();
+
+                                const next = vision.applyVisionBlockMlp(allocator, merged_input, mlp.weights, 1e-5) catch break;
+                                break :blk next;
+                            };
+                            if (current_owned) |*owned| owned.deinit();
+                            current_owned = block_mlp;
+                            merged_input = current_owned.?;
+                            visual_block_dim = merged_input.embedding_dim;
+                            visual_block_mlp_executed = true;
+                            visual_mlp_blocks_executed = block_index + 1;
                         }
-                        defer if (transformed_pos) |*token_features| token_features.deinit();
-                        defer if (transformed_attention) |*token_features| token_features.deinit();
-                        defer if (transformed_mlp) |*token_features| token_features.deinit();
 
                         var grouped = vision.mergeSpatialPatches(allocator, merged_input, image_processor.value.merge_size) catch null;
                         if (grouped) |*merged| {
@@ -203,14 +232,17 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
             .resized_height = prepared.grid.resized_height,
             .patch_token_count = prepared.grid.patch_token_count,
             .visual_token_count = prepared.grid.token_count,
+            .vision_block_depth = vision_block_depth,
             .patch_embedding_dim = patch_embedding_dim,
             .patch_embedding_executed = patch_embedding_executed,
             .visual_position_dim = visual_position_dim,
             .visual_position_embedding_executed = visual_position_embedding_executed,
             .visual_attention_dim = visual_attention_dim,
             .visual_block_attention_executed = visual_block_attention_executed,
+            .visual_attention_blocks_executed = visual_attention_blocks_executed,
             .visual_block_dim = visual_block_dim,
             .visual_block_mlp_executed = visual_block_mlp_executed,
+            .visual_mlp_blocks_executed = visual_mlp_blocks_executed,
             .visual_token_dim = visual_token_dim,
             .visual_merger_executed = visual_merger_executed,
         };
@@ -330,14 +362,17 @@ fn buildIncompleteOutputJson(
         resized_height: ?usize,
         patch_token_count: ?usize,
         visual_token_count: ?usize,
+        vision_block_depth: ?usize,
         patch_embedding_dim: ?usize,
         patch_embedding_executed: bool,
         visual_position_dim: ?usize,
         visual_position_embedding_executed: bool,
         visual_attention_dim: ?usize,
         visual_block_attention_executed: bool,
+        visual_attention_blocks_executed: usize,
         visual_block_dim: ?usize,
         visual_block_mlp_executed: bool,
+        visual_mlp_blocks_executed: usize,
         visual_token_dim: ?usize,
         visual_merger_executed: bool,
         error_message: []const u8,
@@ -383,14 +418,17 @@ fn buildIncompleteOutputJson(
         .resized_height = if (preprocess_summary) |summary| summary.resized_height else null,
         .patch_token_count = if (preprocess_summary) |summary| summary.patch_token_count else null,
         .visual_token_count = if (preprocess_summary) |summary| summary.visual_token_count else null,
+        .vision_block_depth = if (preprocess_summary) |summary| summary.vision_block_depth else null,
         .patch_embedding_dim = if (preprocess_summary) |summary| summary.patch_embedding_dim else null,
         .patch_embedding_executed = if (preprocess_summary) |summary| summary.patch_embedding_executed else false,
         .visual_position_dim = if (preprocess_summary) |summary| summary.visual_position_dim else null,
         .visual_position_embedding_executed = if (preprocess_summary) |summary| summary.visual_position_embedding_executed else false,
         .visual_attention_dim = if (preprocess_summary) |summary| summary.visual_attention_dim else null,
         .visual_block_attention_executed = if (preprocess_summary) |summary| summary.visual_block_attention_executed else false,
+        .visual_attention_blocks_executed = if (preprocess_summary) |summary| summary.visual_attention_blocks_executed else 0,
         .visual_block_dim = if (preprocess_summary) |summary| summary.visual_block_dim else null,
         .visual_block_mlp_executed = if (preprocess_summary) |summary| summary.visual_block_mlp_executed else false,
+        .visual_mlp_blocks_executed = if (preprocess_summary) |summary| summary.visual_mlp_blocks_executed else 0,
         .visual_token_dim = if (preprocess_summary) |summary| summary.visual_token_dim else null,
         .visual_merger_executed = if (preprocess_summary) |summary| summary.visual_merger_executed else false,
         .error_message = "Chandra native inference is not complete yet; model config, weight manifest, and preprocessing readiness are available.",
@@ -433,18 +471,6 @@ fn isRasterImagePath(path: []const u8) bool {
         std.ascii.eqlIgnoreCase(extension, ".gif") or
         std.ascii.eqlIgnoreCase(extension, ".ico") or
         std.ascii.eqlIgnoreCase(extension, ".webp");
-}
-
-fn readNumHeads(model_path: []const u8) usize {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-    const config_path = std.fs.path.join(allocator, &.{ model_path, "config.json" }) catch return 1;
-    defer allocator.free(config_path);
-
-    var parsed = loadConfigFromFile(allocator, config_path) catch return 1;
-    defer parsed.deinit();
-    return @max(@as(usize, 1), parsed.value.vision_config.num_heads);
 }
 
 fn hasAnyFile(model_path: []const u8, names: []const []const u8) bool {
@@ -611,7 +637,7 @@ test "native chandra execute preprocesses image and runs patch embedding stage" 
         \\  },
         \\  "vision_config": {
         \\    "model_type": "qwen3_5",
-        \\    "depth": 1,
+        \\    "depth": 2,
         \\    "hidden_size": 2,
         \\    "intermediate_size": 8,
         \\    "num_heads": 1,
@@ -670,9 +696,12 @@ test "native chandra execute preprocesses image and runs patch embedding stage" 
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"patch_embedding_dim\":2") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"visual_position_embedding_executed\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"visual_position_dim\":2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"vision_block_depth\":2") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"visual_block_attention_executed\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"visual_attention_blocks_executed\":2") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"visual_attention_dim\":2") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"visual_block_mlp_executed\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"visual_mlp_blocks_executed\":2") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"visual_merger_executed\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"visual_token_dim\":2") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"patch_token_count\":2") != null);
@@ -686,7 +715,7 @@ fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8
 
 fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []const u8) !void {
     const header =
-        \\{"visual.patch_embed.proj.weight":{"dtype":"F32","shape":[2,3,1,2,2],"data_offsets":[0,96]},"visual.patch_embed.proj.bias":{"dtype":"F32","shape":[2],"data_offsets":[96,104]},"visual.pos_embed":{"dtype":"F32","shape":[4,2],"data_offsets":[104,136]},"visual.blocks.0.norm1.weight":{"dtype":"F32","shape":[2],"data_offsets":[136,144]},"visual.blocks.0.norm1.bias":{"dtype":"F32","shape":[2],"data_offsets":[144,152]},"visual.blocks.0.attn.qkv.weight":{"dtype":"F32","shape":[6,2],"data_offsets":[152,200]},"visual.blocks.0.attn.qkv.bias":{"dtype":"F32","shape":[6],"data_offsets":[200,224]},"visual.blocks.0.attn.proj.weight":{"dtype":"F32","shape":[2,2],"data_offsets":[224,240]},"visual.blocks.0.attn.proj.bias":{"dtype":"F32","shape":[2],"data_offsets":[240,248]},"visual.blocks.0.norm2.weight":{"dtype":"F32","shape":[2],"data_offsets":[248,256]},"visual.blocks.0.norm2.bias":{"dtype":"F32","shape":[2],"data_offsets":[256,264]},"visual.blocks.0.mlp.linear_fc1.weight":{"dtype":"F32","shape":[3,2],"data_offsets":[264,288]},"visual.blocks.0.mlp.linear_fc1.bias":{"dtype":"F32","shape":[3],"data_offsets":[288,300]},"visual.blocks.0.mlp.linear_fc2.weight":{"dtype":"F32","shape":[2,3],"data_offsets":[300,324]},"visual.blocks.0.mlp.linear_fc2.bias":{"dtype":"F32","shape":[2],"data_offsets":[324,332]},"visual.merger.mlp.0.weight":{"dtype":"F32","shape":[3,2],"data_offsets":[332,356]},"visual.merger.mlp.0.bias":{"dtype":"F32","shape":[3],"data_offsets":[356,368]},"visual.merger.mlp.2.weight":{"dtype":"F32","shape":[2,3],"data_offsets":[368,392]},"visual.merger.mlp.2.bias":{"dtype":"F32","shape":[2],"data_offsets":[392,400]},"model.embed_tokens.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[400,408]},"lm_head.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[408,416]}}
+        \\{"visual.patch_embed.proj.weight":{"dtype":"F32","shape":[2,3,1,2,2],"data_offsets":[0,96]},"visual.patch_embed.proj.bias":{"dtype":"F32","shape":[2],"data_offsets":[96,104]},"visual.pos_embed":{"dtype":"F32","shape":[4,2],"data_offsets":[104,136]},"visual.blocks.0.norm1.weight":{"dtype":"F32","shape":[2],"data_offsets":[136,144]},"visual.blocks.0.norm1.bias":{"dtype":"F32","shape":[2],"data_offsets":[144,152]},"visual.blocks.0.attn.qkv.weight":{"dtype":"F32","shape":[6,2],"data_offsets":[152,200]},"visual.blocks.0.attn.qkv.bias":{"dtype":"F32","shape":[6],"data_offsets":[200,224]},"visual.blocks.0.attn.proj.weight":{"dtype":"F32","shape":[2,2],"data_offsets":[224,240]},"visual.blocks.0.attn.proj.bias":{"dtype":"F32","shape":[2],"data_offsets":[240,248]},"visual.blocks.0.norm2.weight":{"dtype":"F32","shape":[2],"data_offsets":[248,256]},"visual.blocks.0.norm2.bias":{"dtype":"F32","shape":[2],"data_offsets":[256,264]},"visual.blocks.0.mlp.linear_fc1.weight":{"dtype":"F32","shape":[3,2],"data_offsets":[264,288]},"visual.blocks.0.mlp.linear_fc1.bias":{"dtype":"F32","shape":[3],"data_offsets":[288,300]},"visual.blocks.0.mlp.linear_fc2.weight":{"dtype":"F32","shape":[2,3],"data_offsets":[300,324]},"visual.blocks.0.mlp.linear_fc2.bias":{"dtype":"F32","shape":[2],"data_offsets":[324,332]},"visual.blocks.1.norm1.weight":{"dtype":"F32","shape":[2],"data_offsets":[332,340]},"visual.blocks.1.norm1.bias":{"dtype":"F32","shape":[2],"data_offsets":[340,348]},"visual.blocks.1.attn.qkv.weight":{"dtype":"F32","shape":[6,2],"data_offsets":[348,396]},"visual.blocks.1.attn.qkv.bias":{"dtype":"F32","shape":[6],"data_offsets":[396,420]},"visual.blocks.1.attn.proj.weight":{"dtype":"F32","shape":[2,2],"data_offsets":[420,436]},"visual.blocks.1.attn.proj.bias":{"dtype":"F32","shape":[2],"data_offsets":[436,444]},"visual.blocks.1.norm2.weight":{"dtype":"F32","shape":[2],"data_offsets":[444,452]},"visual.blocks.1.norm2.bias":{"dtype":"F32","shape":[2],"data_offsets":[452,460]},"visual.blocks.1.mlp.linear_fc1.weight":{"dtype":"F32","shape":[3,2],"data_offsets":[460,484]},"visual.blocks.1.mlp.linear_fc1.bias":{"dtype":"F32","shape":[3],"data_offsets":[484,496]},"visual.blocks.1.mlp.linear_fc2.weight":{"dtype":"F32","shape":[2,3],"data_offsets":[496,520]},"visual.blocks.1.mlp.linear_fc2.bias":{"dtype":"F32","shape":[2],"data_offsets":[520,528]},"visual.merger.mlp.0.weight":{"dtype":"F32","shape":[3,2],"data_offsets":[528,552]},"visual.merger.mlp.0.bias":{"dtype":"F32","shape":[3],"data_offsets":[552,564]},"visual.merger.mlp.2.weight":{"dtype":"F32","shape":[2,3],"data_offsets":[564,588]},"visual.merger.mlp.2.bias":{"dtype":"F32","shape":[2],"data_offsets":[588,596]},"model.embed_tokens.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[596,604]},"lm_head.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[604,612]}}
     ;
 
     const file = try dir.createFile(relative_path, .{});
@@ -697,7 +726,7 @@ fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []con
     try file.writeAll(&length_prefix);
     try file.writeAll(header);
 
-    var payload: [416]u8 = undefined;
+    var payload: [612]u8 = undefined;
     @memset(&payload, 0);
 
     const patch_weights = [_]f32{
@@ -708,11 +737,9 @@ fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []con
         0, 0, 0, 0,
         0, 0, 0, 0,
     };
-    for (patch_weights, 0..) |value, index| {
-        std.mem.writeInt(u32, payload[index * 4 .. index * 4 + 4][0..4], @bitCast(value), .little);
-    }
-    std.mem.writeInt(u32, payload[96..100], @bitCast(@as(f32, 0.0)), .little);
-    std.mem.writeInt(u32, payload[100..104], @bitCast(@as(f32, 1.0)), .little);
+    writeF32Slice(&payload, 0, &patch_weights);
+    writeF32Scalar(&payload, 96, 0.0);
+    writeF32Scalar(&payload, 100, 1.0);
 
     const visual_pos = [_]f32{
         1, 10,
@@ -720,21 +747,8 @@ fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []con
         3, 30,
         4, 40,
     };
-    for (visual_pos, 0..) |value, index| {
-        const start = 104 + index * 4;
-        std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
-    }
+    writeF32Slice(&payload, 104, &visual_pos);
 
-    const block_attn_norm_weight = [_]f32{ 1, 1 };
-    for (block_attn_norm_weight, 0..) |value, index| {
-        const start = 136 + index * 4;
-        std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
-    }
-    const block_attn_norm_bias = [_]f32{ 0, 0 };
-    for (block_attn_norm_bias, 0..) |value, index| {
-        const start = 144 + index * 4;
-        std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
-    }
     const block_qkv = [_]f32{
         1, 0,
         0, 1,
@@ -743,82 +757,86 @@ fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []con
         1, 0,
         0, 1,
     };
-    for (block_qkv, 0..) |value, index| {
-        const start = 152 + index * 4;
-        std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
-    }
-    const block_qkv_bias = [_]f32{ 0, 0, 0, 0, 0, 0 };
-    for (block_qkv_bias, 0..) |value, index| {
-        const start = 200 + index * 4;
-        std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
-    }
     const block_proj = [_]f32{
         1, 0,
         0, 1,
     };
-    for (block_proj, 0..) |value, index| {
-        const start = 224 + index * 4;
-        std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
-    }
-    std.mem.writeInt(u32, payload[240..244], @bitCast(@as(f32, 0.0)), .little);
-    std.mem.writeInt(u32, payload[244..248], @bitCast(@as(f32, 0.0)), .little);
-
     const block_norm_weight = [_]f32{ 1, 1 };
-    for (block_norm_weight, 0..) |value, index| {
-        const start = 248 + index * 4;
-        std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
-    }
     const block_norm_bias = [_]f32{ 0, 0 };
-    for (block_norm_bias, 0..) |value, index| {
-        const start = 256 + index * 4;
-        std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
-    }
     const block_fc1 = [_]f32{
         1, 0,
         0, 1,
         1, 1,
     };
-    for (block_fc1, 0..) |value, index| {
-        const start = 264 + index * 4;
-        std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
-    }
-    std.mem.writeInt(u32, payload[288..292], @bitCast(@as(f32, 0.0)), .little);
-    std.mem.writeInt(u32, payload[292..296], @bitCast(@as(f32, 0.0)), .little);
-    std.mem.writeInt(u32, payload[296..300], @bitCast(@as(f32, 0.5)), .little);
+    const block_fc1_bias = [_]f32{ 0, 0, 0.5 };
     const block_fc2 = [_]f32{
         1, 0, 0,
         0, 1, 1,
     };
-    for (block_fc2, 0..) |value, index| {
-        const start = 300 + index * 4;
-        std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
-    }
-    std.mem.writeInt(u32, payload[324..328], @bitCast(@as(f32, 0.0)), .little);
-    std.mem.writeInt(u32, payload[328..332], @bitCast(@as(f32, 0.0)), .little);
+    const block_proj_bias = [_]f32{ 0, 0 };
+    const block_qkv_bias = [_]f32{ 0, 0, 0, 0, 0, 0 };
+    const block_fc2_bias = [_]f32{ 0, 0 };
+
+    writeSyntheticVisionBlock(&payload, 136, block_norm_weight[0..], block_norm_bias[0..], block_qkv[0..], block_qkv_bias[0..], block_proj[0..], block_proj_bias[0..], block_norm_weight[0..], block_norm_bias[0..], block_fc1[0..], block_fc1_bias[0..], block_fc2[0..], block_fc2_bias[0..]);
+    writeSyntheticVisionBlock(&payload, 332, block_norm_weight[0..], block_norm_bias[0..], block_qkv[0..], block_qkv_bias[0..], block_proj[0..], block_proj_bias[0..], block_norm_weight[0..], block_norm_bias[0..], block_fc1[0..], block_fc1_bias[0..], block_fc2[0..], block_fc2_bias[0..]);
 
     const merger_fc1 = [_]f32{
         1, 0,
         0, 1,
         1, 1,
     };
-    for (merger_fc1, 0..) |value, index| {
-        const start = 332 + index * 4;
-        std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
-    }
-    std.mem.writeInt(u32, payload[356..360], @bitCast(@as(f32, 0.0)), .little);
-    std.mem.writeInt(u32, payload[360..364], @bitCast(@as(f32, 0.0)), .little);
-    std.mem.writeInt(u32, payload[364..368], @bitCast(@as(f32, 0.5)), .little);
+    writeF32Slice(&payload, 528, &merger_fc1);
+    writeF32Scalar(&payload, 552, 0.0);
+    writeF32Scalar(&payload, 556, 0.0);
+    writeF32Scalar(&payload, 560, 0.5);
 
     const merger_fc2 = [_]f32{
         1, 0, 0,
         0, 1, 1,
     };
-    for (merger_fc2, 0..) |value, index| {
-        const start = 368 + index * 4;
-        std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
-    }
-    std.mem.writeInt(u32, payload[392..396], @bitCast(@as(f32, 0.25)), .little);
-    std.mem.writeInt(u32, payload[396..400], @bitCast(@as(f32, -0.25)), .little);
+    writeF32Slice(&payload, 564, &merger_fc2);
+    writeF32Scalar(&payload, 588, 0.25);
+    writeF32Scalar(&payload, 592, -0.25);
 
     try file.writeAll(&payload);
+}
+
+fn writeSyntheticVisionBlock(
+    payload: []u8,
+    offset: usize,
+    norm1_weight: []const f32,
+    norm1_bias: []const f32,
+    qkv_weight: []const f32,
+    qkv_bias: []const f32,
+    proj_weight: []const f32,
+    proj_bias: []const f32,
+    norm2_weight: []const f32,
+    norm2_bias: []const f32,
+    fc1_weight: []const f32,
+    fc1_bias: []const f32,
+    fc2_weight: []const f32,
+    fc2_bias: []const f32,
+) void {
+    writeF32Slice(payload, offset, norm1_weight);
+    writeF32Slice(payload, offset + 8, norm1_bias);
+    writeF32Slice(payload, offset + 16, qkv_weight);
+    writeF32Slice(payload, offset + 64, qkv_bias);
+    writeF32Slice(payload, offset + 88, proj_weight);
+    writeF32Slice(payload, offset + 104, proj_bias);
+    writeF32Slice(payload, offset + 112, norm2_weight);
+    writeF32Slice(payload, offset + 120, norm2_bias);
+    writeF32Slice(payload, offset + 128, fc1_weight);
+    writeF32Slice(payload, offset + 152, fc1_bias);
+    writeF32Slice(payload, offset + 164, fc2_weight);
+    writeF32Slice(payload, offset + 188, fc2_bias);
+}
+
+fn writeF32Slice(payload: []u8, offset: usize, values: []const f32) void {
+    for (values, 0..) |value, index| {
+        writeF32Scalar(payload, offset + index * 4, value);
+    }
+}
+
+fn writeF32Scalar(payload: []u8, offset: usize, value: f32) void {
+    std.mem.writeInt(u32, payload[offset .. offset + 4][0..4], @bitCast(value), .little);
 }
