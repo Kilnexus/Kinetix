@@ -94,7 +94,7 @@ fn addLegacyImports(
     kinetix_sdk.addImport("sdk_execution", sdk_execution);
 
     const pixio = b.createModule(.{
-        .root_source_file = b.path("../Pixio/src/Pixio.zig"),
+        .root_source_file = b.path("lib/Pixio/src/Pixio.zig"),
         .target = target,
         .optimize = optimize,
     });

@@ -908,6 +908,12 @@ fn loadPreparedInputFromPath(
     input_path: []const u8,
     config: preprocess.ImageProcessorConfig,
 ) !preprocess.PreparedImageInput {
+    if (std.ascii.eqlIgnoreCase(std.fs.path.extension(input_path), ".gif")) {
+        return try loadPreparedInputFromGif(allocator, input_path, config);
+    }
+    if (std.ascii.eqlIgnoreCase(std.fs.path.extension(input_path), ".webp")) {
+        return try loadPreparedInputFromWebp(allocator, input_path, config);
+    }
     if (isRasterImagePath(input_path)) {
         return try preprocess.loadImageInput(allocator, input_path, config);
     }
@@ -918,6 +924,38 @@ fn loadPreparedInputFromPath(
         return try loadPreparedInputFromManifest(allocator, input_path, config);
     }
     return error.UnsupportedImageInput;
+}
+
+fn loadPreparedInputFromGif(
+    allocator: std.mem.Allocator,
+    input_path: []const u8,
+    config: preprocess.ImageProcessorConfig,
+) !preprocess.PreparedImageInput {
+    var animation = try imaging.decodeFileGifFramesRgb8(allocator, input_path);
+    defer animation.deinit();
+
+    const frame_refs = try allocator.alloc(*const imaging.ImageU8, animation.frames.len);
+    defer allocator.free(frame_refs);
+    for (animation.frames, frame_refs) |*frame, *slot| {
+        slot.* = &frame.image;
+    }
+    return try preprocess.prepareImageFramesInput(allocator, frame_refs, config);
+}
+
+fn loadPreparedInputFromWebp(
+    allocator: std.mem.Allocator,
+    input_path: []const u8,
+    config: preprocess.ImageProcessorConfig,
+) !preprocess.PreparedImageInput {
+    var animation = try imaging.decodeFileWebpFramesRgb8(allocator, input_path);
+    defer animation.deinit();
+
+    const frame_refs = try allocator.alloc(*const imaging.ImageU8, animation.frames.len);
+    defer allocator.free(frame_refs);
+    for (animation.frames, frame_refs) |*frame, *slot| {
+        slot.* = &frame.image;
+    }
+    return try preprocess.prepareImageFramesInput(allocator, frame_refs, config);
 }
 
 fn loadPreparedInputFromDirectory(
@@ -1324,6 +1362,64 @@ test "chandra input loader prepares frame sequence from manifest" {
     try std.testing.expectEqual(@as(f32, 64.0), prepared.tensor.data[prepared.tensor.stride_n]);
 }
 
+test "chandra input loader prepares multi-frame gif via pixio animation decode" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeAnimatedGif(tmp.dir, "animated.gif");
+    const gif_path = try tmp.dir.realpathAlloc(std.testing.allocator, "animated.gif");
+    defer std.testing.allocator.free(gif_path);
+
+    var prepared = try loadPreparedInputFromPath(std.testing.allocator, gif_path, .{
+        .do_normalize = false,
+        .do_rescale = false,
+        .do_resize = false,
+        .merge_size = 1,
+        .patch_size = 1,
+        .temporal_patch_size = 2,
+        .size = .{
+            .longest_edge = 1024,
+            .shortest_edge = 1,
+        },
+    });
+    defer prepared.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), prepared.grid.source_frame_count);
+    try std.testing.expectEqual(@as(usize, 2), prepared.grid.frame_count);
+    try std.testing.expectEqual(@as(f32, 255.0), prepared.tensor.data[0]);
+    try std.testing.expectEqual(@as(f32, 0.0), prepared.tensor.data[prepared.tensor.stride_n]);
+    try std.testing.expectEqual(@as(f32, 255.0), prepared.tensor.data[prepared.tensor.stride_n + 1]);
+}
+
+test "chandra input loader prepares multi-frame webp via pixio animation decode" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeAnimatedWebp(tmp.dir, "animated.webp");
+    const webp_path = try tmp.dir.realpathAlloc(std.testing.allocator, "animated.webp");
+    defer std.testing.allocator.free(webp_path);
+
+    var prepared = try loadPreparedInputFromPath(std.testing.allocator, webp_path, .{
+        .do_normalize = false,
+        .do_rescale = false,
+        .do_resize = false,
+        .merge_size = 1,
+        .patch_size = 1,
+        .temporal_patch_size = 2,
+        .size = .{
+            .longest_edge = 1024,
+            .shortest_edge = 1,
+        },
+    });
+    defer prepared.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), prepared.grid.source_frame_count);
+    try std.testing.expectEqual(@as(usize, 2), prepared.grid.frame_count);
+    try std.testing.expectEqual(@as(f32, 255.0), prepared.tensor.data[0]);
+    try std.testing.expectEqual(@as(f32, 0.0), prepared.tensor.data[prepared.tensor.stride_n]);
+    try std.testing.expectEqual(@as(f32, 255.0), prepared.tensor.data[prepared.tensor.stride_n + 1]);
+}
+
 test "multimodal mrope plan continues text after visual axis max" {
     const position_plan = MultimodalPositionPlan.init(.mrope, 6, 1, 3, 2, 2);
 
@@ -1546,6 +1642,47 @@ fn writeSolidPng(dir: std.fs.Dir, relative_path: []const u8, width: usize, heigh
     const encoded = try imaging.encodePngAlloc(std.testing.allocator, &image);
     defer std.testing.allocator.free(encoded);
     try dir.writeFile(.{ .sub_path = relative_path, .data = encoded });
+}
+
+fn writeAnimatedGif(dir: std.fs.Dir, relative_path: []const u8) !void {
+    const gif_bytes = [_]u8{
+        'G',  'I',  'F',  '8',  '9',  'a',
+        0x01, 0x00, 0x01, 0x00, 0x80, 0x00,
+        0x00, 0xff, 0x00, 0x00, 0x00, 0xff,
+        0x00, 0x21, 0xf9, 0x04, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x2c, 0x00, 0x00,
+        0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+        0x00, 0x02, 0x02, 0x44, 0x01, 0x00,
+        0x21, 0xf9, 0x04, 0x00, 0x02, 0x00,
+        0x00, 0x00, 0x2c, 0x00, 0x00, 0x00,
+        0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+        0x02, 0x02, 0x4c, 0x01, 0x00, 0x3b,
+    };
+    try dir.writeFile(.{ .sub_path = relative_path, .data = &gif_bytes });
+}
+
+fn writeAnimatedWebp(dir: std.fs.Dir, relative_path: []const u8) !void {
+    const webp_bytes = [_]u8{
+        0x52, 0x49, 0x46, 0x46, 0x84, 0x00, 0x00, 0x00,
+        0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x58,
+        0x0a, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x41, 0x4e,
+        0x49, 0x4d, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x41, 0x4e, 0x4d, 0x46,
+        0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x64, 0x00, 0x00, 0x02, 0x56, 0x50, 0x38, 0x4c,
+        0x0f, 0x00, 0x00, 0x00, 0x2f, 0x00, 0x00, 0x00,
+        0x00, 0x07, 0x10, 0xfd, 0x8f, 0xfe, 0x07, 0x22,
+        0xa2, 0xff, 0x01, 0x00, 0x41, 0x4e, 0x4d, 0x46,
+        0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xc8, 0x00, 0x00, 0x00, 0x56, 0x50, 0x38, 0x4c,
+        0x0f, 0x00, 0x00, 0x00, 0x2f, 0x00, 0x00, 0x00,
+        0x00, 0x07, 0xd0, 0xff, 0x88, 0xfe, 0x07, 0x22,
+        0xa2, 0xff, 0x01, 0x00,
+    };
+    try dir.writeFile(.{ .sub_path = relative_path, .data = &webp_bytes });
 }
 
 fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []const u8) !void {
