@@ -32,6 +32,8 @@ pub fn loadParsedConfig(backing_allocator: std.mem.Allocator, path: []const u8) 
             .vocab_size = parsed.value.vocab_size,
             .max_position_embeddings = parsed.value.max_position_embeddings,
             .rope_theta = 0.0,
+            .rope_position_mode = .scalar,
+            .mrope_sections = .{ 0, 0, 0, 0 },
             .rms_norm_eps = parsed.value.layer_norm_eps,
             .torch_dtype = parsed.value.torch_dtype,
             .tie_word_embeddings = false,

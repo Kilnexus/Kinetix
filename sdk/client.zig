@@ -188,6 +188,8 @@ pub const OCRResult = struct {
     text_prompt_token_count: usize,
     text_prefill_token_count: usize,
     text_prefill_executed: bool,
+    decoder_rope_position_mode: ?[]u8,
+    decoder_mrope_sections: [4]u32,
     decoder_logits_dim: ?usize,
     decoder_next_token_id: ?usize,
     text_decode_executed: bool,
@@ -218,6 +220,7 @@ pub const OCRResult = struct {
         if (self.html) |value| allocator.free(value);
         if (self.json_output) |value| allocator.free(value);
         if (self.error_message) |value| allocator.free(value);
+        if (self.decoder_rope_position_mode) |value| allocator.free(value);
         self.* = undefined;
     }
 };
@@ -264,6 +267,8 @@ const ParsedOCRReceipt = struct {
     text_prompt_token_count: usize = 0,
     text_prefill_token_count: usize = 0,
     text_prefill_executed: bool = false,
+    decoder_rope_position_mode: ?[]const u8 = null,
+    decoder_mrope_sections: [4]u32 = .{ 0, 0, 0, 0 },
     decoder_logits_dim: ?usize = null,
     decoder_next_token_id: ?usize = null,
     text_decode_executed: bool = false,
@@ -770,6 +775,8 @@ fn copyOCRResult(allocator: std.mem.Allocator, result: runtime_types.ExecutionRe
         .text_prompt_token_count = parsed.value.text_prompt_token_count,
         .text_prefill_token_count = parsed.value.text_prefill_token_count,
         .text_prefill_executed = parsed.value.text_prefill_executed,
+        .decoder_rope_position_mode = try dupeOptionalString(allocator, parsed.value.decoder_rope_position_mode),
+        .decoder_mrope_sections = parsed.value.decoder_mrope_sections,
         .decoder_logits_dim = parsed.value.decoder_logits_dim,
         .decoder_next_token_id = parsed.value.decoder_next_token_id,
         .text_decode_executed = parsed.value.text_decode_executed,

@@ -19,6 +19,7 @@ const ChandraTextConfig = struct {
     vocab_size: usize,
     max_position_embeddings: usize,
     rope_theta: ?f64 = null,
+    rope_parameters: ?std.json.Value = null,
     rms_norm_eps: ?f64 = null,
     torch_dtype: ?[]const u8 = null,
     tie_word_embeddings: ?bool = null,
@@ -56,6 +57,12 @@ pub const inspect_sample_tensors = [_][]const u8{
     "lm_head.weight",
 };
 
+const ResolvedRope = struct {
+    theta: f64,
+    position_mode: decoder_types.RopePositionMode = .scalar,
+    mrope_sections: [4]u32 = .{ 0, 0, 0, 0 },
+};
+
 pub fn loadParsedConfig(backing_allocator: std.mem.Allocator, path: []const u8) !decoder_types.ParsedConfig {
     var arena = std.heap.ArenaAllocator.init(backing_allocator);
     errdefer arena.deinit();
@@ -80,6 +87,8 @@ pub fn loadParsedConfig(backing_allocator: std.mem.Allocator, path: []const u8) 
                 .vocab_size = parsed.vocab_size,
                 .max_position_embeddings = parsed.max_position_embeddings,
                 .rope_theta = parsed.rope_theta,
+                .rope_position_mode = .scalar,
+                .mrope_sections = .{ 0, 0, 0, 0 },
                 .rms_norm_eps = parsed.rms_norm_eps,
                 .torch_dtype = parsed.torch_dtype,
                 .tie_word_embeddings = parsed.tie_word_embeddings,
@@ -90,6 +99,7 @@ pub fn loadParsedConfig(backing_allocator: std.mem.Allocator, path: []const u8) 
     const chandra = try std.json.parseFromSliceLeaky(ChandraConfig, allocator, bytes, .{
         .ignore_unknown_fields = true,
     });
+    const rope = resolveChandraRope(chandra.text_config);
     return .{
         .arena = arena,
         .value = .{
@@ -103,11 +113,62 @@ pub fn loadParsedConfig(backing_allocator: std.mem.Allocator, path: []const u8) 
             .head_dim = chandra.text_config.head_dim,
             .vocab_size = chandra.text_config.vocab_size,
             .max_position_embeddings = chandra.text_config.max_position_embeddings,
-            .rope_theta = chandra.text_config.rope_theta orelse 1_000_000.0,
+            .rope_theta = rope.theta,
+            .rope_position_mode = rope.position_mode,
+            .mrope_sections = rope.mrope_sections,
             .rms_norm_eps = chandra.text_config.rms_norm_eps orelse 1e-6,
             .torch_dtype = chandra.text_config.torch_dtype orelse "bfloat16",
             .tie_word_embeddings = chandra.text_config.tie_word_embeddings orelse false,
         },
+    };
+}
+
+fn resolveChandraRope(text_config: ChandraTextConfig) ResolvedRope {
+    var resolved = ResolvedRope{
+        .theta = text_config.rope_theta orelse 1_000_000.0,
+    };
+    const rope_parameters = text_config.rope_parameters orelse return resolved;
+    if (rope_parameters != .object) return resolved;
+
+    if (rope_parameters.object.get("full_attention")) |full_attention| {
+        if (full_attention == .object) {
+            if (full_attention.object.get("rope_theta")) |theta_value| {
+                if (jsonNumberToF64(theta_value)) |theta| resolved.theta = theta;
+            }
+        }
+    } else if (rope_parameters.object.get("rope_theta")) |theta_value| {
+        if (jsonNumberToF64(theta_value)) |theta| resolved.theta = theta;
+    }
+
+    if (rope_parameters.object.get("mrope_section")) |sections_value| {
+        if (sections_value == .array) {
+            resolved.position_mode = .mrope;
+            for (0..@min(sections_value.array.items.len, resolved.mrope_sections.len)) |index| {
+                const item = sections_value.array.items[index];
+                resolved.mrope_sections[index] = jsonNumberToU32(item) orelse 0;
+            }
+        }
+    }
+
+    return resolved;
+}
+
+fn jsonNumberToF64(value: std.json.Value) ?f64 {
+    return switch (value) {
+        .integer => |number| @floatFromInt(number),
+        .float => |number| number,
+        else => null,
+    };
+}
+
+fn jsonNumberToU32(value: std.json.Value) ?u32 {
+    return switch (value) {
+        .integer => |number| std.math.cast(u32, number),
+        .float => |number| blk: {
+            if (number < 0 or @floor(number) != number) break :blk null;
+            break :blk std.math.cast(u32, @as(i64, @intFromFloat(number)));
+        },
+        else => null,
     };
 }
 
@@ -168,4 +229,49 @@ test "adapter family loads chandra wrapped qwen text config into shared decoder 
     try testing.expectEqual(@as(f64, 1e-6), parsed.value.rms_norm_eps);
     try testing.expectEqualStrings("bfloat16", parsed.value.torch_dtype);
     try testing.expect(!parsed.value.tie_word_embeddings);
+    try testing.expectEqual(decoder_types.RopePositionMode.scalar, parsed.value.rope_position_mode);
+    try testing.expectEqualSlices(u32, &.{ 0, 0, 0, 0 }, &parsed.value.mrope_sections);
+}
+
+test "adapter family resolves chandra rope parameters into shared decoder config" {
+    const testing = std.testing;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{
+        .sub_path = "config.json",
+        .data =
+        \\{
+        \\  "model_type": "qwen3_5",
+        \\  "text_config": {
+        \\    "model_type": "qwen3_5_text",
+        \\    "hidden_size": 2560,
+        \\    "intermediate_size": 9216,
+        \\    "num_hidden_layers": 32,
+        \\    "num_attention_heads": 16,
+        \\    "num_key_value_heads": 4,
+        \\    "head_dim": 160,
+        \\    "vocab_size": 248320,
+        \\    "max_position_embeddings": 262144,
+        \\    "rope_parameters": {
+        \\      "full_attention": {
+        \\        "rope_theta": 250000.0
+        \\      },
+        \\      "mrope_section": [16, 24, 24]
+        \\    }
+        \\  }
+        \\}
+        ,
+    });
+
+    const path = try tmp.dir.realpathAlloc(testing.allocator, "config.json");
+    defer testing.allocator.free(path);
+
+    var parsed = try loadParsedConfig(testing.allocator, path);
+    defer parsed.deinit();
+
+    try testing.expectEqual(@as(f64, 250000.0), parsed.value.rope_theta);
+    try testing.expectEqual(decoder_types.RopePositionMode.mrope, parsed.value.rope_position_mode);
+    try testing.expectEqualSlices(u32, &.{ 16, 24, 24, 0 }, &parsed.value.mrope_sections);
 }

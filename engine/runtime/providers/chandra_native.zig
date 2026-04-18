@@ -111,6 +111,8 @@ const PreprocessSummary = struct {
     text_prompt_token_count: usize = 0,
     text_prefill_token_count: usize = 0,
     text_prefill_executed: bool = false,
+    decoder_rope_position_mode: ?[]const u8 = null,
+    decoder_mrope_sections: [4]u32 = .{ 0, 0, 0, 0 },
     decoder_logits_dim: ?usize = null,
     decoder_next_token_id: ?usize = null,
     text_decode_executed: bool = false,
@@ -193,6 +195,8 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
         var text_prompt_token_count: usize = 0;
         var text_prefill_token_count: usize = 0;
         var text_prefill_executed = false;
+        var decoder_rope_position_mode: ?[]const u8 = null;
+        var decoder_mrope_sections: [4]u32 = .{ 0, 0, 0, 0 };
         var decoder_logits_dim: ?usize = null;
         var decoder_next_token_id: ?usize = null;
         var text_decode_executed = false;
@@ -276,6 +280,8 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
                                         ) catch null;
                                         if (text_runtime) |*runtime| {
                                             defer runtime.deinit();
+                                            decoder_rope_position_mode = runtime.cfg.rope_position_mode.name();
+                                            decoder_mrope_sections = runtime.cfg.mrope_sections;
 
                                             var prompt_token_ids: ?[]usize = null;
                                             defer if (prompt_token_ids) |ids| allocator.free(ids);
@@ -460,6 +466,8 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
             .text_prompt_token_count = text_prompt_token_count,
             .text_prefill_token_count = text_prefill_token_count,
             .text_prefill_executed = text_prefill_executed,
+            .decoder_rope_position_mode = decoder_rope_position_mode,
+            .decoder_mrope_sections = decoder_mrope_sections,
             .decoder_logits_dim = decoder_logits_dim,
             .decoder_next_token_id = decoder_next_token_id,
             .text_decode_executed = text_decode_executed,
@@ -598,6 +606,8 @@ fn buildIncompleteOutputJson(
         text_prompt_token_count: usize,
         text_prefill_token_count: usize,
         text_prefill_executed: bool,
+        decoder_rope_position_mode: ?[]const u8,
+        decoder_mrope_sections: [4]u32,
         decoder_logits_dim: ?usize,
         decoder_next_token_id: ?usize,
         text_decode_executed: bool,
@@ -607,7 +617,13 @@ fn buildIncompleteOutputJson(
     };
 
     const receipt = Receipt{
-        .status = "ocr_native_backend_incomplete",
+        .status = if (preprocess_summary) |summary|
+            if (summary.text_decode_executed and summary.generated_output != null)
+                "ocr_native_text_decoded_partial"
+            else
+                "ocr_native_backend_incomplete"
+        else
+            "ocr_native_backend_incomplete",
         .operation = context.operation,
         .model_family = "chandra",
         .model_path = context.model_path,
@@ -686,11 +702,19 @@ fn buildIncompleteOutputJson(
         .text_prompt_token_count = if (preprocess_summary) |summary| summary.text_prompt_token_count else 0,
         .text_prefill_token_count = if (preprocess_summary) |summary| summary.text_prefill_token_count else 0,
         .text_prefill_executed = if (preprocess_summary) |summary| summary.text_prefill_executed else false,
+        .decoder_rope_position_mode = if (preprocess_summary) |summary| summary.decoder_rope_position_mode else null,
+        .decoder_mrope_sections = if (preprocess_summary) |summary| summary.decoder_mrope_sections else .{ 0, 0, 0, 0 },
         .decoder_logits_dim = if (preprocess_summary) |summary| summary.decoder_logits_dim else null,
         .decoder_next_token_id = if (preprocess_summary) |summary| summary.decoder_next_token_id else null,
         .text_decode_executed = if (preprocess_summary) |summary| summary.text_decode_executed else false,
         .decoded_token_count = if (preprocess_summary) |summary| summary.decoded_token_count else 0,
-        .error_message = "Chandra native inference is not complete yet; model config, weight manifest, and preprocessing readiness are available.",
+        .error_message = if (preprocess_summary) |summary|
+            if (summary.text_decode_executed and summary.generated_output != null)
+                "Chandra native OCR can now execute multimodal prefill and partial text decoding, but full OCR quality and multimodal position handling are still in progress."
+            else
+                "Chandra native inference is not complete yet; model config, weight manifest, and preprocessing readiness are available."
+        else
+            "Chandra native inference is not complete yet; model config, weight manifest, and preprocessing readiness are available.",
         .readiness = .{
             .has_config = readiness.has_config,
             .has_tokenizer = readiness.has_tokenizer,

@@ -12,6 +12,18 @@ pub const Architecture = enum {
     }
 };
 
+pub const RopePositionMode = enum {
+    scalar,
+    mrope,
+
+    pub fn name(self: RopePositionMode) []const u8 {
+        return switch (self) {
+            .scalar => "scalar",
+            .mrope => "mrope",
+        };
+    }
+};
+
 pub const DecoderConfig = struct {
     architecture: Architecture,
     model_type: []const u8,
@@ -24,6 +36,8 @@ pub const DecoderConfig = struct {
     vocab_size: usize,
     max_position_embeddings: usize,
     rope_theta: f64,
+    rope_position_mode: RopePositionMode = .scalar,
+    mrope_sections: [4]u32 = .{ 0, 0, 0, 0 },
     rms_norm_eps: f64,
     torch_dtype: []const u8,
     tie_word_embeddings: bool,
