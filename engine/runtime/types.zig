@@ -62,7 +62,7 @@ pub const ExecutionNote = enum {
     vision_graph_ready,
     vision_shared_detect,
     ocr_model_ready,
-    ocr_shared_infer,
+    ocr_swiftocr_native,
     ocr_chandra_native,
 };
 
@@ -136,7 +136,6 @@ pub const CompatibilityStatus = enum {
 pub const CompatibilityWarning = enum {
     legacy_graph_bridge_required,
     native_batch_unavailable,
-    ocr_pipeline_skeleton,
     document_input_partial,
 };
 

@@ -1,8 +1,8 @@
 const std = @import("std");
 const chandra_native = @import("../providers/chandra_native.zig");
+const swiftocr_native = @import("../providers/swiftocr_native.zig");
 const task = @import("../../core/task.zig");
 const handle_mod = @import("../model/handle.zig");
-const ocr_shared = @import("../providers/ocr_shared.zig");
 const text_shared = @import("../providers/text_shared.zig");
 const types = @import("../types.zig");
 const vision_shared = @import("../providers/vision_shared.zig");
@@ -121,27 +121,20 @@ fn executeSwiftOCR(
     request: types.RuntimeRequest,
 ) !types.RuntimeResult {
     switch (request.input) {
-        .none, .image_path => {},
+        .image_path => {},
         else => return error.InvalidInputPayload,
     }
-
+    const input_path = request.input.asString() orelse return error.MissingInputPayload;
     const model_path = handle.normalized.artifacts.ocr_model_path orelse return error.MissingOCRModelArtifact;
-    const infer_output = try ocr_shared.maybeRunInfer(
-        allocator,
-        model_path,
-        request.operation,
-        request.execution,
-        request.input.asString(),
-    );
-    const output = try ocr_shared.buildOutputJson(allocator, .{
+    const output = try swiftocr_native.execute(allocator, .{
         .operation = request.operation,
-        .model_family = handle.normalized.descriptor.family,
         .model_path = model_path,
-        .input_path = request.input.asString(),
-    }, infer_output);
+        .input_path = input_path,
+        .execution = request.execution,
+    });
     return .{
         .origin = .shared_adapter,
-        .note = if (infer_output != null) .ocr_shared_infer else .ocr_model_ready,
+        .note = .ocr_swiftocr_native,
         .output = .{ .json = output },
     };
 }

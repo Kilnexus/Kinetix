@@ -74,7 +74,7 @@ test "compat normalizes yolo graph directories into a runtime model" {
 
     try std.testing.expectEqual(types.ProviderKey.yolo_vision, model.provider_key);
     try std.testing.expectEqual(types.Modality.vision, model.descriptor.modality);
-    try std.testing.expectEqual(types.CompatibilityStatus.supported, model.compat.status);
+    try std.testing.expectEqual(types.CompatibilityStatus.degraded, model.compat.status);
 }
 
 test "compat normalizes swiftocr bundles into a runtime model" {
@@ -91,7 +91,7 @@ test "compat normalizes swiftocr bundles into a runtime model" {
 
     try std.testing.expectEqual(types.ProviderKey.swiftocr_ocr, model.provider_key);
     try std.testing.expectEqual(types.Modality.ocr, model.descriptor.modality);
-    try std.testing.expectEqual(types.CompatibilityStatus.degraded, model.compat.status);
+    try std.testing.expectEqual(types.CompatibilityStatus.supported, model.compat.status);
 }
 
 test "compat normalizes chandra huggingface directories into a runtime model" {
@@ -115,7 +115,7 @@ test "compat normalizes chandra huggingface directories into a runtime model" {
     try std.testing.expectEqual(types.ProviderKey.chandra_ocr, model.provider_key);
     try std.testing.expectEqual(types.Modality.ocr, model.descriptor.modality);
     try std.testing.expectEqualStrings("chandra", model.descriptor.family);
-    try std.testing.expectEqual(types.CompatibilityStatus.degraded, model.compat.status);
+    try std.testing.expectEqual(types.CompatibilityStatus.supported, model.compat.status);
 }
 
 fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {

@@ -15,7 +15,7 @@ pub const providers = struct {
     pub const chandra_store = @import("providers/chandra_store.zig");
     pub const chandra_vision = @import("providers/chandra_vision.zig");
     pub const chandra_weights = @import("providers/chandra_weights.zig");
+    pub const swiftocr_native = @import("providers/swiftocr_native.zig");
     pub const text_shared = @import("providers/text_shared.zig");
     pub const vision_shared = @import("providers/vision_shared.zig");
-    pub const ocr_shared = @import("providers/ocr_shared.zig");
 };

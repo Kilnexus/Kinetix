@@ -7,7 +7,10 @@ pub fn build(b: *std.Build) void {
         bool,
         "local_pixio",
         "Use local lib/Pixio checkout for development instead of the pinned remote Pixio dependency",
-    ) orelse false;
+    ) orelse blk: {
+        std.fs.cwd().access("lib/Pixio/src/Pixio.zig", .{}) catch break :blk false;
+        break :blk true;
+    };
     const legacy_imports = addLegacyImports(b, target, optimize, local_pixio);
 
     const kinetix_module = createRootModule(b, target, optimize, legacy_imports, "sdk/kinetix.zig");

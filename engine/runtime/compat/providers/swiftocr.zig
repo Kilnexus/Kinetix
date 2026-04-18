@@ -4,7 +4,7 @@ const normalized = @import("../normalized_model.zig");
 const report_mod = @import("../capability_report.zig");
 const types = @import("../../types.zig");
 
-const operations = [_][]const u8{ "infer-ocr", "detect-text", "recognize-text" };
+const operations = [_][]const u8{"infer-ocr"};
 const accepted_inputs = [_]types.InputKind{.image_path};
 
 pub fn tryNormalize(
@@ -37,8 +37,8 @@ pub fn tryNormalize(
 
     const compat = try report_mod.CompatibilityReport.init(
         allocator,
-        .degraded,
-        &.{.ocr_pipeline_skeleton},
+        .supported,
+        &.{},
         &.{.ocr_single_file_bundle},
     );
     errdefer {
@@ -54,7 +54,7 @@ pub fn tryNormalize(
             .supports_async = false,
             .supports_stream = false,
             .supports_batch = false,
-            .supports_native_exec = false,
+            .supports_native_exec = true,
             .supported_operations = &operations,
             .accepted_inputs = &accepted_inputs,
         },
