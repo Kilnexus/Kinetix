@@ -6,8 +6,10 @@ pub const RoPETable = rope.RoPETable;
 
 pub const applyRoPEToHeadInPlace = rope.applyRoPEToHeadInPlace;
 pub const applyRoPEToHeadWithTableInPlace = rope.applyRoPEToHeadWithTableInPlace;
+pub const applyRoPEToHeadWithPositionInPlace = rope.applyRoPEToHeadWithPositionInPlace;
 pub const applyRoPEToHeadsInPlace = rope.applyRoPEToHeadsInPlace;
 pub const applyRoPEToHeadsWithTableInPlace = rope.applyRoPEToHeadsWithTableInPlace;
+pub const applyRoPEToHeadsWithPositionInPlace = rope.applyRoPEToHeadsWithPositionInPlace;
 
 pub const softmaxInPlace = basic.softmaxInPlace;
 pub const scaledDotProductAttentionSingleQuery = basic.scaledDotProductAttentionSingleQuery;

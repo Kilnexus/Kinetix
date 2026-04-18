@@ -24,6 +24,27 @@ pub const RopePositionMode = enum {
     }
 };
 
+pub const TokenPosition = struct {
+    mode: RopePositionMode = .scalar,
+    scalar: usize = 0,
+    axes: [4]usize = .{ 0, 0, 0, 0 },
+
+    pub fn scalarPosition(position: usize) TokenPosition {
+        return .{
+            .mode = .scalar,
+            .scalar = position,
+        };
+    }
+
+    pub fn mropePosition(axes: [4]usize) TokenPosition {
+        return .{
+            .mode = .mrope,
+            .scalar = axes[3],
+            .axes = axes,
+        };
+    }
+};
+
 pub const DecoderConfig = struct {
     architecture: Architecture,
     model_type: []const u8,

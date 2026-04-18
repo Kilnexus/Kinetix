@@ -39,6 +39,8 @@ pub const LayerWeights = struct {
             .num_key_value_heads = cfg.num_key_value_heads,
             .head_dim = cfg.head_dim,
             .rope_theta = @floatCast(cfg.rope_theta),
+            .rope_position_mode = cfg.rope_position_mode,
+            .mrope_sections = cfg.mrope_sections,
             .rms_norm_eps = @floatCast(cfg.rms_norm_eps),
         };
 
@@ -102,7 +104,7 @@ pub const LayerWeights = struct {
         parallel_pool: *parallel_rows.Pool,
         workspace: *workspace_mod.Workspace,
         cache: *kv_cache_cache.LayerKVCache,
-        position: usize,
+        position: decoder_family.TokenPosition,
         hidden_in: []const f32,
         hidden_out: []f32,
     ) !void {
@@ -120,7 +122,7 @@ pub const LayerWeights = struct {
             try cpu.rmsNormRepeated(workspace.k_proj, workspace.k_proj, self.spec.num_key_value_heads, self.spec.head_dim, weight, self.spec.rms_norm_eps);
         }
 
-        try gqa_attention.applyRoPEToProjectedHeadsWithTableInPlace(
+        try gqa_attention.applyRoPEToProjectedHeadsWithPositionInPlace(
             self.spec.attentionSpec(),
             workspace.q_proj,
             workspace.k_proj,

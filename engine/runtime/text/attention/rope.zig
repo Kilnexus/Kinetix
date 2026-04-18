@@ -1,4 +1,5 @@
 const std = @import("std");
+const decoder_types = @import("../decoder_types.zig");
 
 pub const RoPETable = struct {
     allocator: std.mem.Allocator,
@@ -142,6 +143,114 @@ pub fn applyRoPEToHeadsWithTableInPlace(
     }
 }
 
+pub fn applyRoPEToHeadWithPositionInPlace(
+    head: []f32,
+    table: *const RoPETable,
+    position: decoder_types.TokenPosition,
+    mrope_sections: [4]u32,
+) !void {
+    if (head.len % 2 != 0) return error.InvalidHeadDim;
+    if (table.head_dim != head.len) return error.SizeMismatch;
+
+    if (position.mode == .scalar) {
+        return applyRoPEToHeadWithTableInPlace(
+            head,
+            table.cosForPosition(position.scalar),
+            table.sinForPosition(position.scalar),
+        );
+    }
+
+    const half = head.len / 2;
+    const sections = normalizeSections(half, mrope_sections);
+    var offset: usize = 0;
+    for (sections, 0..) |section_len, axis_index| {
+        if (section_len == 0) continue;
+        const axis_position = if (position.mode == .mrope) position.axes[axis_index] else position.scalar;
+        if (axis_position >= table.max_seq_len) return error.PositionOutOfBounds;
+        try applyRoPESectionWithTableInPlace(
+            head,
+            table.cosForPosition(axis_position),
+            table.sinForPosition(axis_position),
+            offset,
+            section_len,
+        );
+        offset += section_len;
+    }
+}
+
+pub fn applyRoPEToHeadsWithPositionInPlace(
+    heads: []f32,
+    num_heads: usize,
+    head_dim: usize,
+    table: *const RoPETable,
+    position: decoder_types.TokenPosition,
+    mrope_sections: [4]u32,
+) !void {
+    if (heads.len != num_heads * head_dim) return error.SizeMismatch;
+
+    for (0..num_heads) |head_idx| {
+        const start = head_idx * head_dim;
+        try applyRoPEToHeadWithPositionInPlace(
+            heads[start .. start + head_dim],
+            table,
+            position,
+            mrope_sections,
+        );
+    }
+}
+
+fn applyRoPESectionWithTableInPlace(
+    head: []f32,
+    cos_table: []const f32,
+    sin_table: []const f32,
+    start: usize,
+    len: usize,
+) !void {
+    if (head.len % 2 != 0) return error.InvalidHeadDim;
+    const half = head.len / 2;
+    if (start + len > half) return error.SizeMismatch;
+    if (cos_table.len != half or sin_table.len != half) return error.SizeMismatch;
+
+    for (0..len) |local_index| {
+        const freq_index = start + local_index;
+        const x0 = head[freq_index];
+        const x1 = head[freq_index + half];
+        const cos_angle = cos_table[freq_index];
+        const sin_angle = sin_table[freq_index];
+        head[freq_index] = x0 * cos_angle - x1 * sin_angle;
+        head[freq_index + half] = x1 * cos_angle + x0 * sin_angle;
+    }
+}
+
+fn normalizeSections(half_dim: usize, mrope_sections: [4]u32) [4]usize {
+    var normalized: [4]usize = .{ 0, 0, 0, 0 };
+    var remaining = half_dim;
+    var last_active: usize = 0;
+    var has_active = false;
+
+    for (mrope_sections, 0..) |section, index| {
+        if (remaining == 0) break;
+        const requested = std.math.cast(usize, section) orelse remaining;
+        const actual = @min(requested, remaining);
+        normalized[index] = actual;
+        if (actual != 0) {
+            last_active = index;
+            has_active = true;
+        }
+        remaining -= actual;
+    }
+
+    if (remaining != 0) {
+        if (has_active) {
+            normalized[last_active] += remaining;
+        } else {
+            normalized[0] = remaining;
+        }
+    }
+
+    return normalized;
+}
+
 test "rope leaves head unchanged at position zero" {
     const testing = std.testing;
 
@@ -187,4 +296,37 @@ test "rope rotates first and second half pairs at nonzero position" {
     try testing.expectApproxEqAbs(@as(f32, 2.0) * cos1 - @as(f32, 4.0) * sin1, head[1], 1e-6);
     try testing.expectApproxEqAbs(@as(f32, 3.0) * cos0 + @as(f32, 1.0) * sin0, head[2], 1e-6);
     try testing.expectApproxEqAbs(@as(f32, 4.0) * cos1 + @as(f32, 2.0) * sin1, head[3], 1e-6);
+}
+
+test "mrope sections rotate independent axes on configured frequency ranges" {
+    const testing = std.testing;
+
+    var table = try RoPETable.init(testing.allocator, 8, 8, 10000.0);
+    defer table.deinit();
+
+    var head = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    try applyRoPEToHeadWithPositionInPlace(
+        &head,
+        &table,
+        decoder_types.TokenPosition.mropePosition(.{ 0, 1, 2, 0 }),
+        .{ 1, 1, 2, 0 },
+    );
+
+    try testing.expectApproxEqAbs(@as(f32, 1.0), head[0], 1e-6);
+    try testing.expectApproxEqAbs(@as(f32, 5.0), head[4], 1e-6);
+
+    const cos1 = table.cosForPosition(1)[1];
+    const sin1 = table.sinForPosition(1)[1];
+    try testing.expectApproxEqAbs(@as(f32, 2.0) * cos1 - @as(f32, 6.0) * sin1, head[1], 1e-6);
+    try testing.expectApproxEqAbs(@as(f32, 6.0) * cos1 + @as(f32, 2.0) * sin1, head[5], 1e-6);
+
+    const cos2_dim2 = table.cosForPosition(2)[2];
+    const sin2_dim2 = table.sinForPosition(2)[2];
+    try testing.expectApproxEqAbs(@as(f32, 3.0) * cos2_dim2 - @as(f32, 7.0) * sin2_dim2, head[2], 1e-6);
+    try testing.expectApproxEqAbs(@as(f32, 7.0) * cos2_dim2 + @as(f32, 3.0) * sin2_dim2, head[6], 1e-6);
+
+    const cos2_dim3 = table.cosForPosition(2)[3];
+    const sin2_dim3 = table.sinForPosition(2)[3];
+    try testing.expectApproxEqAbs(@as(f32, 4.0) * cos2_dim3 - @as(f32, 8.0) * sin2_dim3, head[3], 1e-6);
+    try testing.expectApproxEqAbs(@as(f32, 8.0) * cos2_dim3 + @as(f32, 4.0) * sin2_dim3, head[7], 1e-6);
 }

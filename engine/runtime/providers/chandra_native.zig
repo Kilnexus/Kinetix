@@ -7,6 +7,7 @@ const vision = @import("chandra_vision.zig");
 const weights = @import("chandra_weights.zig");
 const decoder_runtime = @import("../text/decoder_runtime.zig");
 const decoder_family = @import("../text/decoder_family.zig");
+const decoder_types = @import("../text/decoder_types.zig");
 const text_backend_scheme = @import("../text/backend_scheme.zig");
 const kv_cache = @import("../text/kv_cache.zig");
 const streaming = @import("../text/streaming.zig");
@@ -149,6 +150,31 @@ const MultimodalPositionPlan = struct {
         };
     }
 };
+
+fn visualTokenPosition(
+    rope_position_mode: decoder_types.RopePositionMode,
+    scalar_position: usize,
+    token_index: usize,
+    grid_width: usize,
+) decoder_types.TokenPosition {
+    if (rope_position_mode == .scalar or grid_width == 0) {
+        return decoder_types.TokenPosition.scalarPosition(scalar_position);
+    }
+
+    const y = token_index / grid_width;
+    const x = token_index % grid_width;
+    return decoder_types.TokenPosition.mropePosition(.{ 0, y, x, scalar_position });
+}
+
+fn textTokenPosition(
+    rope_position_mode: decoder_types.RopePositionMode,
+    scalar_position: usize,
+) decoder_types.TokenPosition {
+    if (rope_position_mode == .scalar) {
+        return decoder_types.TokenPosition.scalarPosition(scalar_position);
+    }
+    return decoder_types.TokenPosition.mropePosition(.{ scalar_position, scalar_position, scalar_position, scalar_position });
+}
 
 pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
     if (context.execution != .sync) return error.UnsupportedExecutionMode;
@@ -332,22 +358,24 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
                                                 if (workspace) |*decoder_workspace| {
                                                     defer decoder_workspace.deinit();
 
-                                                    const current_logits = runtime.forwardTokenIdAtPosition(
+                                                    const current_logits = runtime.forwardTokenIdWithPosition(
                                                         decoder_workspace,
                                                         model_cache,
                                                         config.value.vision_start_token_id,
-                                                        position_plan.vision_start_position,
+                                                        textTokenPosition(runtime.cfg.rope_position_mode, position_plan.vision_start_position),
                                                     ) catch null;
                                                     if (current_logits) |start_logits| {
                                                         var latest_logits = start_logits;
-                                                        const visual_positions = allocSequentialPositions(
+                                                        const visual_positions = allocMultimodalVisualPositions(
                                                             allocator,
+                                                            runtime.cfg.rope_position_mode,
                                                             position_plan.visual_start_position,
                                                             tokens.token_count,
+                                                            tokens.grid_width,
                                                         ) catch null;
                                                         defer if (visual_positions) |positions| allocator.free(positions);
                                                         if (visual_positions) |positions| {
-                                                            latest_logits = runtime.prefillEmbeddingsAtPositions(
+                                                            latest_logits = runtime.prefillEmbeddingsWithPositions(
                                                                 decoder_workspace,
                                                                 model_cache,
                                                                 tokens.data,
@@ -355,21 +383,22 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
                                                                 positions,
                                                             ) catch latest_logits;
                                                         }
-                                                        latest_logits = runtime.forwardTokenIdAtPosition(
+                                                        latest_logits = runtime.forwardTokenIdWithPosition(
                                                             decoder_workspace,
                                                             model_cache,
                                                             config.value.vision_end_token_id,
-                                                            position_plan.vision_end_position,
+                                                            textTokenPosition(runtime.cfg.rope_position_mode, position_plan.vision_end_position),
                                                         ) catch latest_logits;
                                                         if (prompt_token_ids) |ids| {
-                                                            const prompt_positions = allocSequentialPositions(
+                                                            const prompt_positions = allocMultimodalTextPositions(
                                                                 allocator,
+                                                                runtime.cfg.rope_position_mode,
                                                                 position_plan.prompt_start_position,
                                                                 ids.len,
                                                             ) catch null;
                                                             defer if (prompt_positions) |positions| allocator.free(positions);
                                                             if (prompt_positions) |positions| {
-                                                                latest_logits = runtime.prefillTokenIdsAtPositions(
+                                                                latest_logits = runtime.prefillTokenIdsWithPositions(
                                                                     decoder_workspace,
                                                                     model_cache,
                                                                     ids,
@@ -394,11 +423,11 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
                                                                 if (decoder_family.isEosToken(runtime.cfg.architecture, next_token)) break;
                                                                 const next_token_u32 = std.math.cast(u32, next_token) orelse break;
                                                                 try generated_ids.append(allocator, next_token_u32);
-                                                                latest_logits = runtime.forwardTokenIdAtPosition(
+                                                                latest_logits = runtime.forwardTokenIdWithPosition(
                                                                     decoder_workspace,
                                                                     model_cache,
                                                                     next_token,
-                                                                    position_plan.generation_start_position + step,
+                                                                    textTokenPosition(runtime.cfg.rope_position_mode, position_plan.generation_start_position + step),
                                                                 ) catch break;
                                                             }
 
@@ -710,7 +739,7 @@ fn buildIncompleteOutputJson(
         .decoded_token_count = if (preprocess_summary) |summary| summary.decoded_token_count else 0,
         .error_message = if (preprocess_summary) |summary|
             if (summary.text_decode_executed and summary.generated_output != null)
-                "Chandra native OCR can now execute multimodal prefill and partial text decoding, but full OCR quality and multimodal position handling are still in progress."
+                "Chandra native OCR can now execute multimodal prefill, M-RoPE-aware decoding, and partial text generation, but full OCR quality and broader multimodal parity are still in progress."
             else
                 "Chandra native inference is not complete yet; model config, weight manifest, and preprocessing readiness are available."
         else
@@ -752,14 +781,29 @@ fn instructionForOperation(operation: []const u8) []const u8 {
     return "Read the document image and transcribe all visible text.";
 }
 
-fn allocSequentialPositions(
+fn allocMultimodalTextPositions(
     allocator: std.mem.Allocator,
+    rope_position_mode: decoder_types.RopePositionMode,
     start: usize,
     count: usize,
-) ![]usize {
-    const positions = try allocator.alloc(usize, count);
+) ![]decoder_types.TokenPosition {
+    const positions = try allocator.alloc(decoder_types.TokenPosition, count);
     for (positions, 0..) |*position, index| {
-        position.* = start + index;
+        position.* = textTokenPosition(rope_position_mode, start + index);
+    }
+    return positions;
+}
+
+fn allocMultimodalVisualPositions(
+    allocator: std.mem.Allocator,
+    rope_position_mode: decoder_types.RopePositionMode,
+    start: usize,
+    count: usize,
+    grid_width: usize,
+) ![]decoder_types.TokenPosition {
+    const positions = try allocator.alloc(decoder_types.TokenPosition, count);
+    for (positions, 0..) |*position, index| {
+        position.* = visualTokenPosition(rope_position_mode, start + index, index, grid_width);
     }
     return positions;
 }

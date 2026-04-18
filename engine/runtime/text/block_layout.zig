@@ -1,5 +1,6 @@
 const std = @import("std");
 const gqa_attention = @import("gqa_attention.zig");
+const decoder_types = @import("decoder_types.zig");
 const weights_layout = @import("weights_layout.zig");
 
 pub const LayerTensorNameFn = *const fn (std.mem.Allocator, usize, weights_layout.LayerTensorKind) anyerror![]u8;
@@ -26,6 +27,8 @@ pub const Spec = struct {
     num_key_value_heads: usize,
     head_dim: usize,
     rope_theta: f32,
+    rope_position_mode: decoder_types.RopePositionMode = .scalar,
+    mrope_sections: [4]u32 = .{ 0, 0, 0, 0 },
     rms_norm_eps: f32,
 
     pub fn validate(self: Spec) !void {
@@ -43,6 +46,8 @@ pub const Spec = struct {
             .num_key_value_heads = self.num_key_value_heads,
             .head_dim = self.head_dim,
             .rope_theta = self.rope_theta,
+            .rope_position_mode = self.rope_position_mode,
+            .mrope_sections = self.mrope_sections,
         };
     }
 };
@@ -58,6 +63,8 @@ test "decoder block spec validates dimensions" {
         .num_key_value_heads = 8,
         .head_dim = 64,
         .rope_theta = 1000000.0,
+        .rope_position_mode = .scalar,
+        .mrope_sections = .{ 0, 0, 0, 0 },
         .rms_norm_eps = 1e-6,
     };
     try spec.validate();

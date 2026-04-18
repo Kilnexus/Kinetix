@@ -14,6 +14,8 @@ pub const LayerTensorKind = family_registry.LayerTensorKind;
 pub const DecoderConfig = decoder_types.DecoderConfig;
 pub const ParsedConfig = decoder_types.ParsedConfig;
 pub const Tokenizer = family_registry.Tokenizer;
+pub const RopePositionMode = decoder_types.RopePositionMode;
+pub const TokenPosition = decoder_types.TokenPosition;
 
 pub const argMaxLogit = logits_util.argMaxLogit;
 pub const topKLogitsAlloc = logits_util.topKLogitsAlloc;

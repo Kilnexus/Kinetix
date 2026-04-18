@@ -1,4 +1,5 @@
 const std = @import("std");
+const decoder_types = @import("../decoder_types.zig");
 
 pub const AttentionSpec = struct {
     hidden_size: usize,
@@ -6,6 +7,8 @@ pub const AttentionSpec = struct {
     num_key_value_heads: usize,
     head_dim: usize,
     rope_theta: f32,
+    rope_position_mode: decoder_types.RopePositionMode = .scalar,
+    mrope_sections: [4]u32 = .{ 0, 0, 0, 0 },
 
     pub fn validate(self: AttentionSpec) !void {
         if (self.hidden_size == 0) return error.InvalidHiddenSize;
@@ -34,6 +37,8 @@ test "gqa attention spec validates grouping and dimensions" {
         .num_key_value_heads = 2,
         .head_dim = 2,
         .rope_theta = 1000000.0,
+        .rope_position_mode = .scalar,
+        .mrope_sections = .{ 0, 0, 0, 0 },
     };
 
     try spec.validate();

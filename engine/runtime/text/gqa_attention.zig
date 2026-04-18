@@ -5,6 +5,7 @@ pub const AttentionSpec = spec.AttentionSpec;
 
 pub const applyRoPEToProjectedHeadsInPlace = forward.applyRoPEToProjectedHeadsInPlace;
 pub const applyRoPEToProjectedHeadsWithTableInPlace = forward.applyRoPEToProjectedHeadsWithTableInPlace;
+pub const applyRoPEToProjectedHeadsWithPositionInPlace = forward.applyRoPEToProjectedHeadsWithPositionInPlace;
 pub const forwardProjectedSingleToken = forward.forwardProjectedSingleToken;
 pub const forwardProjectedSingleTokenBf16Cache = forward.forwardProjectedSingleTokenBf16Cache;
 pub const forwardProjectedSingleTokenQ8Cache = forward.forwardProjectedSingleTokenQ8Cache;
