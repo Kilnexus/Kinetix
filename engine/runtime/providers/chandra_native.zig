@@ -230,11 +230,11 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
     var summary: ?PreprocessSummary = null;
     defer if (summary) |*value| value.deinit(allocator);
 
-    if (readiness.has_image_processor_config and isRasterImagePath(context.input_path)) {
+    if (readiness.has_image_processor_config and isSupportedInputPath(context.input_path)) {
         var image_processor = try preprocess.loadImageProcessorConfig(allocator, context.model_path);
         defer image_processor.deinit();
 
-        var prepared = try preprocess.loadImageInput(allocator, context.input_path, image_processor.value);
+        var prepared = try loadPreparedInputFromPath(allocator, context.input_path, image_processor.value);
         defer prepared.deinit();
 
         var parsed_config: ?ParsedConfig = null;
@@ -874,6 +874,10 @@ fn allocMultimodalVisualPositions(
     return positions;
 }
 
+fn isSupportedInputPath(path: []const u8) bool {
+    return isRasterImagePath(path) or isFrameManifestPath(path) or isDirectoryPath(path);
+}
+
 fn isRasterImagePath(path: []const u8) bool {
     const extension = std.fs.path.extension(path);
     return std.ascii.eqlIgnoreCase(extension, ".png") or
@@ -883,6 +887,142 @@ fn isRasterImagePath(path: []const u8) bool {
         std.ascii.eqlIgnoreCase(extension, ".gif") or
         std.ascii.eqlIgnoreCase(extension, ".ico") or
         std.ascii.eqlIgnoreCase(extension, ".webp");
+}
+
+fn isFrameManifestPath(path: []const u8) bool {
+    const extension = std.fs.path.extension(path);
+    return std.ascii.eqlIgnoreCase(extension, ".frames") or
+        std.ascii.eqlIgnoreCase(extension, ".txt") or
+        std.ascii.eqlIgnoreCase(extension, ".lst");
+}
+
+fn isDirectoryPath(path: []const u8) bool {
+    const dir = openDirAtPath(path, .{}) catch return false;
+    var opened = dir;
+    opened.close();
+    return true;
+}
+
+fn loadPreparedInputFromPath(
+    allocator: std.mem.Allocator,
+    input_path: []const u8,
+    config: preprocess.ImageProcessorConfig,
+) !preprocess.PreparedImageInput {
+    if (isRasterImagePath(input_path)) {
+        return try preprocess.loadImageInput(allocator, input_path, config);
+    }
+    if (isDirectoryPath(input_path)) {
+        return try loadPreparedInputFromDirectory(allocator, input_path, config);
+    }
+    if (isFrameManifestPath(input_path)) {
+        return try loadPreparedInputFromManifest(allocator, input_path, config);
+    }
+    return error.UnsupportedImageInput;
+}
+
+fn loadPreparedInputFromDirectory(
+    allocator: std.mem.Allocator,
+    directory_path: []const u8,
+    config: preprocess.ImageProcessorConfig,
+) !preprocess.PreparedImageInput {
+    var dir = try openDirAtPath(directory_path, .{ .iterate = true });
+    defer dir.close();
+
+    var entries = std.ArrayListUnmanaged([]u8).empty;
+    defer {
+        for (entries.items) |entry| allocator.free(entry);
+        entries.deinit(allocator);
+    }
+
+    var it = dir.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!isRasterImagePath(entry.name)) continue;
+        try entries.append(allocator, try allocator.dupe(u8, entry.name));
+    }
+    if (entries.items.len == 0) return error.EmptyImageSequence;
+
+    std.sort.block([]u8, entries.items, {}, struct {
+        fn lessThan(_: void, lhs: []u8, rhs: []u8) bool {
+            return std.mem.lessThan(u8, lhs, rhs);
+        }
+    }.lessThan);
+
+    const frame_paths = try allocator.alloc([]const u8, entries.items.len);
+    defer allocator.free(frame_paths);
+    for (entries.items, frame_paths) |entry, *slot| {
+        slot.* = try std.fs.path.join(allocator, &.{ directory_path, entry });
+    }
+    defer for (frame_paths) |frame_path| allocator.free(frame_path);
+
+    return try loadPreparedInputFromResolvedPaths(allocator, frame_paths, config);
+}
+
+fn loadPreparedInputFromManifest(
+    allocator: std.mem.Allocator,
+    manifest_path: []const u8,
+    config: preprocess.ImageProcessorConfig,
+) !preprocess.PreparedImageInput {
+    const bytes = try std.fs.cwd().readFileAlloc(allocator, manifest_path, 4 * 1024 * 1024);
+    defer allocator.free(bytes);
+
+    const base_dir = std.fs.path.dirname(manifest_path) orelse ".";
+    var frame_paths = std.ArrayListUnmanaged([]const u8).empty;
+    defer {
+        for (frame_paths.items) |frame_path| allocator.free(frame_path);
+        frame_paths.deinit(allocator);
+    }
+
+    var lines = std.mem.splitScalar(u8, bytes, '\n');
+    while (lines.next()) |line_raw| {
+        const line = std.mem.trim(u8, line_raw, " \r\t");
+        if (line.len == 0 or line[0] == '#') continue;
+        const resolved = if (std.fs.path.isAbsolute(line))
+            try allocator.dupe(u8, line)
+        else
+            try std.fs.path.join(allocator, &.{ base_dir, line });
+        try frame_paths.append(allocator, resolved);
+    }
+    if (frame_paths.items.len == 0) return error.EmptyImageSequence;
+
+    return try loadPreparedInputFromResolvedPaths(allocator, frame_paths.items, config);
+}
+
+fn loadPreparedInputFromResolvedPaths(
+    allocator: std.mem.Allocator,
+    frame_paths: []const []const u8,
+    config: preprocess.ImageProcessorConfig,
+) !preprocess.PreparedImageInput {
+    const images = try allocator.alloc(imaging.ImageU8, frame_paths.len);
+    defer allocator.free(images);
+    errdefer {
+        for (images[0..frame_paths.len]) |*image| {
+            if (@intFromPtr(image.data.ptr) != 0) image.deinit();
+        }
+    }
+    @memset(std.mem.sliceAsBytes(images), 0);
+
+    const frame_refs = try allocator.alloc(*const imaging.ImageU8, frame_paths.len);
+    defer allocator.free(frame_refs);
+
+    var loaded_count: usize = 0;
+    errdefer {
+        for (images[0..loaded_count]) |*image| image.deinit();
+    }
+
+    for (frame_paths, 0..) |frame_path, index| {
+        images[index] = try imaging.decodeFileRgb8(allocator, frame_path);
+        frame_refs[index] = &images[index];
+        loaded_count += 1;
+    }
+    defer for (images[0..loaded_count]) |*image| image.deinit();
+
+    return try preprocess.prepareImageFramesInput(allocator, frame_refs, config);
+}
+
+fn openDirAtPath(path: []const u8, flags: std.fs.Dir.OpenOptions) !std.fs.Dir {
+    if (std.fs.path.isAbsolute(path)) return try std.fs.openDirAbsolute(path, flags);
+    return try std.fs.cwd().openDir(path, flags);
 }
 
 fn hasAnyFile(model_path: []const u8, names: []const []const u8) bool {
@@ -1119,6 +1259,71 @@ test "native chandra execute preprocesses image and runs patch embedding stage" 
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"patch_token_count\":2") != null);
 }
 
+test "chandra input loader prepares frame sequence from directory" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeSolidPng(tmp.dir, "frame_02.png", 2, 2, 255);
+    try writeSolidPng(tmp.dir, "frame_01.png", 2, 2, 0);
+
+    const frames_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(frames_path);
+
+    var prepared = try loadPreparedInputFromDirectory(std.testing.allocator, frames_path, .{
+        .do_normalize = false,
+        .do_rescale = false,
+        .do_resize = false,
+        .merge_size = 1,
+        .patch_size = 1,
+        .temporal_patch_size = 2,
+        .size = .{
+            .longest_edge = 1024,
+            .shortest_edge = 1,
+        },
+    });
+    defer prepared.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), prepared.grid.source_frame_count);
+    try std.testing.expectEqual(@as(usize, 2), prepared.grid.frame_count);
+    try std.testing.expectEqual(@as(usize, 1), prepared.grid.temporal_patch_count);
+    try std.testing.expectEqual(@as(f32, 0.0), prepared.tensor.data[0]);
+    try std.testing.expectEqual(@as(f32, 255.0), prepared.tensor.data[prepared.tensor.stride_n]);
+}
+
+test "chandra input loader prepares frame sequence from manifest" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeSolidPng(tmp.dir, "a.png", 2, 2, 64);
+    try writeSolidPng(tmp.dir, "b.png", 2, 2, 192);
+    try writeTmpFile(tmp.dir, "frames.frames",
+        \\# ordered frame list
+        \\b.png
+        \\a.png
+    );
+
+    const manifest_path = try tmp.dir.realpathAlloc(std.testing.allocator, "frames.frames");
+    defer std.testing.allocator.free(manifest_path);
+
+    var prepared = try loadPreparedInputFromManifest(std.testing.allocator, manifest_path, .{
+        .do_normalize = false,
+        .do_rescale = false,
+        .do_resize = false,
+        .merge_size = 1,
+        .patch_size = 1,
+        .temporal_patch_size = 2,
+        .size = .{
+            .longest_edge = 1024,
+            .shortest_edge = 1,
+        },
+    });
+    defer prepared.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), prepared.grid.source_frame_count);
+    try std.testing.expectEqual(@as(f32, 192.0), prepared.tensor.data[0]);
+    try std.testing.expectEqual(@as(f32, 64.0), prepared.tensor.data[prepared.tensor.stride_n]);
+}
+
 test "multimodal mrope plan continues text after visual axis max" {
     const position_plan = MultimodalPositionPlan.init(.mrope, 6, 1, 3, 2, 2);
 
@@ -1331,6 +1536,16 @@ fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8
     var file = try dir.createFile(relative_path, .{});
     defer file.close();
     try file.writeAll(contents);
+}
+
+fn writeSolidPng(dir: std.fs.Dir, relative_path: []const u8, width: usize, height: usize, value: u8) !void {
+    var image = try imaging.ImageU8.init(std.testing.allocator, width, height, 3);
+    defer image.deinit();
+    image.fill(value);
+
+    const encoded = try imaging.encodePngAlloc(std.testing.allocator, &image);
+    defer std.testing.allocator.free(encoded);
+    try dir.writeFile(.{ .sub_path = relative_path, .data = encoded });
 }
 
 fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []const u8) !void {
