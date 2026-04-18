@@ -10,7 +10,46 @@ const types = @import("../types.zig");
 
 pub const Summary = graph.Summary;
 pub const Detection = types.RuntimeVisionDetection;
-pub const DetectOutput = types.RuntimeVisionDetectOutput;
+
+pub const DetectLevelProfileSummary = struct {
+    reg_ns: u64,
+    cls_ns: u64,
+    decode_ns: u64,
+    candidate_count: usize,
+    max_class_logit: f32,
+    max_class_score: f32,
+    reg_kind: []const u8,
+    cls_kind: []const u8,
+};
+
+pub const DetectProfileSummary = struct {
+    score_threshold: f32,
+    iou_threshold: f32,
+    max_det: usize,
+    branch_ns: u64,
+    decode_ns: u64,
+    nms_ns: u64,
+    candidate_count: usize,
+    kept_count: usize,
+    levels: []DetectLevelProfileSummary,
+
+    pub fn deinit(self: *DetectProfileSummary, allocator: std.mem.Allocator) void {
+        allocator.free(self.levels);
+        self.* = undefined;
+    }
+};
+
+pub const DetectOutput = struct {
+    candidate_count: usize,
+    detections: []Detection,
+    profile: ?DetectProfileSummary = null,
+
+    pub fn deinit(self: *DetectOutput, allocator: std.mem.Allocator) void {
+        allocator.free(self.detections);
+        if (self.profile) |*profile| profile.deinit(allocator);
+        self.* = undefined;
+    }
+};
 
 pub const ReceiptContext = struct {
     operation: []const u8,
@@ -38,6 +77,7 @@ pub fn maybeRunDetect(
     if (execution != .sync) return null;
 
     const image_path = input_path orelse return null;
+    const detect_options = loadDetectOptionsFromEnv();
 
     if (builtin.is_test) {
         const detections = try allocator.alloc(Detection, 1);
@@ -52,6 +92,7 @@ pub fn maybeRunDetect(
         return .{
             .candidate_count = 4,
             .detections = detections,
+            .profile = null,
         };
     }
 
@@ -74,11 +115,7 @@ pub fn maybeRunDetect(
         &model_graph,
         &weights_blob,
         &prepared.tensor,
-        .{
-            .score_threshold = 0.25,
-            .iou_threshold = 0.7,
-            .max_det = 300,
-        },
+        detect_options,
     );
     defer detections_output.deinit();
     ax_vision.remapDetectionsToSource(detections_output.detections, prepared.info);
@@ -97,6 +134,13 @@ pub fn maybeRunDetect(
     return .{
         .candidate_count = detections_output.candidate_count,
         .detections = detections,
+        .profile = if (shouldEmitDetectProfile()) try buildDetectProfileSummary(
+            allocator,
+            &model_graph,
+            &weights_blob,
+            &prepared.tensor,
+            detect_options,
+        ) else null,
     };
 }
 
@@ -116,6 +160,7 @@ pub fn buildOutputJson(
         class_count: ?usize,
         candidate_count: ?usize,
         detections: []const Detection,
+        profile: ?DetectProfileSummary,
     };
 
     const receipt = VisionReceipt{
@@ -129,6 +174,7 @@ pub fn buildOutputJson(
         .class_count = context.class_count,
         .candidate_count = if (detection_output) |output| output.candidate_count else null,
         .detections = if (detection_output) |output| output.detections else &.{},
+        .profile = if (detection_output) |output| output.profile else null,
     };
 
     var out: std.Io.Writer.Allocating = .init(allocator);
@@ -140,4 +186,73 @@ pub fn buildOutputJson(
 fn resolvePath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     if (std.fs.path.isAbsolute(path)) return try allocator.dupe(u8, path);
     return try std.fs.cwd().realpathAlloc(allocator, path);
+}
+
+fn shouldEmitDetectProfile() bool {
+    const value = std.process.getEnvVarOwned(std.heap.page_allocator, "KINETIX_VISION_PROFILE") catch return false;
+    defer std.heap.page_allocator.free(value);
+    return value.len != 0 and !std.mem.eql(u8, value, "0");
+}
+
+fn loadDetectOptionsFromEnv() ax_runtime.DetectOptions {
+    return .{
+        .score_threshold = loadEnvFloat("KINETIX_VISION_SCORE_THRESHOLD", 0.25),
+        .iou_threshold = loadEnvFloat("KINETIX_VISION_IOU_THRESHOLD", 0.7),
+        .max_det = loadEnvUsize("KINETIX_VISION_MAX_DET", 300),
+    };
+}
+
+fn loadEnvFloat(name: []const u8, default: f32) f32 {
+    const value = std.process.getEnvVarOwned(std.heap.page_allocator, name) catch return default;
+    defer std.heap.page_allocator.free(value);
+    return std.fmt.parseFloat(f32, value) catch default;
+}
+
+fn loadEnvUsize(name: []const u8, default: usize) usize {
+    const value = std.process.getEnvVarOwned(std.heap.page_allocator, name) catch return default;
+    defer std.heap.page_allocator.free(value);
+    return std.fmt.parseInt(usize, value, 10) catch default;
+}
+
+fn buildDetectProfileSummary(
+    allocator: std.mem.Allocator,
+    model_graph: *const ax_graph.Graph,
+    weights_blob: *const ax_weights.WeightsBlob,
+    input: *const ax_runtime.Tensor,
+    detect_options: ax_runtime.DetectOptions,
+) !DetectProfileSummary {
+    var profile_graph = try ax_runtime.profileGraph(allocator, model_graph, weights_blob, input, detect_options);
+    defer profile_graph.deinit();
+
+    for (profile_graph.nodes) |node| {
+        if (node.detect_profile) |detect_profile| {
+            const levels = try allocator.alloc(DetectLevelProfileSummary, detect_profile.level_count);
+            for (levels, 0..) |*level, index| {
+                const source = detect_profile.levels[index];
+                level.* = .{
+                    .reg_ns = source.reg_ns,
+                    .cls_ns = source.cls_ns,
+                    .decode_ns = source.decode_ns,
+                    .candidate_count = source.candidate_count,
+                    .max_class_logit = source.max_class_logit,
+                    .max_class_score = source.max_class_score,
+                    .reg_kind = @tagName(source.reg_detail.kind),
+                    .cls_kind = @tagName(source.cls_detail.kind),
+                };
+            }
+            return .{
+                .score_threshold = detect_options.score_threshold,
+                .iou_threshold = detect_options.iou_threshold,
+                .max_det = detect_options.max_det,
+                .branch_ns = detect_profile.branch_ns,
+                .decode_ns = detect_profile.decode_ns,
+                .nms_ns = detect_profile.nms_ns,
+                .candidate_count = detect_profile.candidate_count,
+                .kept_count = detect_profile.kept_count,
+                .levels = levels,
+            };
+        }
+    }
+
+    return error.ModuleNotFound;
 }

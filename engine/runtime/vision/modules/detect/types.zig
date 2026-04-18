@@ -48,6 +48,9 @@ pub const DetectLevelProfile = struct {
     reg_ns: u64 = 0,
     cls_ns: u64 = 0,
     decode_ns: u64 = 0,
+    candidate_count: usize = 0,
+    max_class_logit: f32 = 0.0,
+    max_class_score: f32 = 0.0,
     reg_detail: DetectBranchProfile = .{},
     cls_detail: DetectBranchProfile = .{},
 };

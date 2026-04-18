@@ -70,6 +70,7 @@ fn convPlanFromSpec(
 }
 
 fn cv2PlanSupportsFast(module: *const graph.ModuleNode) bool {
+    if (!detectFastEnabled()) return false;
     const cached = module.cached_conv;
     return cached.valid and
         cached.weight != null and
@@ -85,6 +86,7 @@ fn cv2PlanSupportsFast(module: *const graph.ModuleNode) bool {
 }
 
 fn cv3DepthwisePlanSupportsFast(module: *const graph.ModuleNode) bool {
+    if (!detectFastEnabled()) return false;
     const cached = module.cached_conv;
     return cached.valid and
         cached.weight != null and
@@ -97,6 +99,12 @@ fn cv3DepthwisePlanSupportsFast(module: *const graph.ModuleNode) bool {
         cached.apply_silu and
         cached.groups == cached.weight.?.shape[0] and
         cached.weight.?.shape[1] == 1;
+}
+
+fn detectFastEnabled() bool {
+    const value = std.process.getEnvVarOwned(std.heap.page_allocator, "KINETIX_DISABLE_DETECT_FAST") catch return true;
+    defer std.heap.page_allocator.free(value);
+    return value.len == 0 or std.mem.eql(u8, value, "0");
 }
 
 pub fn resolveDetectBranch(

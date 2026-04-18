@@ -682,7 +682,9 @@ fn copyDetectionResult(allocator: std.mem.Allocator, result: runtime_types.Execu
         else => return error.ExpectedJsonOutput,
     };
 
-    const parsed = try std.json.parseFromSlice(ParsedVisionReceipt, allocator, payload, .{});
+    const parsed = try std.json.parseFromSlice(ParsedVisionReceipt, allocator, payload, .{
+        .ignore_unknown_fields = true,
+    });
     defer parsed.deinit();
 
     const adapter_id = try allocator.dupe(u8, result.submission.adapter_id);

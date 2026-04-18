@@ -130,6 +130,8 @@ pub fn runDetectProfileNode(
     var candidate_count: usize = 0;
 
     for (feature_inputs, 0..) |feature, level| {
+        const level_candidate_start = candidate_count;
+        profile.levels[level].max_class_logit = -std.math.inf(f32);
         var reg_profile = DetectBranchProfile{};
         var timer = try std.time.Timer.start();
         var reg = try branch_exec.runDetectBranchPlanProfile(tensor_allocator, model_graph, weights_blob, reg_plans[level], feature, &reg_profile);
@@ -160,8 +162,14 @@ pub fn runDetectProfileNode(
                     const spatial_index = y * reg.shape[3] + x;
                     const best = bestClassForSpatial(cls.data, cls_batch_base, cls_plane, nc, spatial_index);
                     const best_logit = best.logit;
+                    if (best_logit > profile.levels[level].max_class_logit) {
+                        profile.levels[level].max_class_logit = best_logit;
+                    }
                     if (best_logit < score_logit_threshold) continue;
                     const best_score = postprocess.sigmoid(best_logit);
+                    if (best_score > profile.levels[level].max_class_score) {
+                        profile.levels[level].max_class_score = best_score;
+                    }
 
                     const anchor_x = (@as(f32, @floatFromInt(x)) + 0.5) * stride;
                     const anchor_y = (@as(f32, @floatFromInt(y)) + 0.5) * stride;
@@ -184,6 +192,7 @@ pub fn runDetectProfileNode(
             }
         }
         profile.levels[level].decode_ns = decode_timer.read();
+        profile.levels[level].candidate_count = candidate_count - level_candidate_start;
         profile.decode_ns += profile.levels[level].decode_ns;
     }
 
