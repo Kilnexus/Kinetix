@@ -74,7 +74,7 @@ test "compat normalizes yolo graph directories into a runtime model" {
 
     try std.testing.expectEqual(types.ProviderKey.yolo_vision, model.provider_key);
     try std.testing.expectEqual(types.Modality.vision, model.descriptor.modality);
-    try std.testing.expectEqual(types.CompatibilityStatus.degraded, model.compat.status);
+    try std.testing.expectEqual(types.CompatibilityStatus.supported, model.compat.status);
 }
 
 test "compat normalizes swiftocr bundles into a runtime model" {

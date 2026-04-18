@@ -137,7 +137,6 @@ pub const CompatibilityWarning = enum {
     legacy_graph_bridge_required,
     native_batch_unavailable,
     ocr_pipeline_skeleton,
-    external_runtime_required,
     document_input_partial,
 };
 

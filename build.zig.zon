@@ -3,8 +3,8 @@
     .version = "0.1.0",
     .dependencies = .{
         .Pixio = .{
-            .url = "git+https://github.com/Kilnexus/Pixio.git#8d649133a895a37372c1e422cadfcf8403f3ea3d",
-            .hash = "Pixio-0.1.0-QoZdTOVpBwCnMNpCrtEqJnCUWPZShWKjeQ4WOHZLQkEN",
+            .url = "git+https://github.com/Kilnexus/Pixio.git#a5f221d2a0c7cac2c0dadd163c5a822e508de77a",
+            .hash = "Pixio-0.1.0-QoZdTEbNBwCasktDeJHOuFwn4dUsoP_tDMOwXLVDc6g6",
         },
     },
     .minimum_zig_version = "0.15.2",

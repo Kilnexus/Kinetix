@@ -54,12 +54,7 @@ pub fn tryNormalize(
         owned.deinit();
     }
 
-    const compat = try report_mod.CompatibilityReport.init(
-        allocator,
-        .degraded,
-        &.{.external_runtime_required},
-        &.{},
-    );
+    const compat = try report_mod.CompatibilityReport.supported(allocator);
     errdefer {
         var owned = compat;
         owned.deinit();
