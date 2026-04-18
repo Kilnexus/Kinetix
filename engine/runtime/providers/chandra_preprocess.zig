@@ -43,6 +43,9 @@ pub const ParsedImageProcessorConfig = struct {
 };
 
 pub const PatchGrid = struct {
+    source_frame_count: usize,
+    frame_count: usize,
+    temporal_patch_count: usize,
     input_width: usize,
     input_height: usize,
     resized_width: usize,
@@ -61,7 +64,7 @@ pub const PatchGrid = struct {
 };
 
 pub const PreparedImageInput = struct {
-    tensor: imaging.TensorF32CHW,
+    tensor: imaging.TensorF32NCHW,
     grid: PatchGrid,
 
     pub fn deinit(self: *PreparedImageInput) void {
@@ -112,9 +115,10 @@ pub fn loadFromProcessorConfig(backing_allocator: std.mem.Allocator, path: []con
     return .{ .arena = arena, .value = wrapper.image_processor };
 }
 
-pub fn planPatchGrid(config: ImageProcessorConfig, width: usize, height: usize) !PatchGrid {
+pub fn planPatchGrid(config: ImageProcessorConfig, width: usize, height: usize, source_frame_count: usize) !PatchGrid {
     if (width == 0 or height == 0) return error.InvalidImageDimensions;
     if (config.patch_size == 0 or config.merge_size == 0) return error.InvalidImageProcessorConfig;
+    if (source_frame_count == 0) return error.InvalidBatchSize;
 
     const factor = config.patchMergeFactor();
     var resized_width = width;
@@ -128,20 +132,25 @@ pub fn planPatchGrid(config: ImageProcessorConfig, width: usize, height: usize) 
 
     const patch_width = resized_width / config.patch_size;
     const patch_height = resized_height / config.patch_size;
+    const frame_count = roundUpToMultiple(@max(source_frame_count, config.temporal_patch_size), config.temporal_patch_size);
+    const temporal_patch_count = frame_count / config.temporal_patch_size;
     const merged_width = patch_width / config.merge_size;
     const merged_height = patch_height / config.merge_size;
 
     return .{
+        .source_frame_count = source_frame_count,
+        .frame_count = frame_count,
+        .temporal_patch_count = temporal_patch_count,
         .input_width = width,
         .input_height = height,
         .resized_width = resized_width,
         .resized_height = resized_height,
         .patch_width = patch_width,
         .patch_height = patch_height,
-        .patch_token_count = patch_width * patch_height,
+        .patch_token_count = temporal_patch_count * patch_width * patch_height,
         .merged_width = merged_width,
         .merged_height = merged_height,
-        .token_count = merged_width * merged_height,
+        .token_count = temporal_patch_count * merged_width * merged_height,
     };
 }
 
@@ -153,7 +162,8 @@ pub fn loadImageInput(
     var source = try imaging.decodeFileRgb8(allocator, path);
     defer source.deinit();
 
-    return try prepareImageInput(allocator, &source, config);
+    const frames = [_]*const imaging.ImageU8{&source};
+    return try prepareImageFramesInput(allocator, &frames, config);
 }
 
 pub fn prepareImageInput(
@@ -161,40 +171,76 @@ pub fn prepareImageInput(
     source: *const imaging.ImageU8,
     config: ImageProcessorConfig,
 ) !PreparedImageInput {
-    if (source.channels != 3) return error.InvalidChannelCount;
+    const frames = [_]*const imaging.ImageU8{source};
+    return try prepareImageFramesInput(allocator, &frames, config);
+}
 
-    const grid = try planPatchGrid(config, source.width, source.height);
-    var resized: ?imaging.ImageU8 = null;
-    defer if (resized) |*image| image.deinit();
+pub fn prepareImageFramesInput(
+    allocator: std.mem.Allocator,
+    sources: []const *const imaging.ImageU8,
+    config: ImageProcessorConfig,
+) !PreparedImageInput {
+    if (sources.len == 0) return error.InvalidBatchSize;
 
-    const tensor_source = if (grid.resized_width != source.width or grid.resized_height != source.height) blk: {
-        resized = try imaging.resizeImage(
-            allocator,
-            source,
-            grid.resized_width,
-            grid.resized_height,
-            resizeKernel(config.resample),
-        );
-        break :blk &resized.?;
-    } else source;
+    const first = sources[0];
+    if (first.channels != 3) return error.InvalidChannelCount;
+    for (sources[1..]) |source| {
+        if (source.channels != first.channels) return error.InvalidChannelCount;
+        if (source.width != first.width or source.height != first.height) return error.ShapeMismatch;
+    }
+
+    const grid = try planPatchGrid(config, first.width, first.height, sources.len);
+    var tensor = imaging.TensorF32NCHW{
+        .allocator = allocator,
+        .batch = grid.frame_count,
+        .channels = first.channels,
+        .height = grid.resized_height,
+        .width = grid.resized_width,
+        .stride_w = 1,
+        .stride_h = grid.resized_width,
+        .stride_c = grid.resized_width * grid.resized_height,
+        .stride_n = first.channels * grid.resized_width * grid.resized_height,
+        .data = try allocator.alloc(f32, grid.frame_count * first.channels * grid.resized_width * grid.resized_height),
+    };
+    errdefer tensor.deinit();
 
     var mean_storage: [4]f32 = undefined;
     var std_storage: [4]f32 = undefined;
     const mean = if (config.do_normalize)
-        try statsF32(config.image_mean, &mean_storage, source.channels)
+        try statsF32(config.image_mean, &mean_storage, first.channels)
     else
         &.{};
     const stddev = if (config.do_normalize)
-        try statsF32(config.image_std, &std_storage, source.channels)
+        try statsF32(config.image_std, &std_storage, first.channels)
     else
         &.{};
 
-    var tensor = try imaging.imageToTensorChwF32(allocator, tensor_source, .{
-        .scale = if (config.do_rescale) @floatCast(config.rescale_factor) else 1.0,
-        .mean = mean,
-        .std = stddev,
-    });
-    errdefer tensor.deinit();
+    for (0..grid.frame_count) |frame_index| {
+        const source = sources[@min(frame_index, sources.len - 1)];
+        var resized: ?imaging.ImageU8 = null;
+        defer if (resized) |*image| image.deinit();
+
+        const tensor_source = if (grid.resized_width != source.width or grid.resized_height != source.height) blk: {
+            resized = try imaging.resizeImage(
+                allocator,
+                source,
+                grid.resized_width,
+                grid.resized_height,
+                resizeKernel(config.resample),
+            );
+            break :blk &resized.?;
+        } else source;
+
+        var chw_tensor = try imaging.imageToTensorChwF32(allocator, tensor_source, .{
+            .scale = if (config.do_rescale) @floatCast(config.rescale_factor) else 1.0,
+            .mean = mean,
+            .std = stddev,
+        });
+        defer chw_tensor.deinit();
+
+        const dst = tensor.data[frame_index * tensor.stride_n ..][0..tensor.stride_n];
+        @memcpy(dst, chw_tensor.data);
+    }
 
     return .{
         .tensor = tensor,
@@ -220,6 +266,10 @@ fn floatToUsize(value: f64) usize {
 fn roundToMultiple(value: usize, multiple: usize) usize {
     const rounded = ((value + multiple / 2) / multiple) * multiple;
     return @max(multiple, rounded);
+}
+
+fn roundUpToMultiple(value: usize, multiple: usize) usize {
+    return ((value + multiple - 1) / multiple) * multiple;
 }
 
 fn resizeKernel(resample: usize) imaging.ResizeKernel {
@@ -284,9 +334,12 @@ test "chandra preprocessor config parser accepts official qwen image processor s
     try std.testing.expectEqual(@as(usize, 2), parsed.value.merge_size);
     try std.testing.expectEqual(@as(usize, 65536), parsed.value.size.shortest_edge);
 
-    const grid = try planPatchGrid(parsed.value, 1024, 768);
+    const grid = try planPatchGrid(parsed.value, 1024, 768, 1);
     try std.testing.expectEqual(@as(usize, 1024), grid.resized_width);
     try std.testing.expectEqual(@as(usize, 768), grid.resized_height);
+    try std.testing.expectEqual(@as(usize, 1), grid.source_frame_count);
+    try std.testing.expectEqual(@as(usize, 2), grid.frame_count);
+    try std.testing.expectEqual(@as(usize, 1), grid.temporal_patch_count);
     try std.testing.expectEqual(@as(usize, 64), grid.patch_width);
     try std.testing.expectEqual(@as(usize, 64 * 48), grid.patch_token_count);
     try std.testing.expectEqual(@as(usize, 24 * 32), grid.token_count);
@@ -342,10 +395,47 @@ test "chandra image preprocessing produces normalized chw tensor and patch grid"
     try std.testing.expectEqual(@as(usize, 32), prepared.grid.resized_height);
     try std.testing.expectEqual(@as(usize, 4), prepared.grid.patch_token_count);
     try std.testing.expectEqual(@as(usize, 1), prepared.grid.token_count);
+    try std.testing.expectEqual(@as(usize, 1), prepared.grid.source_frame_count);
+    try std.testing.expectEqual(@as(usize, 2), prepared.grid.frame_count);
+    try std.testing.expectEqual(@as(usize, 1), prepared.grid.temporal_patch_count);
     try std.testing.expectEqual(@as(usize, 3), prepared.tensor.channels);
+    try std.testing.expectEqual(@as(usize, 2), prepared.tensor.batch);
     try std.testing.expectEqual(@as(usize, 32), prepared.tensor.width);
     try std.testing.expectEqual(@as(usize, 32), prepared.tensor.height);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), prepared.tensor.data[0], 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), prepared.tensor.data[prepared.tensor.stride_n], 0.0001);
+}
+
+test "chandra frame preprocessing pads temporal batch and preserves distinct frames" {
+    var image_a = try imaging.ImageU8.init(std.testing.allocator, 2, 2, 3);
+    defer image_a.deinit();
+    image_a.fill(0);
+
+    var image_b = try imaging.ImageU8.init(std.testing.allocator, 2, 2, 3);
+    defer image_b.deinit();
+    image_b.fill(255);
+
+    const frames = [_]*const imaging.ImageU8{ &image_a, &image_b };
+    var prepared = try prepareImageFramesInput(std.testing.allocator, &frames, .{
+        .do_normalize = false,
+        .do_rescale = false,
+        .do_resize = false,
+        .merge_size = 1,
+        .patch_size = 1,
+        .temporal_patch_size = 2,
+        .size = .{
+            .longest_edge = 1024,
+            .shortest_edge = 1,
+        },
+    });
+    defer prepared.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), prepared.grid.source_frame_count);
+    try std.testing.expectEqual(@as(usize, 2), prepared.grid.frame_count);
+    try std.testing.expectEqual(@as(usize, 1), prepared.grid.temporal_patch_count);
+    try std.testing.expectEqual(@as(usize, 4), prepared.grid.patch_token_count);
+    try std.testing.expectEqual(@as(f32, 0.0), prepared.tensor.data[0]);
+    try std.testing.expectEqual(@as(f32, 255.0), prepared.tensor.data[prepared.tensor.stride_n]);
 }
 
 fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {

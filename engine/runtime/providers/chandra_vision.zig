@@ -33,6 +33,7 @@ pub const PatchEmbeddings = struct {
     data: []f32,
     token_count: usize,
     embedding_dim: usize,
+    temporal_patch_count: usize,
     patch_width: usize,
     patch_height: usize,
 
@@ -51,6 +52,7 @@ pub const MergedPatchGroups = struct {
     data: []f32,
     token_count: usize,
     merged_dim: usize,
+    temporal_patch_count: usize,
     merged_width: usize,
     merged_height: usize,
 
@@ -194,30 +196,34 @@ pub fn patchEmbedImage(
         .data = try allocator.alloc(f32, input.grid.patch_token_count * weights.out_channels),
         .token_count = input.grid.patch_token_count,
         .embedding_dim = weights.out_channels,
+        .temporal_patch_count = input.grid.temporal_patch_count,
         .patch_width = input.grid.patch_width,
         .patch_height = input.grid.patch_height,
     };
     errdefer output.deinit();
 
-    for (0..input.grid.patch_height) |patch_y| {
-        for (0..input.grid.patch_width) |patch_x| {
-            const token_index = patch_y * input.grid.patch_width + patch_x;
-            for (0..weights.out_channels) |out_channel| {
-                var sum = if (weights.bias) |bias| bias[out_channel] else 0.0;
-                for (0..weights.in_channels) |in_channel| {
-                    for (0..weights.temporal_patch_size) |temporal_index| {
-                        for (0..weights.patch_size) |kernel_y| {
-                            const image_y = patch_y * weights.patch_size + kernel_y;
-                            for (0..weights.patch_size) |kernel_x| {
-                                const image_x = patch_x * weights.patch_size + kernel_x;
-                                const pixel = input.tensor.data[tensorIndex(input.tensor, in_channel, image_y, image_x)];
-                                const weight = weights.data[weightIndex(weights, out_channel, in_channel, temporal_index, kernel_y, kernel_x)];
-                                sum += pixel * weight;
+    for (0..input.grid.temporal_patch_count) |temporal_group| {
+        for (0..input.grid.patch_height) |patch_y| {
+            for (0..input.grid.patch_width) |patch_x| {
+                const token_index = (temporal_group * input.grid.patch_height + patch_y) * input.grid.patch_width + patch_x;
+                for (0..weights.out_channels) |out_channel| {
+                    var sum = if (weights.bias) |bias| bias[out_channel] else 0.0;
+                    for (0..weights.in_channels) |in_channel| {
+                        for (0..weights.temporal_patch_size) |temporal_index| {
+                            for (0..weights.patch_size) |kernel_y| {
+                                const image_y = patch_y * weights.patch_size + kernel_y;
+                                for (0..weights.patch_size) |kernel_x| {
+                                    const image_x = patch_x * weights.patch_size + kernel_x;
+                                    const frame_index = temporal_group * weights.temporal_patch_size + temporal_index;
+                                    const pixel = input.tensor.data[tensorIndex(input.tensor, frame_index, in_channel, image_y, image_x)];
+                                    const weight = weights.data[weightIndex(weights, out_channel, in_channel, temporal_index, kernel_y, kernel_x)];
+                                    sum += pixel * weight;
+                                }
                             }
                         }
                     }
+                    output.data[token_index * weights.out_channels + out_channel] = sum;
                 }
-                output.data[token_index * weights.out_channels + out_channel] = sum;
             }
         }
     }
@@ -240,31 +246,34 @@ pub fn mergeSpatialPatches(
 
     var output = MergedPatchGroups{
         .allocator = allocator,
-        .data = try allocator.alloc(f32, merged_width * merged_height * merged_dim),
-        .token_count = merged_width * merged_height,
+        .data = try allocator.alloc(f32, embeddings.temporal_patch_count * merged_width * merged_height * merged_dim),
+        .token_count = embeddings.temporal_patch_count * merged_width * merged_height,
         .merged_dim = merged_dim,
+        .temporal_patch_count = embeddings.temporal_patch_count,
         .merged_width = merged_width,
         .merged_height = merged_height,
     };
     errdefer output.deinit();
 
-    for (0..merged_height) |group_y| {
-        for (0..merged_width) |group_x| {
-            const merged_index = group_y * merged_width + group_x;
-            const merged_base = merged_index * merged_dim;
+    for (0..embeddings.temporal_patch_count) |temporal_group| {
+        for (0..merged_height) |group_y| {
+            for (0..merged_width) |group_x| {
+                const merged_index = (temporal_group * merged_height + group_y) * merged_width + group_x;
+                const merged_base = merged_index * merged_dim;
 
-            for (0..merge_size) |inner_y| {
-                for (0..merge_size) |inner_x| {
-                    const patch_y = group_y * merge_size + inner_y;
-                    const patch_x = group_x * merge_size + inner_x;
-                    const patch_index = patch_y * embeddings.patch_width + patch_x;
-                    const patch_slot = inner_y * merge_size + inner_x;
-                    const dst_base = merged_base + patch_slot * embeddings.embedding_dim;
-                    const src_base = patch_index * embeddings.embedding_dim;
-                    @memcpy(
-                        output.data[dst_base .. dst_base + embeddings.embedding_dim],
-                        embeddings.data[src_base .. src_base + embeddings.embedding_dim],
-                    );
+                for (0..merge_size) |inner_y| {
+                    for (0..merge_size) |inner_x| {
+                        const patch_y = group_y * merge_size + inner_y;
+                        const patch_x = group_x * merge_size + inner_x;
+                        const patch_index = (temporal_group * embeddings.patch_height + patch_y) * embeddings.patch_width + patch_x;
+                        const patch_slot = inner_y * merge_size + inner_x;
+                        const dst_base = merged_base + patch_slot * embeddings.embedding_dim;
+                        const src_base = patch_index * embeddings.embedding_dim;
+                        @memcpy(
+                            output.data[dst_base .. dst_base + embeddings.embedding_dim],
+                            embeddings.data[src_base .. src_base + embeddings.embedding_dim],
+                        );
+                    }
                 }
             }
         }
@@ -288,7 +297,7 @@ pub fn applyVisualMerger(
         .data = try allocator.alloc(f32, grouped.token_count * weights.fc2.out_features),
         .token_count = grouped.token_count,
         .embedding_dim = weights.fc2.out_features,
-        .grid_time = 1,
+        .grid_time = grouped.temporal_patch_count,
         .grid_width = grouped.merged_width,
         .grid_height = grouped.merged_height,
     };
@@ -325,6 +334,7 @@ pub fn applyVisionBlockMlp(
         .data = try allocator.alloc(f32, input.data.len),
         .token_count = input.token_count,
         .embedding_dim = input.embedding_dim,
+        .temporal_patch_count = input.temporal_patch_count,
         .patch_width = input.patch_width,
         .patch_height = input.patch_height,
     };
@@ -373,6 +383,7 @@ pub fn applyVisionBlockAttention(
         .data = try allocator.alloc(f32, input.data.len),
         .token_count = input.token_count,
         .embedding_dim = input.embedding_dim,
+        .temporal_patch_count = input.temporal_patch_count,
         .patch_width = input.patch_width,
         .patch_height = input.patch_height,
     };
@@ -428,41 +439,45 @@ pub fn applyPositionEmbeddings(
         .data = try allocator.alloc(f32, input.data.len),
         .token_count = input.token_count,
         .embedding_dim = input.embedding_dim,
+        .temporal_patch_count = input.temporal_patch_count,
         .patch_width = input.patch_width,
         .patch_height = input.patch_height,
     };
     errdefer output.deinit();
     @memcpy(output.data, input.data);
 
-    for (0..input.patch_height) |y| {
-        for (0..input.patch_width) |x| {
-            const token_index = y * input.patch_width + x;
-            const dst = output.data[token_index * input.embedding_dim ..][0..input.embedding_dim];
-            if (input.patch_width == weights.base_width and input.patch_height == weights.base_height) {
-                const src = weights.data[token_index * input.embedding_dim ..][0..input.embedding_dim];
-                for (dst, src) |*out, pos| out.* += pos;
-                continue;
-            }
+    for (0..input.temporal_patch_count) |temporal_group| {
+        for (0..input.patch_height) |y| {
+            for (0..input.patch_width) |x| {
+                const token_index = (temporal_group * input.patch_height + y) * input.patch_width + x;
+                const dst = output.data[token_index * input.embedding_dim ..][0..input.embedding_dim];
+                if (input.patch_width == weights.base_width and input.patch_height == weights.base_height) {
+                    const spatial_index = y * input.patch_width + x;
+                    const src = weights.data[spatial_index * input.embedding_dim ..][0..input.embedding_dim];
+                    for (dst, src) |*out, pos| out.* += pos;
+                    continue;
+                }
 
-            const src_y = scaleCoord(y, input.patch_height, weights.base_height);
-            const y0 = clampFloor(src_y, weights.base_height);
-            const y1 = @min(y0 + 1, weights.base_height - 1);
-            const wy = src_y - @as(f32, @floatFromInt(y0));
+                const src_y = scaleCoord(y, input.patch_height, weights.base_height);
+                const y0 = clampFloor(src_y, weights.base_height);
+                const y1 = @min(y0 + 1, weights.base_height - 1);
+                const wy = src_y - @as(f32, @floatFromInt(y0));
 
-            const src_x = scaleCoord(x, input.patch_width, weights.base_width);
-            const x0 = clampFloor(src_x, weights.base_width);
-            const x1 = @min(x0 + 1, weights.base_width - 1);
-            const wx = src_x - @as(f32, @floatFromInt(x0));
+                const src_x = scaleCoord(x, input.patch_width, weights.base_width);
+                const x0 = clampFloor(src_x, weights.base_width);
+                const x1 = @min(x0 + 1, weights.base_width - 1);
+                const wx = src_x - @as(f32, @floatFromInt(x0));
 
-            const p00 = weights.data[(y0 * weights.base_width + x0) * input.embedding_dim ..][0..input.embedding_dim];
-            const p01 = weights.data[(y0 * weights.base_width + x1) * input.embedding_dim ..][0..input.embedding_dim];
-            const p10 = weights.data[(y1 * weights.base_width + x0) * input.embedding_dim ..][0..input.embedding_dim];
-            const p11 = weights.data[(y1 * weights.base_width + x1) * input.embedding_dim ..][0..input.embedding_dim];
+                const p00 = weights.data[(y0 * weights.base_width + x0) * input.embedding_dim ..][0..input.embedding_dim];
+                const p01 = weights.data[(y0 * weights.base_width + x1) * input.embedding_dim ..][0..input.embedding_dim];
+                const p10 = weights.data[(y1 * weights.base_width + x0) * input.embedding_dim ..][0..input.embedding_dim];
+                const p11 = weights.data[(y1 * weights.base_width + x1) * input.embedding_dim ..][0..input.embedding_dim];
 
-            for (0..input.embedding_dim) |dim| {
-                const top = lerp(p00[dim], p01[dim], wx);
-                const bottom = lerp(p10[dim], p11[dim], wx);
-                dst[dim] += lerp(top, bottom, wy);
+                for (0..input.embedding_dim) |dim| {
+                    const top = lerp(p00[dim], p01[dim], wx);
+                    const bottom = lerp(p10[dim], p11[dim], wx);
+                    dst[dim] += lerp(top, bottom, wy);
+                }
             }
         }
     }
@@ -478,6 +493,7 @@ fn validatePatchEmbeddingInputs(input: *const preprocess.PreparedImageInput, wei
         if (bias.len != weights.out_channels) return error.ShapeMismatch;
     }
     if (input.tensor.channels != weights.in_channels) return error.InvalidChannelCount;
+    if (input.tensor.batch < weights.temporal_patch_size) return error.ShapeMismatch;
     if (input.grid.patchSize() != weights.patch_size) return error.ShapeMismatch;
     if (input.grid.resized_width != input.tensor.width or input.grid.resized_height != input.tensor.height) return error.ShapeMismatch;
 }
@@ -570,8 +586,8 @@ fn lerp(a: f32, b: f32, t: f32) f32 {
     return a + (b - a) * t;
 }
 
-fn tensorIndex(tensor: imaging.TensorF32CHW, channel: usize, y: usize, x: usize) usize {
-    return channel * tensor.width * tensor.height + y * tensor.width + x;
+fn tensorIndex(tensor: imaging.TensorF32NCHW, batch: usize, channel: usize, y: usize, x: usize) usize {
+    return batch * tensor.stride_n + channel * tensor.stride_c + y * tensor.stride_h + x;
 }
 
 fn weightIndex(
@@ -649,6 +665,7 @@ test "chandra patch merger groups neighboring patch embeddings" {
         }),
         .token_count = 4,
         .embedding_dim = 2,
+        .temporal_patch_count = 1,
         .patch_width = 2,
         .patch_height = 2,
     };
@@ -726,6 +743,7 @@ test "chandra vision block mlp applies norm gelu mlp with residual" {
         }),
         .token_count = 2,
         .embedding_dim = 2,
+        .temporal_patch_count = 1,
         .patch_width = 2,
         .patch_height = 1,
     };
@@ -781,6 +799,7 @@ test "chandra vision block attention applies qkv proj attention with residual" {
         }),
         .token_count = 2,
         .embedding_dim = 2,
+        .temporal_patch_count = 1,
         .patch_width = 2,
         .patch_height = 1,
     };
@@ -840,6 +859,7 @@ test "chandra position embeddings add resized learned grid embeddings" {
         }),
         .token_count = 2,
         .embedding_dim = 2,
+        .temporal_patch_count = 1,
         .patch_width = 2,
         .patch_height = 1,
     };
@@ -864,4 +884,58 @@ test "chandra position embeddings add resized learned grid embeddings" {
     try std.testing.expectApproxEqAbs(@as(f32, 10), output.at(0, 1), 0.0001);
     try std.testing.expectApproxEqAbs(@as(f32, 2), output.at(1, 0), 0.0001);
     try std.testing.expectApproxEqAbs(@as(f32, 20), output.at(1, 1), 0.0001);
+}
+
+test "chandra patch embedding consumes temporal frame groups" {
+    var image_a = try imaging.ImageU8.init(std.testing.allocator, 2, 2, 3);
+    defer image_a.deinit();
+    image_a.fill(1);
+
+    var image_b = try imaging.ImageU8.init(std.testing.allocator, 2, 2, 3);
+    defer image_b.deinit();
+    image_b.fill(2);
+
+    const frames = [_]*const imaging.ImageU8{ &image_a, &image_b };
+    var prepared = try preprocess.prepareImageFramesInput(std.testing.allocator, &frames, .{
+        .do_normalize = false,
+        .do_rescale = false,
+        .do_resize = false,
+        .merge_size = 1,
+        .patch_size = 2,
+        .temporal_patch_size = 2,
+        .size = .{
+            .longest_edge = 1024,
+            .shortest_edge = 1,
+        },
+    });
+    defer prepared.deinit();
+
+    const weights = [_]f32{
+        1, 1, 1, 1,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        2, 2, 2, 2,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        3, 3, 3, 3,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+        4, 4, 4, 4,
+        0, 0, 0, 0,
+        0, 0, 0, 0,
+    };
+
+    var embeddings = try patchEmbedImage(std.testing.allocator, &prepared, .{
+        .data = &weights,
+        .out_channels = 2,
+        .in_channels = 3,
+        .temporal_patch_size = 2,
+        .patch_size = 2,
+    });
+    defer embeddings.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), embeddings.temporal_patch_count);
+    try std.testing.expectEqual(@as(usize, 1), embeddings.token_count);
+    try std.testing.expectEqual(@as(f32, 36), embeddings.at(0, 0));
+    try std.testing.expectEqual(@as(f32, 84), embeddings.at(0, 1));
 }
