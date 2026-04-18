@@ -92,6 +92,8 @@ const PreprocessSummary = struct {
     visual_token_count: usize,
     patch_embedding_dim: ?usize = null,
     patch_embedding_executed: bool = false,
+    visual_position_dim: ?usize = null,
+    visual_position_embedding_executed: bool = false,
     visual_attention_dim: ?usize = null,
     visual_block_attention_executed: bool = false,
     visual_block_dim: ?usize = null,
@@ -114,6 +116,8 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
 
         var patch_embedding_dim: ?usize = null;
         var patch_embedding_executed = false;
+        var visual_position_dim: ?usize = null;
+        var visual_position_embedding_executed = false;
         var visual_attention_dim: ?usize = null;
         var visual_block_attention_executed = false;
         var visual_block_dim: ?usize = null;
@@ -133,12 +137,23 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
                         patch_embedding_executed = true;
 
                         var merged_input = value.*;
+                        var transformed_pos: ?vision.PatchEmbeddings = null;
                         var transformed_attention: ?vision.PatchEmbeddings = null;
                         var transformed_mlp: ?vision.PatchEmbeddings = null;
+                        var pos_weights = opened.loadVisualPositionEmbeddings(allocator, value.embedding_dim) catch null;
+                        if (pos_weights) |*pos| {
+                            defer pos.deinit();
+                            transformed_pos = vision.applyPositionEmbeddings(allocator, value.*, pos.weights) catch null;
+                            if (transformed_pos) |*token_features| {
+                                visual_position_dim = token_features.embedding_dim;
+                                visual_position_embedding_executed = true;
+                                merged_input = token_features.*;
+                            }
+                        }
                         var attention_weights = opened.loadVisionBlockAttentionWeights(allocator, 0, readNumHeads(context.model_path)) catch null;
                         if (attention_weights) |*attn| {
                             defer attn.deinit();
-                            transformed_attention = vision.applyVisionBlockAttention(allocator, value.*, attn.weights, 1e-5) catch null;
+                            transformed_attention = vision.applyVisionBlockAttention(allocator, merged_input, attn.weights, 1e-5) catch null;
                             if (transformed_attention) |*token_features| {
                                 visual_attention_dim = token_features.embedding_dim;
                                 visual_block_attention_executed = true;
@@ -156,6 +171,7 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
                                 merged_input = token_features.*;
                             }
                         }
+                        defer if (transformed_pos) |*token_features| token_features.deinit();
                         defer if (transformed_attention) |*token_features| token_features.deinit();
                         defer if (transformed_mlp) |*token_features| token_features.deinit();
 
@@ -189,6 +205,8 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
             .visual_token_count = prepared.grid.token_count,
             .patch_embedding_dim = patch_embedding_dim,
             .patch_embedding_executed = patch_embedding_executed,
+            .visual_position_dim = visual_position_dim,
+            .visual_position_embedding_executed = visual_position_embedding_executed,
             .visual_attention_dim = visual_attention_dim,
             .visual_block_attention_executed = visual_block_attention_executed,
             .visual_block_dim = visual_block_dim,
@@ -314,6 +332,8 @@ fn buildIncompleteOutputJson(
         visual_token_count: ?usize,
         patch_embedding_dim: ?usize,
         patch_embedding_executed: bool,
+        visual_position_dim: ?usize,
+        visual_position_embedding_executed: bool,
         visual_attention_dim: ?usize,
         visual_block_attention_executed: bool,
         visual_block_dim: ?usize,
@@ -336,6 +356,8 @@ fn buildIncompleteOutputJson(
         .native_stage = if (preprocess_summary) |summary|
             if (summary.visual_merger_executed)
                 "visual_merger"
+            else if (summary.visual_position_embedding_executed and !summary.visual_block_attention_executed)
+                "visual_position_embedding"
             else if (summary.visual_block_attention_executed and summary.visual_block_mlp_executed)
                 "visual_block_mlp"
             else if (summary.visual_block_attention_executed)
@@ -363,6 +385,8 @@ fn buildIncompleteOutputJson(
         .visual_token_count = if (preprocess_summary) |summary| summary.visual_token_count else null,
         .patch_embedding_dim = if (preprocess_summary) |summary| summary.patch_embedding_dim else null,
         .patch_embedding_executed = if (preprocess_summary) |summary| summary.patch_embedding_executed else false,
+        .visual_position_dim = if (preprocess_summary) |summary| summary.visual_position_dim else null,
+        .visual_position_embedding_executed = if (preprocess_summary) |summary| summary.visual_position_embedding_executed else false,
         .visual_attention_dim = if (preprocess_summary) |summary| summary.visual_attention_dim else null,
         .visual_block_attention_executed = if (preprocess_summary) |summary| summary.visual_block_attention_executed else false,
         .visual_block_dim = if (preprocess_summary) |summary| summary.visual_block_dim else null,
@@ -644,6 +668,8 @@ test "native chandra execute preprocesses image and runs patch embedding stage" 
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"native_stage\":\"visual_merger\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"patch_embedding_executed\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"patch_embedding_dim\":2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"visual_position_embedding_executed\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"visual_position_dim\":2") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"visual_block_attention_executed\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"visual_attention_dim\":2") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"visual_block_mlp_executed\":true") != null);
@@ -660,7 +686,7 @@ fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8
 
 fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []const u8) !void {
     const header =
-        \\{"visual.patch_embed.proj.weight":{"dtype":"F32","shape":[2,3,1,2,2],"data_offsets":[0,96]},"visual.patch_embed.proj.bias":{"dtype":"F32","shape":[2],"data_offsets":[96,104]},"visual.blocks.0.norm1.weight":{"dtype":"F32","shape":[2],"data_offsets":[104,112]},"visual.blocks.0.norm1.bias":{"dtype":"F32","shape":[2],"data_offsets":[112,120]},"visual.blocks.0.attn.qkv.weight":{"dtype":"F32","shape":[6,2],"data_offsets":[120,168]},"visual.blocks.0.attn.qkv.bias":{"dtype":"F32","shape":[6],"data_offsets":[168,192]},"visual.blocks.0.attn.proj.weight":{"dtype":"F32","shape":[2,2],"data_offsets":[192,208]},"visual.blocks.0.attn.proj.bias":{"dtype":"F32","shape":[2],"data_offsets":[208,216]},"visual.blocks.0.norm2.weight":{"dtype":"F32","shape":[2],"data_offsets":[216,224]},"visual.blocks.0.norm2.bias":{"dtype":"F32","shape":[2],"data_offsets":[224,232]},"visual.blocks.0.mlp.linear_fc1.weight":{"dtype":"F32","shape":[3,2],"data_offsets":[232,256]},"visual.blocks.0.mlp.linear_fc1.bias":{"dtype":"F32","shape":[3],"data_offsets":[256,268]},"visual.blocks.0.mlp.linear_fc2.weight":{"dtype":"F32","shape":[2,3],"data_offsets":[268,292]},"visual.blocks.0.mlp.linear_fc2.bias":{"dtype":"F32","shape":[2],"data_offsets":[292,300]},"visual.merger.mlp.0.weight":{"dtype":"F32","shape":[3,2],"data_offsets":[300,324]},"visual.merger.mlp.0.bias":{"dtype":"F32","shape":[3],"data_offsets":[324,336]},"visual.merger.mlp.2.weight":{"dtype":"F32","shape":[2,3],"data_offsets":[336,360]},"visual.merger.mlp.2.bias":{"dtype":"F32","shape":[2],"data_offsets":[360,368]},"model.embed_tokens.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[368,376]},"lm_head.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[376,384]}}
+        \\{"visual.patch_embed.proj.weight":{"dtype":"F32","shape":[2,3,1,2,2],"data_offsets":[0,96]},"visual.patch_embed.proj.bias":{"dtype":"F32","shape":[2],"data_offsets":[96,104]},"visual.pos_embed":{"dtype":"F32","shape":[4,2],"data_offsets":[104,136]},"visual.blocks.0.norm1.weight":{"dtype":"F32","shape":[2],"data_offsets":[136,144]},"visual.blocks.0.norm1.bias":{"dtype":"F32","shape":[2],"data_offsets":[144,152]},"visual.blocks.0.attn.qkv.weight":{"dtype":"F32","shape":[6,2],"data_offsets":[152,200]},"visual.blocks.0.attn.qkv.bias":{"dtype":"F32","shape":[6],"data_offsets":[200,224]},"visual.blocks.0.attn.proj.weight":{"dtype":"F32","shape":[2,2],"data_offsets":[224,240]},"visual.blocks.0.attn.proj.bias":{"dtype":"F32","shape":[2],"data_offsets":[240,248]},"visual.blocks.0.norm2.weight":{"dtype":"F32","shape":[2],"data_offsets":[248,256]},"visual.blocks.0.norm2.bias":{"dtype":"F32","shape":[2],"data_offsets":[256,264]},"visual.blocks.0.mlp.linear_fc1.weight":{"dtype":"F32","shape":[3,2],"data_offsets":[264,288]},"visual.blocks.0.mlp.linear_fc1.bias":{"dtype":"F32","shape":[3],"data_offsets":[288,300]},"visual.blocks.0.mlp.linear_fc2.weight":{"dtype":"F32","shape":[2,3],"data_offsets":[300,324]},"visual.blocks.0.mlp.linear_fc2.bias":{"dtype":"F32","shape":[2],"data_offsets":[324,332]},"visual.merger.mlp.0.weight":{"dtype":"F32","shape":[3,2],"data_offsets":[332,356]},"visual.merger.mlp.0.bias":{"dtype":"F32","shape":[3],"data_offsets":[356,368]},"visual.merger.mlp.2.weight":{"dtype":"F32","shape":[2,3],"data_offsets":[368,392]},"visual.merger.mlp.2.bias":{"dtype":"F32","shape":[2],"data_offsets":[392,400]},"model.embed_tokens.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[400,408]},"lm_head.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[408,416]}}
     ;
 
     const file = try dir.createFile(relative_path, .{});
@@ -671,7 +697,7 @@ fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []con
     try file.writeAll(&length_prefix);
     try file.writeAll(header);
 
-    var payload: [384]u8 = undefined;
+    var payload: [416]u8 = undefined;
     @memset(&payload, 0);
 
     const patch_weights = [_]f32{
@@ -688,14 +714,25 @@ fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []con
     std.mem.writeInt(u32, payload[96..100], @bitCast(@as(f32, 0.0)), .little);
     std.mem.writeInt(u32, payload[100..104], @bitCast(@as(f32, 1.0)), .little);
 
+    const visual_pos = [_]f32{
+        1, 10,
+        2, 20,
+        3, 30,
+        4, 40,
+    };
+    for (visual_pos, 0..) |value, index| {
+        const start = 104 + index * 4;
+        std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
+    }
+
     const block_attn_norm_weight = [_]f32{ 1, 1 };
     for (block_attn_norm_weight, 0..) |value, index| {
-        const start = 104 + index * 4;
+        const start = 136 + index * 4;
         std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
     }
     const block_attn_norm_bias = [_]f32{ 0, 0 };
     for (block_attn_norm_bias, 0..) |value, index| {
-        const start = 112 + index * 4;
+        const start = 144 + index * 4;
         std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
     }
     const block_qkv = [_]f32{
@@ -707,12 +744,12 @@ fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []con
         0, 1,
     };
     for (block_qkv, 0..) |value, index| {
-        const start = 120 + index * 4;
+        const start = 152 + index * 4;
         std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
     }
     const block_qkv_bias = [_]f32{ 0, 0, 0, 0, 0, 0 };
     for (block_qkv_bias, 0..) |value, index| {
-        const start = 168 + index * 4;
+        const start = 200 + index * 4;
         std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
     }
     const block_proj = [_]f32{
@@ -720,20 +757,20 @@ fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []con
         0, 1,
     };
     for (block_proj, 0..) |value, index| {
-        const start = 192 + index * 4;
+        const start = 224 + index * 4;
         std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
     }
-    std.mem.writeInt(u32, payload[208..212], @bitCast(@as(f32, 0.0)), .little);
-    std.mem.writeInt(u32, payload[212..216], @bitCast(@as(f32, 0.0)), .little);
+    std.mem.writeInt(u32, payload[240..244], @bitCast(@as(f32, 0.0)), .little);
+    std.mem.writeInt(u32, payload[244..248], @bitCast(@as(f32, 0.0)), .little);
 
     const block_norm_weight = [_]f32{ 1, 1 };
     for (block_norm_weight, 0..) |value, index| {
-        const start = 216 + index * 4;
+        const start = 248 + index * 4;
         std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
     }
     const block_norm_bias = [_]f32{ 0, 0 };
     for (block_norm_bias, 0..) |value, index| {
-        const start = 224 + index * 4;
+        const start = 256 + index * 4;
         std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
     }
     const block_fc1 = [_]f32{
@@ -742,22 +779,22 @@ fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []con
         1, 1,
     };
     for (block_fc1, 0..) |value, index| {
-        const start = 232 + index * 4;
+        const start = 264 + index * 4;
         std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
     }
-    std.mem.writeInt(u32, payload[256..260], @bitCast(@as(f32, 0.0)), .little);
-    std.mem.writeInt(u32, payload[260..264], @bitCast(@as(f32, 0.0)), .little);
-    std.mem.writeInt(u32, payload[264..268], @bitCast(@as(f32, 0.5)), .little);
+    std.mem.writeInt(u32, payload[288..292], @bitCast(@as(f32, 0.0)), .little);
+    std.mem.writeInt(u32, payload[292..296], @bitCast(@as(f32, 0.0)), .little);
+    std.mem.writeInt(u32, payload[296..300], @bitCast(@as(f32, 0.5)), .little);
     const block_fc2 = [_]f32{
         1, 0, 0,
         0, 1, 1,
     };
     for (block_fc2, 0..) |value, index| {
-        const start = 268 + index * 4;
+        const start = 300 + index * 4;
         std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
     }
-    std.mem.writeInt(u32, payload[292..296], @bitCast(@as(f32, 0.0)), .little);
-    std.mem.writeInt(u32, payload[296..300], @bitCast(@as(f32, 0.0)), .little);
+    std.mem.writeInt(u32, payload[324..328], @bitCast(@as(f32, 0.0)), .little);
+    std.mem.writeInt(u32, payload[328..332], @bitCast(@as(f32, 0.0)), .little);
 
     const merger_fc1 = [_]f32{
         1, 0,
@@ -765,23 +802,23 @@ fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []con
         1, 1,
     };
     for (merger_fc1, 0..) |value, index| {
-        const start = 300 + index * 4;
+        const start = 332 + index * 4;
         std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
     }
-    std.mem.writeInt(u32, payload[324..328], @bitCast(@as(f32, 0.0)), .little);
-    std.mem.writeInt(u32, payload[328..332], @bitCast(@as(f32, 0.0)), .little);
-    std.mem.writeInt(u32, payload[332..336], @bitCast(@as(f32, 0.5)), .little);
+    std.mem.writeInt(u32, payload[356..360], @bitCast(@as(f32, 0.0)), .little);
+    std.mem.writeInt(u32, payload[360..364], @bitCast(@as(f32, 0.0)), .little);
+    std.mem.writeInt(u32, payload[364..368], @bitCast(@as(f32, 0.5)), .little);
 
     const merger_fc2 = [_]f32{
         1, 0, 0,
         0, 1, 1,
     };
     for (merger_fc2, 0..) |value, index| {
-        const start = 336 + index * 4;
+        const start = 368 + index * 4;
         std.mem.writeInt(u32, payload[start .. start + 4][0..4], @bitCast(value), .little);
     }
-    std.mem.writeInt(u32, payload[360..364], @bitCast(@as(f32, 0.25)), .little);
-    std.mem.writeInt(u32, payload[364..368], @bitCast(@as(f32, -0.25)), .little);
+    std.mem.writeInt(u32, payload[392..396], @bitCast(@as(f32, 0.25)), .little);
+    std.mem.writeInt(u32, payload[396..400], @bitCast(@as(f32, -0.25)), .little);
 
     try file.writeAll(&payload);
 }

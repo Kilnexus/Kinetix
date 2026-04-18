@@ -177,6 +177,54 @@ pub const ChandraStore = struct {
         };
     }
 
+    pub fn loadVisualPositionEmbeddings(
+        self: *const ChandraStore,
+        allocator: std.mem.Allocator,
+        embedding_dim_hint: usize,
+    ) !chandra_vision.OwnedPositionEmbeddingWeights {
+        const tensor_name = self.findFirstTensorName(&.{"visual.pos_embed"}) orelse return error.TensorNotFound;
+        const file_store = self.findStoreForTensor(tensor_name) orelse return error.TensorNotFound;
+        const info = file_store.getTensor(tensor_name) orelse return error.TensorNotFound;
+        if (info.rank() != 2) return error.InvalidTensorRank;
+
+        const dim0 = dimToUsize(info.shape[0]);
+        const dim1 = dimToUsize(info.shape[1]);
+
+        var raw = try file_store.readElementsAsF32Alloc(tensor_name, 0, @intCast(try info.elementCount()));
+        errdefer allocator.free(raw);
+
+        var token_count: usize = 0;
+        var embedding_dim: usize = 0;
+        if (dim1 == embedding_dim_hint and isPerfectSquare(dim0)) {
+            token_count = dim0;
+            embedding_dim = dim1;
+        } else if (dim0 == embedding_dim_hint and isPerfectSquare(dim1)) {
+            token_count = dim1;
+            embedding_dim = dim0;
+            raw = try transposeTokenMajor(allocator, raw, dim0, dim1);
+        } else if (isPerfectSquare(dim0)) {
+            token_count = dim0;
+            embedding_dim = dim1;
+        } else if (isPerfectSquare(dim1)) {
+            token_count = dim1;
+            embedding_dim = dim0;
+            raw = try transposeTokenMajor(allocator, raw, dim0, dim1);
+        } else {
+            return error.ShapeMismatch;
+        }
+
+        const side = perfectSquareSide(token_count) orelse return error.ShapeMismatch;
+        return .{
+            .allocator = allocator,
+            .weights = .{
+                .data = raw,
+                .base_width = side,
+                .base_height = side,
+                .embedding_dim = embedding_dim,
+            },
+        };
+    }
+
     fn findPatchEmbeddingWeightName(self: *const ChandraStore) ?[]const u8 {
         for (self.files) |file| {
             var it = file.store.parsed.tensors.iterator();
@@ -313,6 +361,29 @@ fn biasTensorName(allocator: std.mem.Allocator, weight_name: []const u8) ![]u8 {
 
 fn dimToUsize(value: u64) usize {
     return @intCast(value);
+}
+
+fn isPerfectSquare(value: usize) bool {
+    return perfectSquareSide(value) != null;
+}
+
+fn perfectSquareSide(value: usize) ?usize {
+    if (value == 0) return null;
+    const side = @as(usize, @intFromFloat(@sqrt(@as(f64, @floatFromInt(value)))));
+    if (side * side == value) return side;
+    return null;
+}
+
+fn transposeTokenMajor(allocator: std.mem.Allocator, source: []f32, rows: usize, cols: usize) ![]f32 {
+    const old = source;
+    const transposed = try allocator.alloc(f32, old.len);
+    for (0..rows) |row| {
+        for (0..cols) |col| {
+            transposed[col * rows + row] = old[row * cols + col];
+        }
+    }
+    allocator.free(old);
+    return transposed;
 }
 
 test "chandra store loads patch embedding weights from a synthetic safetensors file" {
@@ -533,4 +604,48 @@ test "chandra store loads visual block attention weights from a synthetic safete
     try std.testing.expectEqual(@as(usize, 2), loaded.weights.proj.out_features);
     try std.testing.expectEqual(@as(usize, 1), loaded.weights.num_heads);
     try std.testing.expectEqual(@as(f32, 1.0), loaded.weights.qkv.data[0]);
+}
+
+test "chandra store loads visual position embeddings from token-major safetensors tensor" {
+    const header =
+        \\{"visual.pos_embed":{"dtype":"F32","shape":[4,2],"data_offsets":[0,32]}}
+    ;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const model_dir_name = "model";
+    try tmp.dir.makeDir(model_dir_name);
+    var model_dir = try tmp.dir.openDir(model_dir_name, .{});
+    defer model_dir.close();
+
+    const file = try model_dir.createFile("model.safetensors", .{});
+    defer file.close();
+
+    var length_prefix: [8]u8 = undefined;
+    std.mem.writeInt(u64, &length_prefix, header.len, .little);
+    try file.writeAll(&length_prefix);
+    try file.writeAll(header);
+
+    var payload: [32]u8 = undefined;
+    const values = [_]f32{ 1, 10, 2, 20, 3, 30, 4, 40 };
+    for (values, 0..) |value, index| {
+        std.mem.writeInt(u32, payload[index * 4 .. index * 4 + 4][0..4], @bitCast(value), .little);
+    }
+    try file.writeAll(&payload);
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, model_dir_name);
+    defer std.testing.allocator.free(root_path);
+
+    var store = try ChandraStore.open(std.testing.allocator, root_path);
+    defer store.deinit();
+
+    var loaded = try store.loadVisualPositionEmbeddings(std.testing.allocator, 2);
+    defer loaded.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), loaded.weights.base_width);
+    try std.testing.expectEqual(@as(usize, 2), loaded.weights.base_height);
+    try std.testing.expectEqual(@as(usize, 2), loaded.weights.embedding_dim);
+    try std.testing.expectEqual(@as(f32, 1.0), loaded.weights.data[0]);
+    try std.testing.expectEqual(@as(f32, 40.0), loaded.weights.data[7]);
 }

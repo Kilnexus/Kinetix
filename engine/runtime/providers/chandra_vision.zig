@@ -137,6 +137,27 @@ pub const OwnedVisualAttentionWeights = struct {
     }
 };
 
+pub const PositionEmbeddingWeights = struct {
+    data: []const f32,
+    base_width: usize,
+    base_height: usize,
+    embedding_dim: usize,
+
+    pub fn tokenCount(self: PositionEmbeddingWeights) usize {
+        return self.base_width * self.base_height;
+    }
+};
+
+pub const OwnedPositionEmbeddingWeights = struct {
+    allocator: std.mem.Allocator,
+    weights: PositionEmbeddingWeights,
+
+    pub fn deinit(self: *OwnedPositionEmbeddingWeights) void {
+        self.allocator.free(self.weights.data);
+        self.* = undefined;
+    }
+};
+
 pub const LinearMlpWeights = struct {
     norm: LayerNormWeights,
     fc1: LinearWeights,
@@ -387,6 +408,62 @@ pub fn applyVisionBlockAttention(
     return output;
 }
 
+pub fn applyPositionEmbeddings(
+    allocator: std.mem.Allocator,
+    input: PatchEmbeddings,
+    weights: PositionEmbeddingWeights,
+) !PatchEmbeddings {
+    if (input.embedding_dim != weights.embedding_dim) return error.ShapeMismatch;
+    if (weights.base_width == 0 or weights.base_height == 0) return error.ShapeMismatch;
+    if (weights.data.len != weights.tokenCount() * weights.embedding_dim) return error.ShapeMismatch;
+
+    var output = PatchEmbeddings{
+        .allocator = allocator,
+        .data = try allocator.alloc(f32, input.data.len),
+        .token_count = input.token_count,
+        .embedding_dim = input.embedding_dim,
+        .patch_width = input.patch_width,
+        .patch_height = input.patch_height,
+    };
+    errdefer output.deinit();
+    @memcpy(output.data, input.data);
+
+    for (0..input.patch_height) |y| {
+        for (0..input.patch_width) |x| {
+            const token_index = y * input.patch_width + x;
+            const dst = output.data[token_index * input.embedding_dim ..][0..input.embedding_dim];
+            if (input.patch_width == weights.base_width and input.patch_height == weights.base_height) {
+                const src = weights.data[token_index * input.embedding_dim ..][0..input.embedding_dim];
+                for (dst, src) |*out, pos| out.* += pos;
+                continue;
+            }
+
+            const src_y = scaleCoord(y, input.patch_height, weights.base_height);
+            const y0 = clampFloor(src_y, weights.base_height);
+            const y1 = @min(y0 + 1, weights.base_height - 1);
+            const wy = src_y - @as(f32, @floatFromInt(y0));
+
+            const src_x = scaleCoord(x, input.patch_width, weights.base_width);
+            const x0 = clampFloor(src_x, weights.base_width);
+            const x1 = @min(x0 + 1, weights.base_width - 1);
+            const wx = src_x - @as(f32, @floatFromInt(x0));
+
+            const p00 = weights.data[(y0 * weights.base_width + x0) * input.embedding_dim ..][0..input.embedding_dim];
+            const p01 = weights.data[(y0 * weights.base_width + x1) * input.embedding_dim ..][0..input.embedding_dim];
+            const p10 = weights.data[(y1 * weights.base_width + x0) * input.embedding_dim ..][0..input.embedding_dim];
+            const p11 = weights.data[(y1 * weights.base_width + x1) * input.embedding_dim ..][0..input.embedding_dim];
+
+            for (0..input.embedding_dim) |dim| {
+                const top = lerp(p00[dim], p01[dim], wx);
+                const bottom = lerp(p10[dim], p11[dim], wx);
+                dst[dim] += lerp(top, bottom, wy);
+            }
+        }
+    }
+
+    return output;
+}
+
 fn validatePatchEmbeddingInputs(input: *const preprocess.PreparedImageInput, weights: PatchEmbeddingWeights) !void {
     if (weights.out_channels == 0 or weights.in_channels == 0) return error.InvalidPatchEmbeddingShape;
     if (weights.patch_size == 0 or weights.temporal_patch_size == 0) return error.InvalidPatchEmbeddingShape;
@@ -470,6 +547,21 @@ fn kSlice(qkv: []const f32, token_index: usize, dim: usize, head_index: usize, h
 fn vSlice(qkv: []const f32, token_index: usize, dim: usize, head_index: usize, head_dim: usize) []const f32 {
     const base = token_index * dim * 3 + dim * 2 + head_index * head_dim;
     return qkv[base .. base + head_dim];
+}
+
+fn scaleCoord(index: usize, dst_size: usize, src_size: usize) f32 {
+    if (dst_size <= 1 or src_size <= 1) return 0.0;
+    return @as(f32, @floatFromInt(index)) * @as(f32, @floatFromInt(src_size - 1)) / @as(f32, @floatFromInt(dst_size - 1));
+}
+
+fn clampFloor(value: f32, upper: usize) usize {
+    if (value <= 0.0) return 0;
+    const idx = @as(usize, @intFromFloat(@floor(value)));
+    return @min(idx, upper - 1);
+}
+
+fn lerp(a: f32, b: f32, t: f32) f32 {
+    return a + (b - a) * t;
 }
 
 fn tensorIndex(tensor: imaging.TensorF32CHW, channel: usize, y: usize, x: usize) usize {
@@ -728,4 +820,39 @@ test "chandra vision block attention applies qkv proj attention with residual" {
     try std.testing.expectApproxEqAbs(@as(f32, -1.888386), output.at(0, 1), 0.0001);
     try std.testing.expectApproxEqAbs(@as(f32, -1.888386), output.at(1, 0), 0.0001);
     try std.testing.expectApproxEqAbs(@as(f32, 1.888386), output.at(1, 1), 0.0001);
+}
+
+test "chandra position embeddings add resized learned grid embeddings" {
+    var embeddings = PatchEmbeddings{
+        .allocator = std.testing.allocator,
+        .data = try std.testing.allocator.dupe(f32, &.{
+            0, 0,
+            0, 0,
+        }),
+        .token_count = 2,
+        .embedding_dim = 2,
+        .patch_width = 2,
+        .patch_height = 1,
+    };
+    defer embeddings.deinit();
+
+    const pos = [_]f32{
+        1, 10,
+        2, 20,
+        3, 30,
+        4, 40,
+    };
+
+    var output = try applyPositionEmbeddings(std.testing.allocator, embeddings, .{
+        .data = &pos,
+        .base_width = 2,
+        .base_height = 2,
+        .embedding_dim = 2,
+    });
+    defer output.deinit();
+
+    try std.testing.expectApproxEqAbs(@as(f32, 1), output.at(0, 0), 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), output.at(0, 1), 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), output.at(1, 0), 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 20), output.at(1, 1), 0.0001);
 }
