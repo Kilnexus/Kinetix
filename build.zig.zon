@@ -1,6 +1,12 @@
 .{
     .name = .Kinetix,
     .version = "0.1.0",
+    .dependencies = .{
+        .Pixio = .{
+            .url = "git+https://github.com/Kilnexus/Pixio.git#8d649133a895a37372c1e422cadfcf8403f3ea3d",
+            .hash = "Pixio-0.1.0-QoZdTOVpBwCnMNpCrtEqJnCUWPZShWKjeQ4WOHZLQkEN",
+        },
+    },
     .minimum_zig_version = "0.15.2",
     .paths = .{ "", "engine", "docs" },
     .fingerprint = 0x6778871e1529574e,

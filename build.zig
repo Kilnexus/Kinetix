@@ -3,7 +3,12 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const legacy_imports = addLegacyImports(b, target, optimize);
+    const local_pixio = b.option(
+        bool,
+        "local_pixio",
+        "Use local lib/Pixio checkout for development instead of the pinned remote Pixio dependency",
+    ) orelse false;
+    const legacy_imports = addLegacyImports(b, target, optimize, local_pixio);
 
     const kinetix_module = createRootModule(b, target, optimize, legacy_imports, "sdk/kinetix.zig");
 
@@ -73,6 +78,7 @@ fn addLegacyImports(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    local_pixio: bool,
 ) LegacyImports {
     const engine_root = b.createModule(.{
         .root_source_file = b.path("engine/kinetix.zig"),
@@ -93,11 +99,7 @@ fn addLegacyImports(
     kinetix_sdk.addImport("engine_root", engine_root);
     kinetix_sdk.addImport("sdk_execution", sdk_execution);
 
-    const pixio = b.createModule(.{
-        .root_source_file = b.path("lib/Pixio/src/Pixio.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+    const pixio = resolvePixioModule(b, target, optimize, local_pixio);
     engine_root.addImport("Pixio", pixio);
 
     const graph = b.createModule(.{
@@ -213,6 +215,33 @@ fn addLegacyImports(
         .runtime = runtime,
         .legacy_vision = legacy_vision,
     };
+}
+
+fn resolvePixioModule(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    local_pixio: bool,
+) *std.Build.Module {
+    if (local_pixio) {
+        std.fs.cwd().access("lib/Pixio/src/Pixio.zig", .{}) catch {
+            std.debug.panic(
+                "local_pixio=true requires a local checkout at lib/Pixio; disable -Dlocal_pixio or restore the local repository",
+                .{},
+            );
+        };
+        return b.createModule(.{
+            .root_source_file = b.path("lib/Pixio/src/Pixio.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+    }
+
+    const pixio_dep = b.dependency("Pixio", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    return pixio_dep.module("Pixio");
 }
 
 fn addImportsToRoot(root: *std.Build.Module, imports: LegacyImports) void {

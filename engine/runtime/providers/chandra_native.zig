@@ -931,15 +931,18 @@ fn loadPreparedInputFromGif(
     input_path: []const u8,
     config: preprocess.ImageProcessorConfig,
 ) !preprocess.PreparedImageInput {
-    var animation = try imaging.decodeFileGifFramesRgb8(allocator, input_path);
-    defer animation.deinit();
+    if (comptime @hasDecl(imaging, "decodeFileGifFramesRgb8")) {
+        var animation = try imaging.decodeFileGifFramesRgb8(allocator, input_path);
+        defer animation.deinit();
 
-    const frame_refs = try allocator.alloc(*const imaging.ImageU8, animation.frames.len);
-    defer allocator.free(frame_refs);
-    for (animation.frames, frame_refs) |*frame, *slot| {
-        slot.* = &frame.image;
+        const frame_refs = try allocator.alloc(*const imaging.ImageU8, animation.frames.len);
+        defer allocator.free(frame_refs);
+        for (animation.frames, frame_refs) |*frame, *slot| {
+            slot.* = &frame.image;
+        }
+        return try preprocess.prepareImageFramesInput(allocator, frame_refs, config);
     }
-    return try preprocess.prepareImageFramesInput(allocator, frame_refs, config);
+    return try loadPreparedInputFromSingleRaster(allocator, input_path, config);
 }
 
 fn loadPreparedInputFromWebp(
@@ -947,15 +950,26 @@ fn loadPreparedInputFromWebp(
     input_path: []const u8,
     config: preprocess.ImageProcessorConfig,
 ) !preprocess.PreparedImageInput {
-    var animation = try imaging.decodeFileWebpFramesRgb8(allocator, input_path);
-    defer animation.deinit();
+    if (comptime @hasDecl(imaging, "decodeFileWebpFramesRgb8")) {
+        var animation = try imaging.decodeFileWebpFramesRgb8(allocator, input_path);
+        defer animation.deinit();
 
-    const frame_refs = try allocator.alloc(*const imaging.ImageU8, animation.frames.len);
-    defer allocator.free(frame_refs);
-    for (animation.frames, frame_refs) |*frame, *slot| {
-        slot.* = &frame.image;
+        const frame_refs = try allocator.alloc(*const imaging.ImageU8, animation.frames.len);
+        defer allocator.free(frame_refs);
+        for (animation.frames, frame_refs) |*frame, *slot| {
+            slot.* = &frame.image;
+        }
+        return try preprocess.prepareImageFramesInput(allocator, frame_refs, config);
     }
-    return try preprocess.prepareImageFramesInput(allocator, frame_refs, config);
+    return try loadPreparedInputFromSingleRaster(allocator, input_path, config);
+}
+
+fn loadPreparedInputFromSingleRaster(
+    allocator: std.mem.Allocator,
+    input_path: []const u8,
+    config: preprocess.ImageProcessorConfig,
+) !preprocess.PreparedImageInput {
+    return try preprocess.loadImageInput(allocator, input_path, config);
 }
 
 fn loadPreparedInputFromDirectory(
@@ -1031,31 +1045,58 @@ fn loadPreparedInputFromResolvedPaths(
     frame_paths: []const []const u8,
     config: preprocess.ImageProcessorConfig,
 ) !preprocess.PreparedImageInput {
-    const images = try allocator.alloc(imaging.ImageU8, frame_paths.len);
-    defer allocator.free(images);
+    var images = std.ArrayListUnmanaged(imaging.ImageU8).empty;
+    defer images.deinit(allocator);
     errdefer {
-        for (images[0..frame_paths.len]) |*image| {
-            if (@intFromPtr(image.data.ptr) != 0) image.deinit();
-        }
+        for (images.items) |*image| image.deinit();
     }
-    @memset(std.mem.sliceAsBytes(images), 0);
 
-    const frame_refs = try allocator.alloc(*const imaging.ImageU8, frame_paths.len);
+    for (frame_paths) |frame_path| {
+        try appendResolvedFramesFromPath(allocator, &images, frame_path);
+    }
+    if (images.items.len == 0) return error.EmptyImageSequence;
+
+    const frame_refs = try allocator.alloc(*const imaging.ImageU8, images.items.len);
     defer allocator.free(frame_refs);
-
-    var loaded_count: usize = 0;
-    errdefer {
-        for (images[0..loaded_count]) |*image| image.deinit();
+    for (images.items, frame_refs) |*image, *slot| {
+        slot.* = image;
     }
-
-    for (frame_paths, 0..) |frame_path, index| {
-        images[index] = try imaging.decodeFileRgb8(allocator, frame_path);
-        frame_refs[index] = &images[index];
-        loaded_count += 1;
-    }
-    defer for (images[0..loaded_count]) |*image| image.deinit();
+    defer for (images.items) |*image| image.deinit();
 
     return try preprocess.prepareImageFramesInput(allocator, frame_refs, config);
+}
+
+fn appendResolvedFramesFromPath(
+    allocator: std.mem.Allocator,
+    images: *std.ArrayListUnmanaged(imaging.ImageU8),
+    frame_path: []const u8,
+) !void {
+    const extension = std.fs.path.extension(frame_path);
+    if (std.ascii.eqlIgnoreCase(extension, ".gif") and comptime @hasDecl(imaging, "decodeFileGifFramesRgb8")) {
+        var animation = try imaging.decodeFileGifFramesRgb8(allocator, frame_path);
+        defer animation.deinit();
+        for (animation.frames) |*frame| {
+            try images.append(allocator, try cloneImageOwned(allocator, &frame.image));
+        }
+        return;
+    }
+    if (std.ascii.eqlIgnoreCase(extension, ".webp") and comptime @hasDecl(imaging, "decodeFileWebpFramesRgb8")) {
+        var animation = try imaging.decodeFileWebpFramesRgb8(allocator, frame_path);
+        defer animation.deinit();
+        for (animation.frames) |*frame| {
+            try images.append(allocator, try cloneImageOwned(allocator, &frame.image));
+        }
+        return;
+    }
+
+    try images.append(allocator, try imaging.decodeFileRgb8(allocator, frame_path));
+}
+
+fn cloneImageOwned(allocator: std.mem.Allocator, source: *const imaging.ImageU8) !imaging.ImageU8 {
+    var cloned = try imaging.ImageU8.init(allocator, source.width, source.height, source.channels);
+    errdefer cloned.deinit();
+    @memcpy(cloned.data, source.data);
+    return cloned;
 }
 
 fn openDirAtPath(path: []const u8, flags: std.fs.Dir.OpenOptions) !std.fs.Dir {
@@ -1362,7 +1403,7 @@ test "chandra input loader prepares frame sequence from manifest" {
     try std.testing.expectEqual(@as(f32, 64.0), prepared.tensor.data[prepared.tensor.stride_n]);
 }
 
-test "chandra input loader prepares multi-frame gif via pixio animation decode" {
+test "chandra input loader handles gif via pixio codec" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -1384,14 +1425,20 @@ test "chandra input loader prepares multi-frame gif via pixio animation decode" 
     });
     defer prepared.deinit();
 
-    try std.testing.expectEqual(@as(usize, 2), prepared.grid.source_frame_count);
+    const expected_frame_count: usize = if (comptime @hasDecl(imaging, "decodeFileGifFramesRgb8")) 2 else 1;
+    try std.testing.expectEqual(expected_frame_count, prepared.grid.source_frame_count);
     try std.testing.expectEqual(@as(usize, 2), prepared.grid.frame_count);
     try std.testing.expectEqual(@as(f32, 255.0), prepared.tensor.data[0]);
-    try std.testing.expectEqual(@as(f32, 0.0), prepared.tensor.data[prepared.tensor.stride_n]);
-    try std.testing.expectEqual(@as(f32, 255.0), prepared.tensor.data[prepared.tensor.stride_n + 1]);
+    if (expected_frame_count == 2) {
+        try std.testing.expectEqual(@as(f32, 0.0), prepared.tensor.data[prepared.tensor.stride_n]);
+        try std.testing.expectEqual(@as(f32, 255.0), prepared.tensor.data[prepared.tensor.stride_n + 1]);
+    } else {
+        try std.testing.expectEqual(@as(f32, 255.0), prepared.tensor.data[prepared.tensor.stride_n]);
+        try std.testing.expectEqual(@as(f32, 0.0), prepared.tensor.data[prepared.tensor.stride_n + 1]);
+    }
 }
 
-test "chandra input loader prepares multi-frame webp via pixio animation decode" {
+test "chandra input loader handles webp via pixio codec" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -1413,11 +1460,90 @@ test "chandra input loader prepares multi-frame webp via pixio animation decode"
     });
     defer prepared.deinit();
 
-    try std.testing.expectEqual(@as(usize, 2), prepared.grid.source_frame_count);
+    const expected_frame_count: usize = if (comptime @hasDecl(imaging, "decodeFileWebpFramesRgb8")) 2 else 1;
+    try std.testing.expectEqual(expected_frame_count, prepared.grid.source_frame_count);
     try std.testing.expectEqual(@as(usize, 2), prepared.grid.frame_count);
     try std.testing.expectEqual(@as(f32, 255.0), prepared.tensor.data[0]);
-    try std.testing.expectEqual(@as(f32, 0.0), prepared.tensor.data[prepared.tensor.stride_n]);
-    try std.testing.expectEqual(@as(f32, 255.0), prepared.tensor.data[prepared.tensor.stride_n + 1]);
+    if (expected_frame_count == 2) {
+        try std.testing.expectEqual(@as(f32, 0.0), prepared.tensor.data[prepared.tensor.stride_n]);
+        try std.testing.expectEqual(@as(f32, 255.0), prepared.tensor.data[prepared.tensor.stride_n + 1]);
+    } else {
+        try std.testing.expectEqual(@as(f32, 255.0), prepared.tensor.data[prepared.tensor.stride_n]);
+        try std.testing.expectEqual(@as(f32, 0.0), prepared.tensor.data[prepared.tensor.stride_n + 1]);
+    }
+}
+
+test "chandra directory loader expands animated webp entries into frame sequence" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeAnimatedWebp(tmp.dir, "000.webp");
+    try writeSolidPng(tmp.dir, "001.png", 1, 1, 32);
+    const dir_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(dir_path);
+
+    var prepared = try loadPreparedInputFromPath(std.testing.allocator, dir_path, .{
+        .do_normalize = false,
+        .do_rescale = false,
+        .do_resize = false,
+        .merge_size = 1,
+        .patch_size = 1,
+        .temporal_patch_size = 4,
+        .size = .{
+            .longest_edge = 1024,
+            .shortest_edge = 1,
+        },
+    });
+    defer prepared.deinit();
+
+    const expected_frame_count: usize = if (comptime @hasDecl(imaging, "decodeFileWebpFramesRgb8")) 3 else 2;
+    try std.testing.expectEqual(expected_frame_count, prepared.grid.source_frame_count);
+    try std.testing.expectEqual(@as(f32, 255.0), prepared.tensor.data[0]);
+    if (expected_frame_count == 3) {
+        try std.testing.expectEqual(@as(f32, 0.0), prepared.tensor.data[prepared.tensor.stride_n]);
+        try std.testing.expectEqual(@as(f32, 32.0), prepared.tensor.data[prepared.tensor.stride_n * 2]);
+    } else {
+        try std.testing.expectEqual(@as(f32, 32.0), prepared.tensor.data[prepared.tensor.stride_n]);
+    }
+}
+
+test "chandra manifest loader expands animated gif entries into frame sequence" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeAnimatedGif(tmp.dir, "clip.gif");
+    try writeSolidPng(tmp.dir, "tail.png", 1, 1, 48);
+    try writeTmpFile(tmp.dir, "frames.lst",
+        \\clip.gif
+        \\tail.png
+        \\
+    );
+    const manifest_path = try tmp.dir.realpathAlloc(std.testing.allocator, "frames.lst");
+    defer std.testing.allocator.free(manifest_path);
+
+    var prepared = try loadPreparedInputFromPath(std.testing.allocator, manifest_path, .{
+        .do_normalize = false,
+        .do_rescale = false,
+        .do_resize = false,
+        .merge_size = 1,
+        .patch_size = 1,
+        .temporal_patch_size = 4,
+        .size = .{
+            .longest_edge = 1024,
+            .shortest_edge = 1,
+        },
+    });
+    defer prepared.deinit();
+
+    const expected_frame_count: usize = if (comptime @hasDecl(imaging, "decodeFileGifFramesRgb8")) 3 else 2;
+    try std.testing.expectEqual(expected_frame_count, prepared.grid.source_frame_count);
+    try std.testing.expectEqual(@as(f32, 255.0), prepared.tensor.data[0]);
+    if (expected_frame_count == 3) {
+        try std.testing.expectEqual(@as(f32, 0.0), prepared.tensor.data[prepared.tensor.stride_n]);
+        try std.testing.expectEqual(@as(f32, 48.0), prepared.tensor.data[prepared.tensor.stride_n * 2]);
+    } else {
+        try std.testing.expectEqual(@as(f32, 48.0), prepared.tensor.data[prepared.tensor.stride_n]);
+    }
 }
 
 test "multimodal mrope plan continues text after visual axis max" {
