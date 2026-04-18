@@ -185,7 +185,7 @@ pub const Runtime = struct {
         position: decoder_types.TokenPosition,
     ) ![]f32 {
         if (embedding.len != self.cfg.hidden_size) return error.SizeMismatch;
-        @memcpy(workspace.hidden_a, embedding);
+        std.mem.copyForwards(f32, workspace.hidden_a, embedding);
 
         var hidden_in = workspace.hidden_a;
         var hidden_out = workspace.hidden_b;

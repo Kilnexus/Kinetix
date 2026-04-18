@@ -200,6 +200,19 @@ fn addLegacyImports(
     legacy_vision.addImport("Pixio", pixio);
     legacy_vision.addImport("runtime", runtime);
 
+    engine_root.addImport("graph", graph);
+    engine_root.addImport("engine_vision_inspect", engine_vision_inspect);
+    engine_root.addImport("engine_vision_base", engine_vision_base);
+    engine_root.addImport("engine_vision_modules", engine_vision_modules);
+    engine_root.addImport("engine_vision_reuse_allocator", engine_vision_reuse_allocator);
+    engine_root.addImport("engine_vision_engine", engine_vision_engine);
+    engine_root.addImport("tensor", tensor);
+    engine_root.addImport("ops", ops);
+    engine_root.addImport("weights", weights);
+    engine_root.addImport("engine_global_thread_pool", global_thread_pool);
+    engine_root.addImport("runtime", runtime);
+    engine_root.addImport("vision", legacy_vision);
+
     return .{
         .engine_root = engine_root,
         .sdk_execution = sdk_execution,

@@ -271,13 +271,13 @@ fn runCommand(stdout: anytype, args: RunArgs) !void {
     try stdout.print("modality: {s}\n", .{@tagName(prepared.descriptor.modality)});
     try stdout.print("model_family: {s}\n", .{prepared.request.spec.model_family});
     try stdout.print("operation: {s}\n", .{prepared.request.spec.operation});
-    try stdout.print("execution: {s}\n", .{@tagName(prepared.plan.execution)});
-    try stdout.print("supports_batching: {s}\n", .{boolText(prepared.plan.supports_batching)});
-    try stdout.print("supports_streaming: {s}\n", .{boolText(prepared.plan.supports_streaming)});
-    try stdout.print("accepted: {s}\n", .{boolText(prepared.submission.accepted)});
+    try stdout.print("execution: {s}\n", .{@tagName(prepared.runtime_plan.execution)});
+    try stdout.print("supports_batching: {s}\n", .{boolText(prepared.descriptor.supports_batching)});
+    try stdout.print("supports_streaming: {s}\n", .{boolText(prepared.descriptor.supports_streaming)});
 
     var result = try prepared.execute();
     defer result.deinit(std.heap.page_allocator);
+    try stdout.print("accepted: {s}\n", .{boolText(result.submission.accepted)});
     try stdout.print("execution_origin: {s}\n", .{@tagName(result.origin)});
     if (result.note != .none) {
         try stdout.print("execution_note: {s}\n", .{@tagName(result.note)});
@@ -304,22 +304,16 @@ fn runBatchPlan(stdout: anytype, args: BatchPlanArgs) !void {
     try stdout.print("modality: {s}\n", .{@tagName(prepared.descriptor.modality)});
     try stdout.print("model_family: {s}\n", .{prepared.descriptor.bound_model_family.?});
     try stdout.print("requests: {d}\n", .{prepared.requests.len});
-    try stdout.print("batches: {d}\n", .{prepared.batch_plan.batches.len});
+    try stdout.print("batches: {d}\n", .{prepared.runtime_plan.batches.len});
 
-    for (prepared.batch_plan.batches, 0..) |batch, batch_index| {
-        try stdout.print("batch[{d}]: size={d} execution={s} batching={s} input={s}", .{
+    for (prepared.runtime_plan.batches, 0..) |batch, batch_index| {
+        try stdout.print("batch[{d}]: size={d} execution={s} batching={s} operation={s}", .{
             batch_index,
-            batch.len(),
+            batch.request_indices.len,
             @tagName(batch.execution),
-            boolText(batch.supports_batching),
-            @tagName(batch.input_tag),
+            boolText(batch.allows_batching),
+            batch.operation,
         });
-        if (batch.generation_max_tokens) |max_tokens| {
-            try stdout.print(" max_tokens={d}", .{max_tokens});
-        }
-        if (batch.native_execution) {
-            try stdout.writeAll(" native=true");
-        }
         try stdout.writeAll(" indices=");
         for (batch.request_indices, 0..) |request_index, request_offset| {
             if (request_offset != 0) try stdout.writeAll(",");
@@ -359,12 +353,6 @@ fn runBatchRun(stdout: anytype, args: BatchPlanArgs) !void {
             boolText(batch.supports_batching),
             @tagName(batch.execute_path),
         });
-        if (batch.commonOrigin()) |origin| {
-            try stdout.print(" origin={s}", .{@tagName(origin)});
-        }
-        if (batch.commonNote()) |note| {
-            if (note != .none) try stdout.print(" note={s}", .{@tagName(note)});
-        }
         try stdout.writeAll(" indices=");
         for (batch.request_results, 0..) |result, result_index| {
             if (result_index != 0) try stdout.writeAll(",");
