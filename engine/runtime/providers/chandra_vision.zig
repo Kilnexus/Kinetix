@@ -98,6 +98,7 @@ pub const VisualTokens = struct {
     data: []f32,
     token_count: usize,
     embedding_dim: usize,
+    grid_time: usize,
     grid_width: usize,
     grid_height: usize,
 
@@ -287,6 +288,7 @@ pub fn applyVisualMerger(
         .data = try allocator.alloc(f32, grouped.token_count * weights.fc2.out_features),
         .token_count = grouped.token_count,
         .embedding_dim = weights.fc2.out_features,
+        .grid_time = 1,
         .grid_width = grouped.merged_width,
         .grid_height = grouped.merged_height,
     };
@@ -708,6 +710,7 @@ test "chandra visual merger projects grouped patches into visual tokens" {
 
     try std.testing.expectEqual(@as(usize, 1), tokens.token_count);
     try std.testing.expectEqual(@as(usize, 2), tokens.embedding_dim);
+    try std.testing.expectEqual(@as(usize, 1), tokens.grid_time);
     try std.testing.expectEqual(@as(usize, 1), tokens.grid_width);
     try std.testing.expectEqual(@as(usize, 1), tokens.grid_height);
     try std.testing.expectApproxEqAbs(@as(f32, 1.341192), tokens.at(0, 0), 0.0001);

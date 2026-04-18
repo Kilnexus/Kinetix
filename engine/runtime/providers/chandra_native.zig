@@ -137,6 +137,7 @@ const MultimodalPositionPlan = struct {
     fn init(
         rope_position_mode: decoder_types.RopePositionMode,
         visual_token_count: usize,
+        visual_grid_time: usize,
         visual_grid_width: usize,
         visual_grid_height: usize,
         prompt_token_count: usize,
@@ -147,6 +148,7 @@ const MultimodalPositionPlan = struct {
             rope_position_mode,
             visual_start_position,
             visual_token_count,
+            visual_grid_time,
             visual_grid_width,
             visual_grid_height,
         );
@@ -168,17 +170,25 @@ fn visualTokenPosition(
     rope_position_mode: decoder_types.RopePositionMode,
     base_position: usize,
     token_index: usize,
+    grid_time: usize,
+    grid_height: usize,
     grid_width: usize,
 ) decoder_types.TokenPosition {
-    if (rope_position_mode == .scalar or grid_width == 0) {
+    const effective_grid_time = @max(@as(usize, 1), grid_time);
+    const effective_grid_height = @max(@as(usize, 1), grid_height);
+    const effective_grid_width = @max(@as(usize, 1), grid_width);
+    if (rope_position_mode == .scalar) {
         return decoder_types.TokenPosition.scalarPosition(base_position + token_index);
     }
 
-    const y = token_index / grid_width;
-    const x = token_index % grid_width;
+    const tokens_per_frame = effective_grid_height * effective_grid_width;
+    const t = token_index / tokens_per_frame;
+    const frame_offset = token_index % tokens_per_frame;
+    const y = frame_offset / effective_grid_width;
+    const x = frame_offset % effective_grid_width;
     const scalar_position = base_position + @max(y, x);
     return decoder_types.TokenPosition.mropePosition(.{
-        base_position,
+        base_position + @min(t, effective_grid_time - 1),
         base_position + y,
         base_position + x,
         scalar_position,
@@ -199,6 +209,7 @@ fn maxVisualPosition(
     rope_position_mode: decoder_types.RopePositionMode,
     visual_start_position: usize,
     visual_token_count: usize,
+    visual_grid_time: usize,
     visual_grid_width: usize,
     visual_grid_height: usize,
 ) usize {
@@ -207,7 +218,7 @@ fn maxVisualPosition(
         return visual_start_position + visual_token_count - 1;
     }
 
-    const max_time_index: usize = 0;
+    const max_time_index = @max(@as(usize, 1), visual_grid_time) - 1;
     const max_height_index = visual_grid_height - 1;
     const max_width_index = visual_grid_width - 1;
     return visual_start_position + @max(max_time_index, @max(max_height_index, max_width_index));
@@ -381,6 +392,7 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
                                             const position_plan = MultimodalPositionPlan.init(
                                                 runtime.cfg.rope_position_mode,
                                                 tokens.token_count,
+                                                tokens.grid_time,
                                                 tokens.grid_width,
                                                 tokens.grid_height,
                                                 text_prompt_token_count,
@@ -414,6 +426,8 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
                                                             runtime.cfg.rope_position_mode,
                                                             position_plan.visual_start_position,
                                                             tokens.token_count,
+                                                            tokens.grid_time,
+                                                            tokens.grid_height,
                                                             tokens.grid_width,
                                                         ) catch null;
                                                         defer if (visual_positions) |positions| allocator.free(positions);
@@ -842,11 +856,20 @@ fn allocMultimodalVisualPositions(
     rope_position_mode: decoder_types.RopePositionMode,
     start: usize,
     count: usize,
+    grid_time: usize,
+    grid_height: usize,
     grid_width: usize,
 ) ![]decoder_types.TokenPosition {
     const positions = try allocator.alloc(decoder_types.TokenPosition, count);
     for (positions, 0..) |*position, index| {
-        position.* = visualTokenPosition(rope_position_mode, start, index, grid_width);
+        position.* = visualTokenPosition(
+            rope_position_mode,
+            start,
+            index,
+            grid_time,
+            grid_height,
+            grid_width,
+        );
     }
     return positions;
 }
@@ -1097,7 +1120,7 @@ test "native chandra execute preprocesses image and runs patch embedding stage" 
 }
 
 test "multimodal mrope plan continues text after visual axis max" {
-    const position_plan = MultimodalPositionPlan.init(.mrope, 6, 3, 2, 2);
+    const position_plan = MultimodalPositionPlan.init(.mrope, 6, 1, 3, 2, 2);
 
     try std.testing.expectEqual(@as(usize, 0), position_plan.vision_start_position);
     try std.testing.expectEqual(@as(usize, 1), position_plan.visual_start_position);
@@ -1106,15 +1129,21 @@ test "multimodal mrope plan continues text after visual axis max" {
     try std.testing.expectEqual(@as(usize, 7), position_plan.generation_start_position);
     try std.testing.expectEqual(@as(usize, 10), position_plan.total_prefill_tokens);
 
-    const first_visual = visualTokenPosition(.mrope, position_plan.visual_start_position, 0, 3);
+    const first_visual = visualTokenPosition(.mrope, position_plan.visual_start_position, 0, 1, 2, 3);
     try std.testing.expectEqual(decoder_types.RopePositionMode.mrope, first_visual.mode);
     try std.testing.expectEqualSlices(usize, &.{ 1, 1, 1, 1 }, &first_visual.axes);
 
-    const tail_visual = visualTokenPosition(.mrope, position_plan.visual_start_position, 5, 3);
+    const tail_visual = visualTokenPosition(.mrope, position_plan.visual_start_position, 5, 1, 2, 3);
     try std.testing.expectEqualSlices(usize, &.{ 1, 2, 3, 3 }, &tail_visual.axes);
 
     const prompt_position = textTokenPosition(.mrope, position_plan.prompt_start_position);
     try std.testing.expectEqualSlices(usize, &.{ 5, 5, 5, 5 }, &prompt_position.axes);
+}
+
+test "visual token position maps thw axes for future multi-frame layout" {
+    const position = visualTokenPosition(.mrope, 4, 7, 2, 2, 2);
+    try std.testing.expectEqual(decoder_types.RopePositionMode.mrope, position.mode);
+    try std.testing.expectEqualSlices(usize, &.{ 5, 5, 5, 5 }, &position.axes);
 }
 
 test "native chandra execute exposes mrope prefill metadata" {
@@ -1204,6 +1233,98 @@ test "native chandra execute exposes mrope prefill metadata" {
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"text_prefill_executed\":true") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"decoder_rope_position_mode\":\"mrope\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"decoder_mrope_sections\":[1,0,0,0]") != null);
+}
+
+test "native chandra execute decodes content with synthetic tokenizer" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "config.json",
+        \\{
+        \\  "model_type": "qwen3_5",
+        \\  "image_token_id": 3,
+        \\  "vision_start_token_id": 1,
+        \\  "vision_end_token_id": 2,
+        \\  "text_config": {
+        \\    "model_type": "qwen3_5_text",
+        \\    "hidden_size": 2,
+        \\    "intermediate_size": 8,
+        \\    "num_hidden_layers": 1,
+        \\    "num_attention_heads": 1,
+        \\    "num_key_value_heads": 1,
+        \\    "head_dim": 2,
+        \\    "vocab_size": 8,
+        \\    "max_position_embeddings": 1024,
+        \\    "rope_parameters": {
+        \\      "full_attention": {
+        \\        "rope_theta": 250000.0
+        \\      },
+        \\      "mrope_section": [1, 0, 0]
+        \\    }
+        \\  },
+        \\  "vision_config": {
+        \\    "model_type": "qwen3_5",
+        \\    "depth": 2,
+        \\    "hidden_size": 2,
+        \\    "intermediate_size": 8,
+        \\    "num_heads": 1,
+        \\    "out_hidden_size": 2,
+        \\    "patch_size": 2,
+        \\    "spatial_merge_size": 1,
+        \\    "temporal_patch_size": 1,
+        \\    "in_channels": 3
+        \\  }
+        \\}
+    );
+    try writeTmpFile(tmp.dir, "preprocessor_config.json",
+        \\{
+        \\  "do_normalize": false,
+        \\  "do_rescale": false,
+        \\  "do_resize": false,
+        \\  "merge_size": 1,
+        \\  "patch_size": 2,
+        \\  "temporal_patch_size": 1,
+        \\  "size": {
+        \\    "longest_edge": 1024,
+        \\    "shortest_edge": 1
+        \\  }
+        \\}
+    );
+    try writeSyntheticRuntimeReadySafetensors(tmp.dir, "model.safetensors");
+    try writeSyntheticTokenizerFiles(tmp.dir);
+
+    var image = try imaging.ImageU8.init(std.testing.allocator, 4, 2, 3);
+    defer image.deinit();
+    for (0..image.width * image.height) |pixel_index| {
+        const value: u8 = @intCast(pixel_index + 1);
+        image.data[pixel_index * 3] = value;
+        image.data[pixel_index * 3 + 1] = 0;
+        image.data[pixel_index * 3 + 2] = 0;
+    }
+    const encoded = try imaging.encodePngAlloc(std.testing.allocator, &image);
+    defer std.testing.allocator.free(encoded);
+    try tmp.dir.writeFile(.{ .sub_path = "input.png", .data = encoded });
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+    const image_path = try tmp.dir.realpathAlloc(std.testing.allocator, "input.png");
+    defer std.testing.allocator.free(image_path);
+
+    const payload = try execute(std.testing.allocator, .{
+        .operation = "render-markdown",
+        .model_path = root_path,
+        .input_path = image_path,
+        .execution = .sync,
+        .max_output_tokens = 1,
+    });
+    defer std.testing.allocator.free(payload);
+
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"native_stage\":\"text_decode\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"status\":\"ocr_native_text_decoded_partial\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"text_decode_executed\":true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"decoded_token_count\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"content\":\"OCR\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"markdown\":\"OCR\"") != null);
 }
 
 fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {
@@ -1387,7 +1508,16 @@ fn writeSyntheticRuntimeReadySafetensors(dir: std.fs.Dir, relative_path: []const
     const zero_2x2 = [_]f32{0} ** 4;
     const zero_gate = [_]f32{0} ** 16;
     const zero_down = [_]f32{0} ** 16;
-    const lm_head = [_]f32{0} ** 16;
+    const lm_head = [_]f32{
+        0,  0,
+        0,  0,
+        0,  0,
+        0,  0,
+        10, 10,
+        0,  0,
+        0,  0,
+        0,  0,
+    };
 
     const specs = [_]SyntheticTensorSpec{
         .{ .name = "visual.patch_embed.proj.weight", .shape = &patch_weight_shape, .values = &patch_weights },
@@ -1438,6 +1568,21 @@ fn writeSyntheticRuntimeReadySafetensors(dir: std.fs.Dir, relative_path: []const
     };
 
     try writeSyntheticF32Safetensors(std.testing.allocator, dir, relative_path, &specs);
+}
+
+fn writeSyntheticTokenizerFiles(dir: std.fs.Dir) !void {
+    try writeTmpFile(dir, "vocab.json", "{}");
+    try writeTmpFile(dir, "merges.txt", "# synthetic\n");
+    try writeTmpFile(dir, "tokenizer_config.json",
+        \\{
+        \\  "added_tokens_decoder": {
+        \\    "4": { "content": "OCR" },
+        \\    "7": {
+        \\      "content": "<|im_start|>user\nRead the document image and transcribe it as markdown.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+        \\    }
+        \\  }
+        \\}
+    );
 }
 
 fn writeSyntheticF32Safetensors(
