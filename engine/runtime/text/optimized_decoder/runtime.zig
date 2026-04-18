@@ -114,6 +114,18 @@ pub const Runtime = struct {
             workspace.io_scratch,
         );
 
+        return try self.forwardEmbedding(workspace, cache, workspace.hidden_a);
+    }
+
+    pub fn forwardEmbedding(
+        self: *Runtime,
+        workspace: *workspace_mod.Workspace,
+        cache: *kv_cache_cache.ModelCache,
+        embedding: []const f32,
+    ) ![]f32 {
+        if (embedding.len != self.cfg.hidden_size) return error.SizeMismatch;
+        @memcpy(workspace.hidden_a, embedding);
+
         var hidden_in = workspace.hidden_a;
         var hidden_out = workspace.hidden_b;
         for (self.layers, 0..) |*layer, layer_index| {
@@ -158,6 +170,29 @@ pub const Runtime = struct {
         var last_logits: []f32 = undefined;
         for (token_ids) |token_id| {
             last_logits = try self.forwardTokenId(workspace, cache, token_id);
+        }
+        return last_logits;
+    }
+
+    pub fn prefillEmbeddings(
+        self: *Runtime,
+        workspace: *workspace_mod.Workspace,
+        cache: *kv_cache_cache.ModelCache,
+        embeddings: []const f32,
+        token_count: usize,
+    ) ![]f32 {
+        if (token_count == 0) return error.EmptyPrompt;
+        const expected_len = try std.math.mul(usize, token_count, self.cfg.hidden_size);
+        if (embeddings.len != expected_len) return error.SizeMismatch;
+
+        var last_logits: []f32 = undefined;
+        for (0..token_count) |token_index| {
+            const start = token_index * self.cfg.hidden_size;
+            last_logits = try self.forwardEmbedding(
+                workspace,
+                cache,
+                embeddings[start .. start + self.cfg.hidden_size],
+            );
         }
         return last_logits;
     }
