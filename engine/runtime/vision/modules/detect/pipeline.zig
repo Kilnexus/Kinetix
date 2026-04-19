@@ -18,6 +18,7 @@ const DetectBranchProfile = detect_types.DetectBranchProfile;
 const ProfiledDetectOutput = detect_types.ProfiledDetectOutput;
 const BranchPlan = detect_types.BranchPlan;
 const CachedDetectPlan = detect_types.CachedDetectPlan;
+const DetectPostprocessMode = detect_types.DetectPostprocessMode;
 const max_detect_branch_levels = detect_types.max_detect_branch_levels;
 
 const DetectCacheKey = struct {
@@ -119,6 +120,7 @@ pub fn runDetectProfileNode(
     if (nl > max_detect_branch_levels) return error.InvalidAttributeType;
     const score_logit_threshold = postprocess.sigmoidThresholdToLogit(options.score_threshold);
     var profile = DetectProfile{};
+    profile.postprocess_mode = cached.postprocess_mode;
     profile.level_count = nl;
     const reg_plans = cached.reg_plans[0..nl];
     const cls_plans = cached.cls_plans[0..nl];
@@ -165,11 +167,11 @@ pub fn runDetectProfileNode(
                     if (best_logit > profile.levels[level].max_class_logit) {
                         profile.levels[level].max_class_logit = best_logit;
                     }
-                    if (best_logit < score_logit_threshold) continue;
                     const best_score = postprocess.sigmoid(best_logit);
                     if (best_score > profile.levels[level].max_class_score) {
                         profile.levels[level].max_class_score = best_score;
                     }
+                    if (cached.postprocess_mode == .nms and best_logit < score_logit_threshold) continue;
 
                     const anchor_x = (@as(f32, @floatFromInt(x)) + 0.5) * stride;
                     const anchor_y = (@as(f32, @floatFromInt(y)) + 0.5) * stride;
@@ -198,7 +200,10 @@ pub fn runDetectProfileNode(
 
     profile.candidate_count = candidate_count;
     var nms_timer = try std.time.Timer.start();
-    const selected = try postprocess.nms(scratch_allocator, output_allocator, candidates[0..candidate_count], options);
+    const selected = switch (cached.postprocess_mode) {
+        .nms => try postprocess.nms(scratch_allocator, output_allocator, candidates[0..candidate_count], options),
+        .one2one_topk => try postprocess.topKByScore(scratch_allocator, output_allocator, candidates[0..candidate_count], options),
+    };
     profile.nms_ns = nms_timer.read();
     profile.kept_count = selected.len;
 
@@ -248,12 +253,25 @@ fn buildCachedDetectPlan(
     ));
     if (nl > max_detect_branch_levels) return error.InvalidAttributeType;
 
-    const reg_branch = plan.resolveDetectBranchNode(module, "cv2", "one2one_cv2") orelse return error.ModuleNotFound;
-    const cls_branch = plan.resolveDetectBranchNode(module, "cv3", "one2one_cv3") orelse return error.ModuleNotFound;
+    const legacy_reg_branch = plan.findDirectChildNamed(module, "cv2");
+    const legacy_cls_branch = plan.findDirectChildNamed(module, "cv3");
+    const one2one_reg_branch = plan.findDirectChildNamed(module, "one2one_cv2");
+    const one2one_cls_branch = plan.findDirectChildNamed(module, "one2one_cv3");
+
+    const postprocess_mode: DetectPostprocessMode = if (legacy_reg_branch != null and legacy_cls_branch != null)
+        .nms
+    else if (one2one_reg_branch != null and one2one_cls_branch != null)
+        .one2one_topk
+    else
+        return error.ModuleNotFound;
+
+    const reg_branch = if (postprocess_mode == .nms) legacy_reg_branch.? else one2one_reg_branch.?;
+    const cls_branch = if (postprocess_mode == .nms) legacy_cls_branch.? else one2one_cls_branch.?;
     var cached = CachedDetectPlan{
         .nl = nl,
         .nc = nc,
         .reg_max = reg_max,
+        .postprocess_mode = postprocess_mode,
         .dfl_weights = null,
         .reg_plans = undefined,
         .cls_plans = undefined,

@@ -35,6 +35,7 @@ pub const max_detect_branch_levels = 8;
 pub const max_detect_fast_threads = 2;
 
 pub const DetectProfile = struct {
+    postprocess_mode: DetectPostprocessMode = .nms,
     branch_ns: u64 = 0,
     decode_ns: u64 = 0,
     nms_ns: u64 = 0,
@@ -68,6 +69,11 @@ pub const DetectBranchKind = enum {
     generic,
     cv2,
     cv3,
+};
+
+pub const DetectPostprocessMode = enum {
+    nms,
+    one2one_topk,
 };
 
 pub const ProfiledDetectOutput = struct {
@@ -116,6 +122,7 @@ pub const CachedDetectPlan = struct {
     nl: usize,
     nc: usize,
     reg_max: usize,
+    postprocess_mode: DetectPostprocessMode,
     dfl_weights: ?[]const f32,
     reg_plans: [max_detect_branch_levels]BranchPlan,
     cls_plans: [max_detect_branch_levels]BranchPlan,

@@ -138,6 +138,13 @@ pub fn resolveDetectBranchNode(
     return null;
 }
 
+pub fn findDirectChildNamed(module: *const graph.ModuleNode, name: []const u8) ?*const graph.ModuleNode {
+    for (module.children) |*child| {
+        if (isDirectChildNamed(module.path, child.path, name)) return child;
+    }
+    return null;
+}
+
 pub fn matchesDetectCv2Branch(node: *const graph.ModuleNode) bool {
     return std.mem.eql(u8, node.kind, "Sequential") and
         node.children.len == 3 and

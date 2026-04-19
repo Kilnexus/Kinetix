@@ -87,6 +87,40 @@ pub fn nms(
     return try selected.toOwnedSlice(output_allocator);
 }
 
+pub fn topKByScore(
+    scratch_allocator: std.mem.Allocator,
+    output_allocator: std.mem.Allocator,
+    detections: []const Detection,
+    options: DetectOptions,
+) ![]Detection {
+    var states = try scratch_allocator.alloc(u8, detections.len);
+    defer scratch_allocator.free(states);
+    @memset(states, 0);
+
+    var selected: std.ArrayListUnmanaged(Detection) = .empty;
+    errdefer selected.deinit(output_allocator);
+
+    while (selected.items.len < options.max_det) {
+        var best_index: ?usize = null;
+        var best_score: f32 = -1.0;
+
+        for (detections, 0..) |det, index| {
+            if (states[index] != 0) continue;
+            if (det.score > best_score) {
+                best_score = det.score;
+                best_index = index;
+            }
+        }
+
+        const winner = best_index orelse break;
+        if (detections[winner].score < options.score_threshold) break;
+        states[winner] = 1;
+        try selected.append(output_allocator, detections[winner]);
+    }
+
+    return try selected.toOwnedSlice(output_allocator);
+}
+
 pub fn iou(lhs: Detection, rhs: Detection) f32 {
     const inter_x1 = @max(lhs.x1, rhs.x1);
     const inter_y1 = @max(lhs.y1, rhs.y1);

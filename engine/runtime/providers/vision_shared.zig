@@ -23,6 +23,7 @@ pub const DetectLevelProfileSummary = struct {
 };
 
 pub const DetectProfileSummary = struct {
+    postprocess_mode: []const u8,
     score_threshold: f32,
     iou_threshold: f32,
     max_det: usize,
@@ -241,6 +242,7 @@ fn buildDetectProfileSummary(
                 };
             }
             return .{
+                .postprocess_mode = @tagName(detect_profile.postprocess_mode),
                 .score_threshold = detect_options.score_threshold,
                 .iou_threshold = detect_options.iou_threshold,
                 .max_det = detect_options.max_det,
