@@ -12,6 +12,11 @@ pub const Summary = graph.Summary;
 pub const Detection = types.RuntimeVisionDetection;
 
 pub const DetectLevelProfileSummary = struct {
+    feature_shape: [4]usize,
+    feature_min: f32,
+    feature_max: f32,
+    feature_mean: f32,
+    feature_abs_max: f32,
     reg_ns: u64,
     cls_ns: u64,
     decode_ns: u64,
@@ -20,6 +25,17 @@ pub const DetectLevelProfileSummary = struct {
     max_class_score: f32,
     reg_kind: []const u8,
     cls_kind: []const u8,
+};
+
+pub const GraphNodeProfileSummary = struct {
+    path: []const u8,
+    kind: []const u8,
+    elapsed_ns: u64,
+    shape: [4]usize,
+    min: f32,
+    max: f32,
+    mean: f32,
+    abs_max: f32,
 };
 
 pub const DetectProfileSummary = struct {
@@ -33,9 +49,15 @@ pub const DetectProfileSummary = struct {
     candidate_count: usize,
     kept_count: usize,
     levels: []DetectLevelProfileSummary,
+    node_profiles: []GraphNodeProfileSummary,
 
     pub fn deinit(self: *DetectProfileSummary, allocator: std.mem.Allocator) void {
         allocator.free(self.levels);
+        for (self.node_profiles) |node| {
+            allocator.free(node.path);
+            allocator.free(node.kind);
+        }
+        allocator.free(self.node_profiles);
         self.* = undefined;
     }
 };
@@ -225,12 +247,21 @@ fn buildDetectProfileSummary(
     var profile_graph = try ax_runtime.profileGraph(allocator, model_graph, weights_blob, input, detect_options);
     defer profile_graph.deinit();
 
+    const node_filter = loadNodeProfileFilter(allocator) catch null;
+    defer if (node_filter) |filter| freeNodeProfileFilter(allocator, filter);
+    const node_profiles = try collectNodeProfiles(allocator, &profile_graph, node_filter);
+
     for (profile_graph.nodes) |node| {
         if (node.detect_profile) |detect_profile| {
             const levels = try allocator.alloc(DetectLevelProfileSummary, detect_profile.level_count);
             for (levels, 0..) |*level, index| {
                 const source = detect_profile.levels[index];
                 level.* = .{
+                    .feature_shape = source.feature_shape,
+                    .feature_min = source.feature_min,
+                    .feature_max = source.feature_max,
+                    .feature_mean = source.feature_mean,
+                    .feature_abs_max = source.feature_abs_max,
                     .reg_ns = source.reg_ns,
                     .cls_ns = source.cls_ns,
                     .decode_ns = source.decode_ns,
@@ -252,9 +283,84 @@ fn buildDetectProfileSummary(
                 .candidate_count = detect_profile.candidate_count,
                 .kept_count = detect_profile.kept_count,
                 .levels = levels,
+                .node_profiles = node_profiles,
             };
         }
     }
 
+    freeGraphNodeProfiles(allocator, node_profiles);
     return error.ModuleNotFound;
+}
+
+fn loadNodeProfileFilter(allocator: std.mem.Allocator) !?[][]const u8 {
+    const raw = std.process.getEnvVarOwned(allocator, "KINETIX_VISION_PROFILE_NODES") catch return null;
+    defer allocator.free(raw);
+
+    var parts: std.ArrayListUnmanaged([]const u8) = .empty;
+    errdefer {
+        for (parts.items) |part| allocator.free(part);
+        parts.deinit(allocator);
+    }
+
+    var iter = std.mem.tokenizeScalar(u8, raw, ',');
+    while (iter.next()) |token| {
+        const trimmed = std.mem.trim(u8, token, " \t\r\n");
+        if (trimmed.len == 0) continue;
+        try parts.append(allocator, try allocator.dupe(u8, trimmed));
+    }
+
+    return try parts.toOwnedSlice(allocator);
+}
+
+fn freeNodeProfileFilter(allocator: std.mem.Allocator, filter: [][]const u8) void {
+    for (filter) |item| allocator.free(item);
+    allocator.free(filter);
+}
+
+fn collectNodeProfiles(
+    allocator: std.mem.Allocator,
+    profile_graph: *const ax_runtime.GraphProfile,
+    maybe_filter: ?[][]const u8,
+) ![]GraphNodeProfileSummary {
+    var collected: std.ArrayListUnmanaged(GraphNodeProfileSummary) = .empty;
+    errdefer {
+        for (collected.items) |item| {
+            allocator.free(item.path);
+            allocator.free(item.kind);
+        }
+        collected.deinit(allocator);
+    }
+
+    for (profile_graph.nodes) |node| {
+        const stats = node.output_stats orelse continue;
+        if (!shouldIncludeNodeProfile(node.path, maybe_filter)) continue;
+        try collected.append(allocator, .{
+            .path = try allocator.dupe(u8, node.path),
+            .kind = try allocator.dupe(u8, node.kind),
+            .elapsed_ns = node.elapsed_ns,
+            .shape = stats.shape,
+            .min = stats.min,
+            .max = stats.max,
+            .mean = stats.mean,
+            .abs_max = stats.abs_max,
+        });
+    }
+
+    return try collected.toOwnedSlice(allocator);
+}
+
+fn freeGraphNodeProfiles(allocator: std.mem.Allocator, node_profiles: []GraphNodeProfileSummary) void {
+    for (node_profiles) |node| {
+        allocator.free(node.path);
+        allocator.free(node.kind);
+    }
+    allocator.free(node_profiles);
+}
+
+fn shouldIncludeNodeProfile(path: []const u8, maybe_filter: ?[][]const u8) bool {
+    const filter = maybe_filter orelse return false;
+    for (filter) |pattern| {
+        if (std.mem.indexOf(u8, path, pattern) != null) return true;
+    }
+    return false;
 }

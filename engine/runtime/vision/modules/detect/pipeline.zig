@@ -29,6 +29,35 @@ const DetectCacheKey = struct {
 var detect_plan_cache_mutex: std.Thread.Mutex = .{};
 var detect_plan_cache: std.AutoHashMapUnmanaged(DetectCacheKey, CachedDetectPlan) = .empty;
 
+const TensorStats = struct {
+    min: f32,
+    max: f32,
+    mean: f32,
+    abs_max: f32,
+};
+
+fn computeTensorStats(tensor: *const Tensor) TensorStats {
+    const first = tensor.data[0];
+    var min_value = first;
+    var max_value = first;
+    var sum: f64 = 0.0;
+    var abs_max: f32 = @abs(first);
+
+    for (tensor.data) |value| {
+        min_value = @min(min_value, value);
+        max_value = @max(max_value, value);
+        abs_max = @max(abs_max, @abs(value));
+        sum += value;
+    }
+
+    return .{
+        .min = min_value,
+        .max = max_value,
+        .mean = @floatCast(sum / @as(f64, @floatFromInt(tensor.data.len))),
+        .abs_max = abs_max,
+    };
+}
+
 pub fn runDetect(
     output_allocator: std.mem.Allocator,
     tensor_allocator: std.mem.Allocator,
@@ -133,6 +162,12 @@ pub fn runDetectProfileNode(
 
     for (feature_inputs, 0..) |feature, level| {
         const level_candidate_start = candidate_count;
+        const feature_stats = computeTensorStats(feature);
+        profile.levels[level].feature_shape = feature.shape;
+        profile.levels[level].feature_min = feature_stats.min;
+        profile.levels[level].feature_max = feature_stats.max;
+        profile.levels[level].feature_mean = feature_stats.mean;
+        profile.levels[level].feature_abs_max = feature_stats.abs_max;
         profile.levels[level].max_class_logit = -std.math.inf(f32);
         var reg_profile = DetectBranchProfile{};
         var timer = try std.time.Timer.start();

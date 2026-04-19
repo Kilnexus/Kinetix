@@ -15,9 +15,18 @@ pub const NodeProfile = struct {
     path: []const u8,
     kind: []const u8,
     elapsed_ns: u64,
+    output_stats: ?TensorStats = null,
     detect_profile: ?detect.DetectProfile = null,
     c3k2_profile: ?blocks.C3k2Profile = null,
     sppf_profile: ?blocks.SPPFProfile = null,
+};
+
+pub const TensorStats = struct {
+    shape: [4]usize,
+    min: f32,
+    max: f32,
+    mean: f32,
+    abs_max: f32,
 };
 
 pub const GraphProfile = struct {
@@ -31,6 +40,29 @@ pub const GraphProfile = struct {
 };
 
 const node_input_stack_limit = 8;
+
+fn computeTensorStats(tensor: *const Tensor) TensorStats {
+    const first = tensor.data[0];
+    var min_value = first;
+    var max_value = first;
+    var sum: f64 = 0.0;
+    var abs_max: f32 = @abs(first);
+
+    for (tensor.data) |value| {
+        min_value = @min(min_value, value);
+        max_value = @max(max_value, value);
+        abs_max = @max(abs_max, @abs(value));
+        sum += value;
+    }
+
+    return .{
+        .shape = tensor.shape,
+        .min = min_value,
+        .max = max_value,
+        .mean = @floatCast(sum / @as(f64, @floatFromInt(tensor.data.len))),
+        .abs_max = abs_max,
+    };
+}
 
 pub fn runUpsampleModule(
     allocator: std.mem.Allocator,
@@ -264,6 +296,7 @@ pub fn profileGraph(
                 .path = node.path,
                 .kind = node.kind,
                 .elapsed_ns = timer.read(),
+                .output_stats = computeTensorStats(&merged),
             };
             releaseInputs(node.from, node_index, use_counts, outputs);
         } else {
@@ -277,6 +310,7 @@ pub fn profileGraph(
                     .path = node.path,
                     .kind = node.kind,
                     .elapsed_ns = timer.read(),
+                    .output_stats = computeTensorStats(&output),
                 };
             } else if (std.mem.eql(u8, node.kind, "C3k2")) {
                 const profiled = try blocks.runC3k2ProfileNode(tensor_allocator, model_graph, weights_blob, module, source);
@@ -285,6 +319,7 @@ pub fn profileGraph(
                     .path = node.path,
                     .kind = node.kind,
                     .elapsed_ns = timer.read(),
+                    .output_stats = computeTensorStats(&profiled.output),
                     .c3k2_profile = profiled.c3k2_profile,
                 };
             } else if (std.mem.eql(u8, node.kind, "SPPF")) {
@@ -294,6 +329,7 @@ pub fn profileGraph(
                     .path = node.path,
                     .kind = node.kind,
                     .elapsed_ns = timer.read(),
+                    .output_stats = computeTensorStats(&profiled.output),
                     .sppf_profile = profiled.sppf_profile,
                 };
             } else {
@@ -303,6 +339,7 @@ pub fn profileGraph(
                     .path = node.path,
                     .kind = node.kind,
                     .elapsed_ns = timer.read(),
+                    .output_stats = computeTensorStats(&output),
                 };
             }
             releaseInputs(node.from, node_index, use_counts, outputs);

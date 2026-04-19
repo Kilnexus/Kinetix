@@ -113,7 +113,6 @@ pub fn topKByScore(
         }
 
         const winner = best_index orelse break;
-        if (detections[winner].score < options.score_threshold) break;
         states[winner] = 1;
         try selected.append(output_allocator, detections[winner]);
     }
