@@ -33,6 +33,8 @@ pub const DetectOutput = struct {
 
 pub const max_detect_branch_levels = 8;
 pub const max_detect_fast_threads = 2;
+pub const max_level_top_classes = 5;
+pub const max_branch_top_classes = 5;
 
 pub const DetectProfile = struct {
     postprocess_mode: DetectPostprocessMode = .nms,
@@ -57,8 +59,19 @@ pub const DetectLevelProfile = struct {
     feature_abs_max: f32 = 0.0,
     max_class_logit: f32 = 0.0,
     max_class_score: f32 = 0.0,
+    top_class_count: usize = 0,
+    top_class_ids: [max_level_top_classes]usize = std.mem.zeroes([max_level_top_classes]usize),
+    top_class_logits: [max_level_top_classes]f32 = std.mem.zeroes([max_level_top_classes]f32),
+    top_class_scores: [max_level_top_classes]f32 = std.mem.zeroes([max_level_top_classes]f32),
     reg_detail: DetectBranchProfile = .{},
     cls_detail: DetectBranchProfile = .{},
+};
+
+pub const StatSummary = struct {
+    min: f32 = 0.0,
+    max: f32 = 0.0,
+    mean: f32 = 0.0,
+    abs_max: f32 = 0.0,
 };
 
 pub const DetectBranchProfile = struct {
@@ -68,6 +81,20 @@ pub const DetectBranchProfile = struct {
     stage2_ns: u64 = 0,
     stage3_ns: u64 = 0,
     stage4_ns: u64 = 0,
+    stage0_stats: ?StatSummary = null,
+    stage1_stats: ?StatSummary = null,
+    stage2_stats: ?StatSummary = null,
+    stage3_stats: ?StatSummary = null,
+    stage4_stats: ?StatSummary = null,
+    output_stats: ?StatSummary = null,
+    head_weight_stats: ?StatSummary = null,
+    head_bias_stats: ?StatSummary = null,
+    head_top_bias_count: usize = 0,
+    head_top_bias_ids: [max_branch_top_classes]usize = std.mem.zeroes([max_branch_top_classes]usize),
+    head_top_bias_values: [max_branch_top_classes]f32 = std.mem.zeroes([max_branch_top_classes]f32),
+    head_top_weight_count: usize = 0,
+    head_top_weight_ids: [max_branch_top_classes]usize = std.mem.zeroes([max_branch_top_classes]usize),
+    head_top_weight_values: [max_branch_top_classes]f32 = std.mem.zeroes([max_branch_top_classes]f32),
 };
 
 pub const DetectBranchKind = enum {

@@ -15,9 +15,12 @@ pub fn buildDetectBranchPlans(
     weights_blob: *const weights_mod.WeightsBlob,
     branch: *const graph.ModuleNode,
 ) !void {
+    const force_generic = shouldForceGenericDetectBranch(branch.path);
     if (plans.len != branch.children.len) return error.InvalidAttributeType;
     for (branch.children, 0..) |*node, index| {
-        plans[index] = if (matchesDetectCv2Branch(node))
+        plans[index] = if (force_generic)
+            .{ .generic = node }
+        else if (matchesDetectCv2Branch(node))
             .{ .cv2 = .{
                 .conv0 = try buildConvPlan(model_graph, weights_blob, node.children[0].path),
                 .conv0_fast = cv2PlanSupportsFast(&node.children[0]),
@@ -42,6 +45,22 @@ pub fn buildDetectBranchPlans(
         else
             .{ .generic = node };
     }
+}
+
+fn shouldForceGenericDetectBranch(branch_path: []const u8) bool {
+    const force_all = std.process.getEnvVarOwned(std.heap.page_allocator, "KINETIX_DETECT_FORCE_GENERIC_BRANCH") catch "";
+    defer if (force_all.len != 0) std.heap.page_allocator.free(force_all);
+    if (force_all.len != 0 and !std.mem.eql(u8, force_all, "0")) return true;
+
+    const force_cv2 = std.process.getEnvVarOwned(std.heap.page_allocator, "KINETIX_DETECT_FORCE_GENERIC_CV2") catch "";
+    defer if (force_cv2.len != 0) std.heap.page_allocator.free(force_cv2);
+    if (force_cv2.len != 0 and !std.mem.eql(u8, force_cv2, "0") and std.mem.indexOf(u8, branch_path, "cv2") != null) return true;
+
+    const force_cv3 = std.process.getEnvVarOwned(std.heap.page_allocator, "KINETIX_DETECT_FORCE_GENERIC_CV3") catch "";
+    defer if (force_cv3.len != 0) std.heap.page_allocator.free(force_cv3);
+    if (force_cv3.len != 0 and !std.mem.eql(u8, force_cv3, "0") and std.mem.indexOf(u8, branch_path, "cv3") != null) return true;
+
+    return false;
 }
 
 pub fn buildConvPlan(

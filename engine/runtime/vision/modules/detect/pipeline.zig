@@ -20,6 +20,7 @@ const BranchPlan = detect_types.BranchPlan;
 const CachedDetectPlan = detect_types.CachedDetectPlan;
 const DetectPostprocessMode = detect_types.DetectPostprocessMode;
 const max_detect_branch_levels = detect_types.max_detect_branch_levels;
+const max_level_top_classes = detect_types.max_level_top_classes;
 
 const DetectCacheKey = struct {
     module_ptr: usize,
@@ -35,6 +36,42 @@ const TensorStats = struct {
     mean: f32,
     abs_max: f32,
 };
+
+const ClassScorePair = struct {
+    class_id: usize = 0,
+    logit: f32 = -std.math.inf(f32),
+};
+
+fn updateTopClasses(best: *[max_level_top_classes]ClassScorePair, class_id: usize, logit: f32) void {
+    var existing_index: ?usize = null;
+    for (best, 0..) |entry, index| {
+        if (entry.class_id == class_id) {
+            existing_index = index;
+            break;
+        }
+    }
+
+    if (existing_index) |index| {
+        if (logit <= best[index].logit) return;
+        best[index].logit = logit;
+        var current = index;
+        while (current > 0 and best[current].logit > best[current - 1].logit) : (current -= 1) {
+            const tmp = best[current - 1];
+            best[current - 1] = best[current];
+            best[current] = tmp;
+        }
+        return;
+    }
+
+    if (logit <= best[best.len - 1].logit) return;
+    best[best.len - 1] = .{ .class_id = class_id, .logit = logit };
+    var current = best.len - 1;
+    while (current > 0 and best[current].logit > best[current - 1].logit) : (current -= 1) {
+        const tmp = best[current - 1];
+        best[current - 1] = best[current];
+        best[current] = tmp;
+    }
+}
 
 fn computeTensorStats(tensor: *const Tensor) TensorStats {
     const first = tensor.data[0];
@@ -162,6 +199,8 @@ pub fn runDetectProfileNode(
 
     for (feature_inputs, 0..) |feature, level| {
         const level_candidate_start = candidate_count;
+        var top_classes = std.mem.zeroes([max_level_top_classes]ClassScorePair);
+        for (&top_classes) |*entry| entry.* = .{};
         const feature_stats = computeTensorStats(feature);
         profile.levels[level].feature_shape = feature.shape;
         profile.levels[level].feature_min = feature_stats.min;
@@ -199,6 +238,7 @@ pub fn runDetectProfileNode(
                     const spatial_index = y * reg.shape[3] + x;
                     const best = bestClassForSpatial(cls.data, cls_batch_base, cls_plane, nc, spatial_index);
                     const best_logit = best.logit;
+                    updateTopClasses(&top_classes, best.class_id, best_logit);
                     if (best_logit > profile.levels[level].max_class_logit) {
                         profile.levels[level].max_class_logit = best_logit;
                     }
@@ -230,6 +270,13 @@ pub fn runDetectProfileNode(
         }
         profile.levels[level].decode_ns = decode_timer.read();
         profile.levels[level].candidate_count = candidate_count - level_candidate_start;
+        for (top_classes, 0..) |entry, index| {
+            if (!std.math.isFinite(entry.logit)) break;
+            profile.levels[level].top_class_ids[index] = entry.class_id;
+            profile.levels[level].top_class_logits[index] = entry.logit;
+            profile.levels[level].top_class_scores[index] = postprocess.sigmoid(entry.logit);
+            profile.levels[level].top_class_count += 1;
+        }
         profile.decode_ns += profile.levels[level].decode_ns;
     }
 

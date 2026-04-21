@@ -43,6 +43,7 @@ pub const DetectOptions = detect.DetectOptions;
 pub const DetectOutput = detect.DetectOutput;
 pub const NodeProfile = graph_exec.NodeProfile;
 pub const GraphProfile = graph_exec.GraphProfile;
+pub const tensor_probe_count = graph_exec.tensor_probe_count;
 pub const runDetect = detect.runDetect;
 pub const runUpsampleModule = graph_exec.runUpsampleModule;
 pub const runGraph = graph_exec.runGraph;

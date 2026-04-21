@@ -11,6 +11,7 @@ pub const Tensor = types.Tensor;
 pub const RuntimeError = types.RuntimeError;
 pub const DetectOptions = detect.DetectOptions;
 pub const DetectOutput = detect.DetectOutput;
+pub const tensor_probe_count = 8;
 pub const NodeProfile = struct {
     path: []const u8,
     kind: []const u8,
@@ -27,6 +28,9 @@ pub const TensorStats = struct {
     max: f32,
     mean: f32,
     abs_max: f32,
+    sum_abs: f64,
+    probe_indices: [tensor_probe_count]usize,
+    probe_values: [tensor_probe_count]f32,
 };
 
 pub const GraphProfile = struct {
@@ -47,12 +51,26 @@ fn computeTensorStats(tensor: *const Tensor) TensorStats {
     var max_value = first;
     var sum: f64 = 0.0;
     var abs_max: f32 = @abs(first);
+    var sum_abs: f64 = 0.0;
 
     for (tensor.data) |value| {
         min_value = @min(min_value, value);
         max_value = @max(max_value, value);
         abs_max = @max(abs_max, @abs(value));
         sum += value;
+        sum_abs += @abs(@as(f64, value));
+    }
+
+    var probe_indices = std.mem.zeroes([tensor_probe_count]usize);
+    var probe_values = std.mem.zeroes([tensor_probe_count]f32);
+    const last_index = tensor.data.len - 1;
+    for (0..tensor_probe_count) |probe_index| {
+        const flat_index = if (tensor_probe_count == 1 or tensor.data.len == 1)
+            0
+        else
+            @divTrunc(probe_index * last_index, tensor_probe_count - 1);
+        probe_indices[probe_index] = flat_index;
+        probe_values[probe_index] = tensor.data[flat_index];
     }
 
     return .{
@@ -61,6 +79,9 @@ fn computeTensorStats(tensor: *const Tensor) TensorStats {
         .max = max_value,
         .mean = @floatCast(sum / @as(f64, @floatFromInt(tensor.data.len))),
         .abs_max = abs_max,
+        .sum_abs = sum_abs,
+        .probe_indices = probe_indices,
+        .probe_values = probe_values,
     };
 }
 

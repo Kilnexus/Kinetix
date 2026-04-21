@@ -37,6 +37,7 @@ pub fn runDetectCv2BranchPlannedProfile(
     else
         try exec_common.runConvPlan(allocator, &plan.conv0, input);
     profile.stage0_ns = timer.read();
+    profile.stage0_stats = exec_common.computeTensorStats(&hidden0);
     defer hidden0.deinit();
 
     timer.reset();
@@ -45,10 +46,31 @@ pub fn runDetectCv2BranchPlannedProfile(
     else
         try exec_common.runConvPlan(allocator, &plan.conv1, &hidden0);
     profile.stage1_ns = timer.read();
+    profile.stage1_stats = exec_common.computeTensorStats(&hidden1);
     defer hidden1.deinit();
 
     timer.reset();
     const output = try exec_common.runConvPlan(allocator, &plan.head, &hidden1);
     profile.stage2_ns = timer.read();
+    profile.stage2_stats = exec_common.computeTensorStats(&output);
+    profile.output_stats = exec_common.computeTensorStats(&output);
+    profile.head_weight_stats = exec_common.computeTensorStats(&plan.head.weight);
+    const top_weights = exec_common.topWeightClasses(&plan.head.weight);
+    for (top_weights, 0..) |entry, index| {
+        if (!std.math.isFinite(entry.value)) break;
+        profile.head_top_weight_ids[index] = entry.class_id;
+        profile.head_top_weight_values[index] = entry.value;
+        profile.head_top_weight_count += 1;
+    }
+    if (plan.head.bias) |bias| {
+        profile.head_bias_stats = exec_common.computeSliceStats(bias);
+        const top_bias = exec_common.topBiasClasses(bias);
+        for (top_bias, 0..) |entry, index| {
+            if (!std.math.isFinite(entry.value)) break;
+            profile.head_top_bias_ids[index] = entry.class_id;
+            profile.head_top_bias_values[index] = entry.value;
+            profile.head_top_bias_count += 1;
+        }
+    }
     return output;
 }

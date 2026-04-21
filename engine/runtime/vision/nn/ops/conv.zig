@@ -9,6 +9,12 @@ pub const Tensor = types.Tensor;
 pub const OpError = types.OpError;
 pub const Conv2DOptions = types.Conv2DOptions;
 
+fn envFlagEnabled(name: []const u8) bool {
+    const value = std.process.getEnvVarOwned(std.heap.page_allocator, name) catch return false;
+    defer std.heap.page_allocator.free(value);
+    return value.len != 0 and !std.mem.eql(u8, value, "0");
+}
+
 pub fn conv2d(
     input: *const Tensor,
     weights: *const Tensor,
@@ -39,10 +45,13 @@ pub fn conv2d(
         if (bias_values.len != out_channels) return OpError.ShapeMismatch;
     }
 
-    if (kernel_h == 1 and kernel_w == 1 and options.stride_h == 1 and options.stride_w == 1 and options.pad_h == 0 and options.pad_w == 0) {
+    const disable_pointwise_fastpath = envFlagEnabled("KINETIX_CONV_DISABLE_POINTWISE_FASTPATH");
+    const disable_3x3_fastpath = envFlagEnabled("KINETIX_CONV_DISABLE_3X3_FASTPATH");
+
+    if (!disable_pointwise_fastpath and kernel_h == 1 and kernel_w == 1 and options.stride_h == 1 and options.stride_w == 1 and options.pad_h == 0 and options.pad_w == 0) {
         return kernel_pointwise.conv2dPointwise(input, weights, bias, output, options.groups, options.apply_silu);
     }
-    if (kernel_h == 3 and kernel_w == 3 and options.pad_h == 1 and options.pad_w == 1 and options.groups == 1) {
+    if (!disable_3x3_fastpath and kernel_h == 3 and kernel_w == 3 and options.pad_h == 1 and options.pad_w == 1 and options.groups == 1) {
         return kernel_3x3.conv2d3x3Pad1(input, weights, bias, output, options);
     }
 
@@ -144,6 +153,82 @@ test "conv2d 3x3 stride2 fast path matches general path" {
     }
 }
 
+test "conv2d 3x3 stride1 fast path matches general path on wide tensor" {
+    const testing = std.testing;
+
+    var input = try Tensor.init(testing.allocator, 1, 5, 19, 27);
+    defer input.deinit();
+    for (input.data, 0..) |*value, index| {
+        value.* = (@as(f32, @floatFromInt((index % 23) + 1)) - 12.0) * 0.09;
+    }
+
+    var weights = try Tensor.init(testing.allocator, 7, 5, 3, 3);
+    defer weights.deinit();
+    for (weights.data, 0..) |*value, index| {
+        value.* = (@as(f32, @floatFromInt((index % 17) + 1)) - 9.0) * 0.06;
+    }
+
+    const bias_values = [_]f32{ -0.2, 0.15, 0.0, 0.4, -0.35, 0.05, 0.3 };
+
+    var fast = try Tensor.init(testing.allocator, 1, 7, 19, 27);
+    defer fast.deinit();
+    var general = try Tensor.init(testing.allocator, 1, 7, 19, 27);
+    defer general.deinit();
+
+    try conv2d(&input, &weights, &bias_values, &fast, .{
+        .pad_h = 1,
+        .pad_w = 1,
+    });
+    try kernel_general.conv2dGeneralRange(&input, &weights, &bias_values, &general, .{
+        .pad_h = 1,
+        .pad_w = 1,
+    }, 0, 7);
+
+    for (fast.data, general.data) |actual, expected| {
+        try testing.expectApproxEqAbs(expected, actual, 1e-5);
+    }
+}
+
+test "conv2d 3x3 stride2 fast path matches general path on wide tensor" {
+    const testing = std.testing;
+
+    var input = try Tensor.init(testing.allocator, 1, 3, 33, 35);
+    defer input.deinit();
+    for (input.data, 0..) |*value, index| {
+        value.* = (@as(f32, @floatFromInt((index % 29) + 1)) - 15.0) * 0.08;
+    }
+
+    var weights = try Tensor.init(testing.allocator, 11, 3, 3, 3);
+    defer weights.deinit();
+    for (weights.data, 0..) |*value, index| {
+        value.* = (@as(f32, @floatFromInt((index % 31) + 1)) - 16.0) * 0.05;
+    }
+
+    const bias_values = [_]f32{ 0.1, -0.2, 0.35, -0.15, 0.0, 0.25, -0.05, 0.3, -0.4, 0.2, 0.45 };
+
+    var fast = try Tensor.init(testing.allocator, 1, 11, 17, 18);
+    defer fast.deinit();
+    var general = try Tensor.init(testing.allocator, 1, 11, 17, 18);
+    defer general.deinit();
+
+    try conv2d(&input, &weights, &bias_values, &fast, .{
+        .stride_h = 2,
+        .stride_w = 2,
+        .pad_h = 1,
+        .pad_w = 1,
+    });
+    try kernel_general.conv2dGeneralRange(&input, &weights, &bias_values, &general, .{
+        .stride_h = 2,
+        .stride_w = 2,
+        .pad_h = 1,
+        .pad_w = 1,
+    }, 0, 11);
+
+    for (fast.data, general.data) |actual, expected| {
+        try testing.expectApproxEqAbs(expected, actual, 1e-5);
+    }
+}
+
 test "pointwise concat fast path matches materialized concat" {
     const testing = std.testing;
 
@@ -173,6 +258,47 @@ test "pointwise concat fast path matches materialized concat" {
     try conv2d(&materialized, &weights, &bias_values, &expected, .{});
 
     var actual = try Tensor.init(testing.allocator, 1, 4, 2, 2);
+    defer actual.deinit();
+    try conv2dPointwiseConcat(&inputs, &weights, &bias_values, &actual, false);
+
+    for (actual.data, expected.data) |lhs_value, rhs_value| {
+        try testing.expectApproxEqAbs(rhs_value, lhs_value, 1e-6);
+    }
+}
+
+test "pointwise concat fast path matches materialized concat with three inputs" {
+    const testing = std.testing;
+
+    var a = try Tensor.init(testing.allocator, 1, 2, 3, 3);
+    defer a.deinit();
+    for (a.data, 0..) |*value, index| value.* = (@as(f32, @floatFromInt(index + 1)) - 5.0) * 0.2;
+
+    var b = try Tensor.init(testing.allocator, 1, 3, 3, 3);
+    defer b.deinit();
+    for (b.data, 0..) |*value, index| value.* = (@as(f32, @floatFromInt(index % 13)) - 6.0) * 0.17;
+
+    var c = try Tensor.init(testing.allocator, 1, 4, 3, 3);
+    defer c.deinit();
+    for (c.data, 0..) |*value, index| value.* = (@as(f32, @floatFromInt((index * 3) % 17)) - 8.0) * 0.11;
+
+    var weights = try Tensor.init(testing.allocator, 5, 9, 1, 1);
+    defer weights.deinit();
+    for (weights.data, 0..) |*value, index| {
+        value.* = (@as(f32, @floatFromInt((index % 19) + 1)) - 10.0) * 0.07;
+    }
+
+    const bias_values = [_]f32{ -0.3, 0.1, 0.25, -0.05, 0.4 };
+
+    var materialized = try Tensor.init(testing.allocator, 1, 9, 3, 3);
+    defer materialized.deinit();
+    const inputs = [_]*const Tensor{ &a, &b, &c };
+    try @import("layout.zig").concatChannels(&inputs, &materialized);
+
+    var expected = try Tensor.init(testing.allocator, 1, 5, 3, 3);
+    defer expected.deinit();
+    try conv2d(&materialized, &weights, &bias_values, &expected, .{});
+
+    var actual = try Tensor.init(testing.allocator, 1, 5, 3, 3);
     defer actual.deinit();
     try conv2dPointwiseConcat(&inputs, &weights, &bias_values, &actual, false);
 

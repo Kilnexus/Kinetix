@@ -12,6 +12,38 @@ pub const Summary = graph.Summary;
 pub const Detection = types.RuntimeVisionDetection;
 
 pub const DetectLevelProfileSummary = struct {
+    pub const StatSummary = struct {
+        min: f32,
+        max: f32,
+        mean: f32,
+        abs_max: f32,
+    };
+
+    pub const BranchDetailSummary = struct {
+        pub const HeadClassSummary = struct {
+            class_id: usize,
+            value: f32,
+        };
+
+        kind: []const u8,
+        stage0_stats: ?StatSummary,
+        stage1_stats: ?StatSummary,
+        stage2_stats: ?StatSummary,
+        stage3_stats: ?StatSummary,
+        stage4_stats: ?StatSummary,
+        output_stats: ?StatSummary,
+        head_weight_stats: ?StatSummary,
+        head_bias_stats: ?StatSummary,
+        head_top_bias_classes: []HeadClassSummary,
+        head_top_weight_classes: []HeadClassSummary,
+    };
+
+    pub const TopClassSummary = struct {
+        class_id: usize,
+        logit: f32,
+        score: f32,
+    };
+
     feature_shape: [4]usize,
     feature_min: f32,
     feature_max: f32,
@@ -23,8 +55,9 @@ pub const DetectLevelProfileSummary = struct {
     candidate_count: usize,
     max_class_logit: f32,
     max_class_score: f32,
-    reg_kind: []const u8,
-    cls_kind: []const u8,
+    top_classes: []TopClassSummary,
+    reg_detail: BranchDetailSummary,
+    cls_detail: BranchDetailSummary,
 };
 
 pub const GraphNodeProfileSummary = struct {
@@ -36,6 +69,20 @@ pub const GraphNodeProfileSummary = struct {
     max: f32,
     mean: f32,
     abs_max: f32,
+    sum_abs: f64,
+    probe_indices: [ax_runtime.tensor_probe_count]usize,
+    probe_values: [ax_runtime.tensor_probe_count]f32,
+};
+
+pub const InputTensorProfileSummary = struct {
+    shape: [4]usize,
+    min: f32,
+    max: f32,
+    mean: f32,
+    abs_max: f32,
+    sum_abs: f64,
+    probe_indices: [ax_runtime.tensor_probe_count]usize,
+    probe_values: [ax_runtime.tensor_probe_count]f32,
 };
 
 pub const DetectProfileSummary = struct {
@@ -48,10 +95,18 @@ pub const DetectProfileSummary = struct {
     nms_ns: u64,
     candidate_count: usize,
     kept_count: usize,
+    input_profile: InputTensorProfileSummary,
     levels: []DetectLevelProfileSummary,
     node_profiles: []GraphNodeProfileSummary,
 
     pub fn deinit(self: *DetectProfileSummary, allocator: std.mem.Allocator) void {
+        for (self.levels) |level| {
+            allocator.free(level.top_classes);
+            allocator.free(level.reg_detail.head_top_bias_classes);
+            allocator.free(level.reg_detail.head_top_weight_classes);
+            allocator.free(level.cls_detail.head_top_bias_classes);
+            allocator.free(level.cls_detail.head_top_weight_classes);
+        }
         allocator.free(self.levels);
         for (self.node_profiles) |node| {
             allocator.free(node.path);
@@ -250,12 +305,49 @@ fn buildDetectProfileSummary(
     const node_filter = loadNodeProfileFilter(allocator) catch null;
     defer if (node_filter) |filter| freeNodeProfileFilter(allocator, filter);
     const node_profiles = try collectNodeProfiles(allocator, &profile_graph, node_filter);
+    const input_profile = summarizeInputTensor(input);
 
     for (profile_graph.nodes) |node| {
         if (node.detect_profile) |detect_profile| {
             const levels = try allocator.alloc(DetectLevelProfileSummary, detect_profile.level_count);
             for (levels, 0..) |*level, index| {
                 const source = detect_profile.levels[index];
+                const top_classes = try allocator.alloc(DetectLevelProfileSummary.TopClassSummary, source.top_class_count);
+                const reg_top_bias = try allocator.alloc(DetectLevelProfileSummary.BranchDetailSummary.HeadClassSummary, source.reg_detail.head_top_bias_count);
+                const reg_top_weight = try allocator.alloc(DetectLevelProfileSummary.BranchDetailSummary.HeadClassSummary, source.reg_detail.head_top_weight_count);
+                const cls_top_bias = try allocator.alloc(DetectLevelProfileSummary.BranchDetailSummary.HeadClassSummary, source.cls_detail.head_top_bias_count);
+                const cls_top_weight = try allocator.alloc(DetectLevelProfileSummary.BranchDetailSummary.HeadClassSummary, source.cls_detail.head_top_weight_count);
+                for (top_classes, 0..) |*item, top_index| {
+                    item.* = .{
+                        .class_id = source.top_class_ids[top_index],
+                        .logit = source.top_class_logits[top_index],
+                        .score = source.top_class_scores[top_index],
+                    };
+                }
+                for (reg_top_bias, 0..) |*item, top_index| {
+                    item.* = .{
+                        .class_id = source.reg_detail.head_top_bias_ids[top_index],
+                        .value = source.reg_detail.head_top_bias_values[top_index],
+                    };
+                }
+                for (reg_top_weight, 0..) |*item, top_index| {
+                    item.* = .{
+                        .class_id = source.reg_detail.head_top_weight_ids[top_index],
+                        .value = source.reg_detail.head_top_weight_values[top_index],
+                    };
+                }
+                for (cls_top_bias, 0..) |*item, top_index| {
+                    item.* = .{
+                        .class_id = source.cls_detail.head_top_bias_ids[top_index],
+                        .value = source.cls_detail.head_top_bias_values[top_index],
+                    };
+                }
+                for (cls_top_weight, 0..) |*item, top_index| {
+                    item.* = .{
+                        .class_id = source.cls_detail.head_top_weight_ids[top_index],
+                        .value = source.cls_detail.head_top_weight_values[top_index],
+                    };
+                }
                 level.* = .{
                     .feature_shape = source.feature_shape,
                     .feature_min = source.feature_min,
@@ -268,8 +360,113 @@ fn buildDetectProfileSummary(
                     .candidate_count = source.candidate_count,
                     .max_class_logit = source.max_class_logit,
                     .max_class_score = source.max_class_score,
-                    .reg_kind = @tagName(source.reg_detail.kind),
-                    .cls_kind = @tagName(source.cls_detail.kind),
+                    .top_classes = top_classes,
+                    .reg_detail = .{
+                        .kind = @tagName(source.reg_detail.kind),
+                        .stage0_stats = if (source.reg_detail.stage0_stats) |stats| .{
+                            .min = stats.min,
+                            .max = stats.max,
+                            .mean = stats.mean,
+                            .abs_max = stats.abs_max,
+                        } else null,
+                        .stage1_stats = if (source.reg_detail.stage1_stats) |stats| .{
+                            .min = stats.min,
+                            .max = stats.max,
+                            .mean = stats.mean,
+                            .abs_max = stats.abs_max,
+                        } else null,
+                        .stage2_stats = if (source.reg_detail.stage2_stats) |stats| .{
+                            .min = stats.min,
+                            .max = stats.max,
+                            .mean = stats.mean,
+                            .abs_max = stats.abs_max,
+                        } else null,
+                        .stage3_stats = if (source.reg_detail.stage3_stats) |stats| .{
+                            .min = stats.min,
+                            .max = stats.max,
+                            .mean = stats.mean,
+                            .abs_max = stats.abs_max,
+                        } else null,
+                        .stage4_stats = if (source.reg_detail.stage4_stats) |stats| .{
+                            .min = stats.min,
+                            .max = stats.max,
+                            .mean = stats.mean,
+                            .abs_max = stats.abs_max,
+                        } else null,
+                        .output_stats = if (source.reg_detail.output_stats) |stats| .{
+                            .min = stats.min,
+                            .max = stats.max,
+                            .mean = stats.mean,
+                            .abs_max = stats.abs_max,
+                        } else null,
+                        .head_weight_stats = if (source.reg_detail.head_weight_stats) |stats| .{
+                            .min = stats.min,
+                            .max = stats.max,
+                            .mean = stats.mean,
+                            .abs_max = stats.abs_max,
+                        } else null,
+                        .head_bias_stats = if (source.reg_detail.head_bias_stats) |stats| .{
+                            .min = stats.min,
+                            .max = stats.max,
+                            .mean = stats.mean,
+                            .abs_max = stats.abs_max,
+                        } else null,
+                        .head_top_bias_classes = reg_top_bias,
+                        .head_top_weight_classes = reg_top_weight,
+                    },
+                    .cls_detail = .{
+                        .kind = @tagName(source.cls_detail.kind),
+                        .stage0_stats = if (source.cls_detail.stage0_stats) |stats| .{
+                            .min = stats.min,
+                            .max = stats.max,
+                            .mean = stats.mean,
+                            .abs_max = stats.abs_max,
+                        } else null,
+                        .stage1_stats = if (source.cls_detail.stage1_stats) |stats| .{
+                            .min = stats.min,
+                            .max = stats.max,
+                            .mean = stats.mean,
+                            .abs_max = stats.abs_max,
+                        } else null,
+                        .stage2_stats = if (source.cls_detail.stage2_stats) |stats| .{
+                            .min = stats.min,
+                            .max = stats.max,
+                            .mean = stats.mean,
+                            .abs_max = stats.abs_max,
+                        } else null,
+                        .stage3_stats = if (source.cls_detail.stage3_stats) |stats| .{
+                            .min = stats.min,
+                            .max = stats.max,
+                            .mean = stats.mean,
+                            .abs_max = stats.abs_max,
+                        } else null,
+                        .stage4_stats = if (source.cls_detail.stage4_stats) |stats| .{
+                            .min = stats.min,
+                            .max = stats.max,
+                            .mean = stats.mean,
+                            .abs_max = stats.abs_max,
+                        } else null,
+                        .output_stats = if (source.cls_detail.output_stats) |stats| .{
+                            .min = stats.min,
+                            .max = stats.max,
+                            .mean = stats.mean,
+                            .abs_max = stats.abs_max,
+                        } else null,
+                        .head_weight_stats = if (source.cls_detail.head_weight_stats) |stats| .{
+                            .min = stats.min,
+                            .max = stats.max,
+                            .mean = stats.mean,
+                            .abs_max = stats.abs_max,
+                        } else null,
+                        .head_bias_stats = if (source.cls_detail.head_bias_stats) |stats| .{
+                            .min = stats.min,
+                            .max = stats.max,
+                            .mean = stats.mean,
+                            .abs_max = stats.abs_max,
+                        } else null,
+                        .head_top_bias_classes = cls_top_bias,
+                        .head_top_weight_classes = cls_top_weight,
+                    },
                 };
             }
             return .{
@@ -282,6 +479,7 @@ fn buildDetectProfileSummary(
                 .nms_ns = detect_profile.nms_ns,
                 .candidate_count = detect_profile.candidate_count,
                 .kept_count = detect_profile.kept_count,
+                .input_profile = input_profile,
                 .levels = levels,
                 .node_profiles = node_profiles,
             };
@@ -343,10 +541,53 @@ fn collectNodeProfiles(
             .max = stats.max,
             .mean = stats.mean,
             .abs_max = stats.abs_max,
+            .sum_abs = stats.sum_abs,
+            .probe_indices = stats.probe_indices,
+            .probe_values = stats.probe_values,
         });
     }
 
     return try collected.toOwnedSlice(allocator);
+}
+
+fn summarizeInputTensor(input: *const ax_runtime.Tensor) InputTensorProfileSummary {
+    const first = input.data[0];
+    var min_value = first;
+    var max_value = first;
+    var sum: f64 = 0.0;
+    var abs_max: f32 = @abs(first);
+    var sum_abs: f64 = 0.0;
+
+    for (input.data) |value| {
+        min_value = @min(min_value, value);
+        max_value = @max(max_value, value);
+        abs_max = @max(abs_max, @abs(value));
+        sum += value;
+        sum_abs += @abs(@as(f64, value));
+    }
+
+    var probe_indices = std.mem.zeroes([ax_runtime.tensor_probe_count]usize);
+    var probe_values = std.mem.zeroes([ax_runtime.tensor_probe_count]f32);
+    const last_index = input.data.len - 1;
+    for (0..ax_runtime.tensor_probe_count) |probe_index| {
+        const flat_index = if (ax_runtime.tensor_probe_count == 1 or input.data.len == 1)
+            0
+        else
+            @divTrunc(probe_index * last_index, ax_runtime.tensor_probe_count - 1);
+        probe_indices[probe_index] = flat_index;
+        probe_values[probe_index] = input.data[flat_index];
+    }
+
+    return .{
+        .shape = input.shape,
+        .min = min_value,
+        .max = max_value,
+        .mean = @floatCast(sum / @as(f64, @floatFromInt(input.data.len))),
+        .abs_max = abs_max,
+        .sum_abs = sum_abs,
+        .probe_indices = probe_indices,
+        .probe_values = probe_values,
+    };
 }
 
 fn freeGraphNodeProfiles(allocator: std.mem.Allocator, node_profiles: []GraphNodeProfileSummary) void {
