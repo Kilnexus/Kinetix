@@ -33,6 +33,7 @@ pub fn runSPPFNode(
     const stride = try spec.getNodePair(pool, "stride");
     const padding = try spec.getNodePair(pool, "padding");
     const kernel = .{ padding[0] * 2 + 1, padding[1] * 2 + 1 };
+    const has_add = module.cached_attrs.add orelse false;
 
     var base = try conv.runConvNode(allocator, model_graph, weights_blob, &module.children[0], input);
     defer base.deinit();
@@ -61,7 +62,10 @@ pub fn runSPPFNode(
     const inputs = [_]*const Tensor{ &base, &pool1, &pool2, &pool3 };
     try ops.concatChannels(&inputs, &concat);
 
-    return try conv.runConvNode(allocator, model_graph, weights_blob, &module.children[1], &concat);
+    var output = try conv.runConvNode(allocator, model_graph, weights_blob, &module.children[1], &concat);
+    errdefer output.deinit();
+    if (has_add) try ops.addInPlace(&output, input);
+    return output;
 }
 
 pub fn runSPPFProfile(
@@ -88,6 +92,7 @@ pub fn runSPPFProfileNode(
     const stride = try spec.getNodePair(pool, "stride");
     const padding = try spec.getNodePair(pool, "padding");
     const kernel = .{ padding[0] * 2 + 1, padding[1] * 2 + 1 };
+    const has_add = module.cached_attrs.add orelse false;
 
     var profile = types.SPPFProfile{};
     var timer = try std.time.Timer.start();
@@ -129,7 +134,9 @@ pub fn runSPPFProfileNode(
     profile.concat_ns = timer.read();
 
     timer.reset();
-    const output = try conv.runConvNode(allocator, model_graph, weights_blob, &module.children[1], &concat);
+    var output = try conv.runConvNode(allocator, model_graph, weights_blob, &module.children[1], &concat);
+    errdefer output.deinit();
+    if (has_add) try ops.addInPlace(&output, input);
     profile.cv2_ns = timer.read();
     return .{ .output = output, .sppf_profile = profile };
 }
