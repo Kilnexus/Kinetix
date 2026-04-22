@@ -1,8 +1,8 @@
 const std = @import("std");
 const imaging = @import("Pixio");
-const preprocess = @import("chandra_preprocess.zig");
-const attention = @import("../text/attention/attention.zig");
-const cpu = @import("../text/core/cpu.zig");
+const preprocess = @import("preprocess.zig");
+const attention = @import("../../../text/attention/attention.zig");
+const cpu = @import("../../../text/core/cpu.zig");
 
 pub const PatchEmbeddingWeights = struct {
     data: []const f32,

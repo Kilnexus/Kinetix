@@ -5,8 +5,8 @@ const qwen3 = @import("providers/qwen3.zig");
 const bert = @import("providers/bert.zig");
 const yolo = @import("providers/yolo.zig");
 const swiftocr = @import("providers/swiftocr.zig");
-const chandra = @import("providers/chandra.zig");
-const moss_tts_nano = @import("providers/moss_tts_nano.zig");
+const chandra = @import("../../families/ocr/chandra/family.zig");
+const moss_tts_nano = @import("../../families/tts/moss_tts_nano/family.zig");
 const generic = @import("providers/generic.zig");
 const types = @import("../../types.zig");
 

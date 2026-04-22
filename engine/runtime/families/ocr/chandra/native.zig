@@ -1,4 +1,4 @@
-const native = @import("chandra/native/index.zig");
+const native = @import("native/index.zig");
 
 pub const io = native.io;
 
@@ -36,5 +36,5 @@ pub const executeDetailed = native.executeDetailed;
 pub const executeDetailedWithLoadedModel = native.executeDetailedWithLoadedModel;
 
 test {
-    _ = @import("chandra/native/testing/native_test.zig");
+    _ = @import("native/testing/native_test.zig");
 }

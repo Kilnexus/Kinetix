@@ -1,9 +1,9 @@
 const std = @import("std");
-const task = @import("../../../../../core/task.zig");
-const preprocess = @import("../../../chandra_preprocess.zig");
-const store = @import("../../../chandra_store.zig");
-const weights = @import("../../../chandra_weights.zig");
-const decoder_types = @import("../../../../text/decoder_types.zig");
+const task = @import("../../../../../../core/task.zig");
+const preprocess = @import("../../preprocess.zig");
+const store = @import("../../store.zig");
+const weights = @import("../../weights.zig");
+const decoder_types = @import("../../../../../text/decoder_types.zig");
 const input = @import("../input/loader.zig");
 
 pub const io = std.Options.debug_io;

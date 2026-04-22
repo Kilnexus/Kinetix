@@ -1,12 +1,12 @@
 const std = @import("std");
-const backend_mod = @import("../backend.zig");
-const chandra_native = @import("../../providers/chandra_native.zig");
-const chandra_preprocess = @import("../../providers/chandra_preprocess.zig");
-const chandra_store = @import("../../providers/chandra_store.zig");
-const chandra_weights = @import("../../providers/chandra_weights.zig");
-const handle_mod = @import("../../model/handle.zig");
-const normalized = @import("../../model/resolver/normalized_model.zig");
-const types = @import("../../types.zig");
+const backend_mod = @import("../../../backend/backend.zig");
+const chandra_native = @import("native.zig");
+const chandra_preprocess = @import("preprocess.zig");
+const chandra_store = @import("store.zig");
+const chandra_weights = @import("weights.zig");
+const handle_mod = @import("../../../model/handle.zig");
+const normalized = @import("../../../model/resolver/normalized_model.zig");
+const types = @import("../../../types.zig");
 
 pub const backend = backend_mod.RuntimeBackend{
     .provider_key = .chandra_ocr,

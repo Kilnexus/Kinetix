@@ -1,7 +1,7 @@
 const std = @import("std");
-const tensor_store = @import("../text/storage/store.zig");
-const chandra_vision = @import("chandra_vision.zig");
-const chandra_weights = @import("chandra_weights.zig");
+const tensor_store = @import("../../../text/storage/store.zig");
+const chandra_vision = @import("vision.zig");
+const chandra_weights = @import("weights.zig");
 
 pub const FileStore = struct {
     relative_path: []u8,

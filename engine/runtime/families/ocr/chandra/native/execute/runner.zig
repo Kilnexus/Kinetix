@@ -1,15 +1,15 @@
 const std = @import("std");
-const preprocess = @import("../../../chandra_preprocess.zig");
-const store = @import("../../../chandra_store.zig");
-const vision = @import("../../../chandra_vision.zig");
+const preprocess = @import("../../preprocess.zig");
+const store = @import("../../store.zig");
+const vision = @import("../../vision.zig");
 const core = @import("../model/core.zig");
 const input = @import("../input/loader.zig");
-const decoder_runtime = @import("../../../../text/decoder_runtime.zig");
-const decoder_family = @import("../../../../text/decoder_family.zig");
-const decoder_types = @import("../../../../text/decoder_types.zig");
-const text_backend_scheme = @import("../../../../text/backend_scheme.zig");
-const kv_cache = @import("../../../../text/kv_cache.zig");
-const streaming = @import("../../../../text/streaming.zig");
+const decoder_runtime = @import("../../../../../text/decoder_runtime.zig");
+const decoder_family = @import("../../../../../text/decoder_family.zig");
+const decoder_types = @import("../../../../../text/decoder_types.zig");
+const text_backend_scheme = @import("../../../../../text/backend_scheme.zig");
+const kv_cache = @import("../../../../../text/kv_cache.zig");
+const streaming = @import("../../../../../text/streaming.zig");
 
 pub const MaterializedOutput = union(enum) {
     text: []u8,

@@ -1,5 +1,5 @@
 const std = @import("std");
-const safetensors = @import("../text/safetensors.zig");
+const safetensors = @import("../../../text/safetensors.zig");
 
 const io = std.Options.debug_io;
 

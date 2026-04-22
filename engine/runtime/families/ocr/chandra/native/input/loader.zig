@@ -1,6 +1,6 @@
 const std = @import("std");
 const imaging = @import("Pixio");
-const preprocess = @import("../../../chandra_preprocess.zig");
+const preprocess = @import("../../preprocess.zig");
 
 pub const io = std.Options.debug_io;
 

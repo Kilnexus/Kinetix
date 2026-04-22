@@ -3,7 +3,7 @@ const imaging = @import("Pixio");
 const core = @import("../model/core.zig");
 const input = @import("../input/loader.zig");
 const exec = @import("../execute/runner.zig");
-const decoder_types = @import("../../../../text/decoder_types.zig");
+const decoder_types = @import("../../../../../text/decoder_types.zig");
 
 const io = core.io;
 

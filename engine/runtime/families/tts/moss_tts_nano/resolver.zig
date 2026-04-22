@@ -1,8 +1,8 @@
 const std = @import("std");
-const bundle = @import("../../../providers/moss_tts_nano_bundle.zig");
+const bundle = @import("bundle/locator.zig");
 const catalog_mod = @import("../../../catalog/catalog.zig");
-const normalized = @import("../normalized_model.zig");
-const report_mod = @import("../support_report.zig");
+const normalized = @import("../../../model/resolver/normalized_model.zig");
+const report_mod = @import("../../../model/resolver/support_report.zig");
 const types = @import("../../../types.zig");
 
 const operations = [_][]const u8{"synthesize"};
