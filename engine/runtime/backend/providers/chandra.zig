@@ -6,6 +6,8 @@ const types = @import("../../types.zig");
 
 pub const backend = backend_mod.RuntimeBackend{
     .provider_key = .chandra_ocr,
+    .open_fn = backend_mod.openBasicState,
+    .deinit_fn = backend_mod.deinitBasicState,
     .execute_fn = execute,
 };
 

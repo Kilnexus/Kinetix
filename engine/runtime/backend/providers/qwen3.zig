@@ -7,6 +7,8 @@ const types = @import("../../types.zig");
 
 pub const backend = backend_mod.RuntimeBackend{
     .provider_key = .qwen3_text,
+    .open_fn = backend_mod.openBasicState,
+    .deinit_fn = backend_mod.deinitBasicState,
     .execute_fn = execute,
     .execute_batch_fn = executeBatch,
 };

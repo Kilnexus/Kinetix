@@ -6,6 +6,8 @@ const vision_shared = @import("../../providers/vision_shared.zig");
 
 pub const backend = backend_mod.RuntimeBackend{
     .provider_key = .yolo_vision,
+    .open_fn = backend_mod.openBasicState,
+    .deinit_fn = backend_mod.deinitBasicState,
     .execute_fn = execute,
 };
 

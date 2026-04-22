@@ -1,4 +1,5 @@
 const std = @import("std");
+const backend_registry = @import("../backend/registry.zig");
 const resolver = @import("../model/resolver/resolver.zig");
 const executor_mod = @import("../executor/executor.zig");
 const handle_mod = @import("../model/handle.zig");
@@ -26,9 +27,18 @@ pub const RuntimeSession = struct {
     }
 
     pub fn openModel(self: *const RuntimeSession, request: OpenModelRequest) !handle_mod.ModelHandle {
+        var normalized = try self.normalizeModel(request);
+        errdefer normalized.deinit();
+
+        const runtime_backend = backend_registry.findByKey(normalized.provider_key) orelse return error.RuntimeExecutionNotImplemented;
+        const provider_state = try runtime_backend.open(self.allocator, &normalized);
+        errdefer runtime_backend.deinitState(self.allocator, provider_state);
+
         return .{
             .allocator = self.allocator,
-            .normalized = try self.normalizeModel(request),
+            .normalized = normalized,
+            .runtime_backend = runtime_backend,
+            .provider_state = provider_state,
         };
     }
 
@@ -71,6 +81,8 @@ test "runtime session opens normalized models through the unified resolver entry
     defer handle.deinit();
 
     try std.testing.expectEqual(types.ProviderKey.qwen3_text, handle.normalized.provider_key);
+    try std.testing.expect(handle.provider_state != null);
+    try std.testing.expectEqual(types.ProviderKey.qwen3_text, handle.runtime_backend.provider_key);
     try std.testing.expectEqual(types.Modality.text, handle.normalized.descriptor.modality);
 }
 

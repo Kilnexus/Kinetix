@@ -1,6 +1,54 @@
 const std = @import("std");
 const handle_mod = @import("../model/handle.zig");
+const normalized = @import("../model/resolver/normalized_model.zig");
 const types = @import("../types.zig");
+
+pub const OpenState = struct {
+    provider_key: types.ProviderKey,
+    model_dir: []u8,
+
+    pub fn create(
+        allocator: std.mem.Allocator,
+        provider_key: types.ProviderKey,
+        model: *const normalized.NormalizedModel,
+    ) !*OpenState {
+        const state = try allocator.create(OpenState);
+        errdefer allocator.destroy(state);
+        state.* = .{
+            .provider_key = provider_key,
+            .model_dir = try allocator.dupe(u8, model.artifacts.model_dir),
+        };
+        return state;
+    }
+
+    pub fn destroy(self: *OpenState, allocator: std.mem.Allocator) void {
+        allocator.free(self.model_dir);
+        allocator.destroy(self);
+    }
+};
+
+pub fn openBasicState(
+    allocator: std.mem.Allocator,
+    model: *const normalized.NormalizedModel,
+) !?*anyopaque {
+    return try OpenState.create(allocator, model.provider_key, model);
+}
+
+pub fn deinitBasicState(allocator: std.mem.Allocator, state: ?*anyopaque) void {
+    const raw = state orelse return;
+    const typed: *OpenState = @ptrCast(@alignCast(raw));
+    typed.destroy(allocator);
+}
+
+pub const OpenFn = *const fn (
+    allocator: std.mem.Allocator,
+    model: *const normalized.NormalizedModel,
+) anyerror!?*anyopaque;
+
+pub const DeinitFn = *const fn (
+    allocator: std.mem.Allocator,
+    state: ?*anyopaque,
+) void;
 
 pub const ExecuteFn = *const fn (
     allocator: std.mem.Allocator,
@@ -16,8 +64,27 @@ pub const ExecuteBatchFn = *const fn (
 
 pub const RuntimeBackend = struct {
     provider_key: types.ProviderKey,
+    open_fn: ?OpenFn = null,
+    deinit_fn: ?DeinitFn = null,
     execute_fn: ExecuteFn,
     execute_batch_fn: ?ExecuteBatchFn = null,
+
+    pub fn open(
+        self: *const RuntimeBackend,
+        allocator: std.mem.Allocator,
+        model: *const normalized.NormalizedModel,
+    ) !?*anyopaque {
+        if (self.open_fn) |open_fn| return try open_fn(allocator, model);
+        return null;
+    }
+
+    pub fn deinitState(
+        self: *const RuntimeBackend,
+        allocator: std.mem.Allocator,
+        state: ?*anyopaque,
+    ) void {
+        if (self.deinit_fn) |deinit_fn| deinit_fn(allocator, state);
+    }
 
     pub fn execute(
         self: *const RuntimeBackend,
