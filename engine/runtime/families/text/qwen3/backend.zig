@@ -6,7 +6,7 @@ const task = @import("../../../../core/task.zig");
 const handle_mod = @import("../../../model/handle.zig");
 const normalized = @import("../../../model/resolver/normalized_model.zig");
 const qwen_native = @import("../../../text/families/qwen3/qwen_native.zig");
-const text_shared = @import("../../../providers/text_shared.zig");
+const text_shared = @import("../../../shared/text/runtime.zig");
 const text_runtime = @import("../../../text/generator_runtime.zig");
 const types = @import("../../../types.zig");
 

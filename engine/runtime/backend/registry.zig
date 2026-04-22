@@ -1,5 +1,5 @@
 const backend_mod = @import("backend.zig");
-const bert = @import("providers/bert.zig");
+const bert = @import("../families/text/bert/family.zig");
 const chandra = @import("../families/ocr/chandra/family.zig");
 const generic = @import("../families/generic/family.zig");
 const moss_tts_nano = @import("../families/tts/moss_tts_nano/family.zig");

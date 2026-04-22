@@ -18,6 +18,7 @@ pub const executor = @import("executor/executor.zig");
 pub const session = @import("session/session.zig");
 pub const families = struct {
     pub const text = struct {
+        pub const bert = @import("families/text/bert/family.zig");
         pub const qwen3 = @import("families/text/qwen3/family.zig");
     };
     pub const vision = struct {
@@ -32,6 +33,11 @@ pub const families = struct {
     };
     pub const generic = @import("families/generic/family.zig");
 };
+pub const shared = struct {
+    pub const text = @import("shared/text/runtime.zig");
+    pub const vision = @import("shared/vision/runtime.zig");
+    pub const ocr = @import("shared/ocr/runtime.zig");
+};
 pub const providers = struct {
     pub const chandra_native = families.ocr.chandra.native;
     pub const chandra_preprocess = families.ocr.chandra.preprocess;
@@ -39,6 +45,7 @@ pub const providers = struct {
     pub const chandra_vision = families.ocr.chandra.vision;
     pub const chandra_weights = families.ocr.chandra.weights;
     pub const swiftocr_native = families.ocr.swiftocr.native;
-    pub const text_shared = @import("providers/text_shared.zig");
-    pub const vision_shared = @import("providers/vision_shared.zig");
+    pub const text_shared = shared.text;
+    pub const vision_shared = shared.vision;
+    pub const ocr_shared = shared.ocr;
 };

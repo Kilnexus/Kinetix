@@ -1,7 +1,7 @@
 const std = @import("std");
-const backend_mod = @import("../backend.zig");
-const handle_mod = @import("../../model/handle.zig");
-const types = @import("../../types.zig");
+const backend_mod = @import("../../../backend/backend.zig");
+const handle_mod = @import("../../../model/handle.zig");
+const types = @import("../../../types.zig");
 
 pub const backend = backend_mod.RuntimeBackend{
     .provider_key = .bert_text,

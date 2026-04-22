@@ -4,7 +4,7 @@ const backend_mod = @import("../../../backend/backend.zig");
 const handle_mod = @import("../../../model/handle.zig");
 const normalized = @import("../../../model/resolver/normalized_model.zig");
 const types = @import("../../../types.zig");
-const vision_shared = @import("../../../providers/vision_shared.zig");
+const vision_shared = @import("../../../shared/vision/runtime.zig");
 
 pub const backend = backend_mod.RuntimeBackend{
     .provider_key = .yolo_vision,
