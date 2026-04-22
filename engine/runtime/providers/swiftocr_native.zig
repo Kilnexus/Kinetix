@@ -1,4 +1,5 @@
 const std = @import("std");
+const ocr_artifacts = @import("../../artifacts/ocr/ocr.zig");
 const ocr_pipeline = @import("../ocr_pipeline.zig");
 const task = @import("../../core/task.zig");
 
@@ -16,6 +17,15 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
     return try buildOutputJson(allocator, context, infer_output);
 }
 
+pub fn executeWithLoadedModel(
+    allocator: std.mem.Allocator,
+    context: Context,
+    model: *const ocr_artifacts.Model,
+) ![]u8 {
+    const infer_output = try maybeRunInferWithLoadedModel(allocator, context, model);
+    return try buildOutputJson(allocator, context, infer_output);
+}
+
 fn maybeRunInfer(allocator: std.mem.Allocator, context: Context) !?InferResult {
     if (!std.mem.eql(u8, context.operation, "infer-ocr")) return null;
     if (context.execution != .sync) return null;
@@ -26,6 +36,24 @@ fn maybeRunInfer(allocator: std.mem.Allocator, context: Context) !?InferResult {
         .model_path = context.model_path,
         .image_path = context.input_path,
     });
+}
+
+fn maybeRunInferWithLoadedModel(
+    allocator: std.mem.Allocator,
+    context: Context,
+    model: *const ocr_artifacts.Model,
+) !?InferResult {
+    if (!std.mem.eql(u8, context.operation, "infer-ocr")) return null;
+    if (context.execution != .sync) return null;
+
+    var image = try ocr_artifacts.Image.loadPpmFile(allocator, context.input_path);
+    defer image.deinit();
+
+    return .{
+        .loaded_tensors = model.tensorCount(),
+        .image_width = image.width,
+        .image_height = image.height,
+    };
 }
 
 fn buildOutputJson(

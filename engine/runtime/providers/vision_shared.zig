@@ -12,6 +12,8 @@ const types = @import("../types.zig");
 const io = std.Options.debug_io;
 
 pub const Summary = graph.Summary;
+pub const Graph = ax_graph.Graph;
+pub const WeightsBlob = ax_weights.WeightsBlob;
 pub const Detection = types.RuntimeVisionDetection;
 
 pub const DetectLevelProfileSummary = struct {
@@ -146,10 +148,66 @@ pub fn loadSummary(allocator: std.mem.Allocator, graph_path: []const u8) !Summar
     return try graph.loadSummary(allocator, graph_path);
 }
 
+pub fn loadGraph(allocator: std.mem.Allocator, graph_path: []const u8) !Graph {
+    const resolved_graph_path = try resolvePath(allocator, graph_path);
+    defer allocator.free(resolved_graph_path);
+    return try ax_graph.load(allocator, resolved_graph_path);
+}
+
+pub fn loadWeights(allocator: std.mem.Allocator, weights_path: []const u8) !WeightsBlob {
+    const resolved_weights_path = try resolvePath(allocator, weights_path);
+    defer allocator.free(resolved_weights_path);
+    return try ax_weights.WeightsBlob.load(allocator, resolved_weights_path);
+}
+
 pub fn maybeRunDetect(
     allocator: std.mem.Allocator,
     graph_path: []const u8,
     weights_path: []const u8,
+    operation: []const u8,
+    execution: task.ExecutionMode,
+    input_path: ?[]const u8,
+) !?DetectOutput {
+    if (!std.mem.eql(u8, operation, "detect")) return null;
+    if (execution != .sync) return null;
+    if (input_path == null) return null;
+
+    if (builtin.is_test) {
+        const detections = try allocator.alloc(Detection, 1);
+        detections[0] = .{
+            .x1 = 1.0,
+            .y1 = 2.0,
+            .x2 = 3.0,
+            .y2 = 4.0,
+            .score = 0.95,
+            .class_id = 1,
+        };
+        return .{
+            .candidate_count = 4,
+            .detections = detections,
+            .profile = null,
+        };
+    }
+
+    var model_graph = try loadGraph(allocator, graph_path);
+    defer model_graph.deinit();
+    var weights_blob = try loadWeights(allocator, weights_path);
+    defer weights_blob.deinit();
+
+    return try maybeRunDetectWithLoaded(
+        allocator,
+        &model_graph,
+        &weights_blob,
+        operation,
+        execution,
+        input_path,
+    );
+}
+
+pub fn maybeRunDetectWithLoaded(
+    allocator: std.mem.Allocator,
+    model_graph: *const Graph,
+    weights_blob: *const WeightsBlob,
     operation: []const u8,
     execution: task.ExecutionMode,
     input_path: ?[]const u8,
@@ -177,24 +235,16 @@ pub fn maybeRunDetect(
         };
     }
 
-    const resolved_graph_path = try resolvePath(allocator, graph_path);
-    defer allocator.free(resolved_graph_path);
-    const resolved_weights_path = try resolvePath(allocator, weights_path);
-    defer allocator.free(resolved_weights_path);
     const resolved_image_path = try resolvePath(allocator, image_path);
     defer allocator.free(resolved_image_path);
 
-    var model_graph = try ax_graph.load(allocator, resolved_graph_path);
-    defer model_graph.deinit();
-    var weights_blob = try ax_weights.WeightsBlob.load(allocator, resolved_weights_path);
-    defer weights_blob.deinit();
     var prepared = try ax_vision.loadImageAsTensor(allocator, resolved_image_path, 640);
     defer prepared.deinit();
 
     var detections_output = try ax_runtime.runGraph(
         allocator,
-        &model_graph,
-        &weights_blob,
+        model_graph,
+        weights_blob,
         &prepared.tensor,
         detect_options,
     );
@@ -217,8 +267,8 @@ pub fn maybeRunDetect(
         .detections = detections,
         .profile = if (shouldEmitDetectProfile()) try buildDetectProfileSummary(
             allocator,
-            &model_graph,
-            &weights_blob,
+            model_graph,
+            weights_blob,
             &prepared.tensor,
             detect_options,
         ) else null,

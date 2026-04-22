@@ -34,6 +34,16 @@ pub fn generateSingleUserText(
         options.thread_count,
     );
     defer runtime.deinit();
+
+    return try generateSingleUserTextWithRuntime(allocator, &runtime, user_text, options);
+}
+
+pub fn generateSingleUserTextWithRuntime(
+    allocator: std.mem.Allocator,
+    runtime: *text_runtime.GeneratorRuntime,
+    user_text: []const u8,
+    options: text_options.GenerateOptions,
+) ![]u8 {
     const architecture = runtime.model.cfg.architecture;
 
     const prompt = try text_prompts.buildSingleUserPromptAlloc(
@@ -77,6 +87,32 @@ pub fn executeQwenSingle(
     return try generateSingleUserText(allocator, model_dir, input, options);
 }
 
+pub fn executeQwenSingleWithRuntime(
+    allocator: std.mem.Allocator,
+    runtime: *text_runtime.GeneratorRuntime,
+    request: task.TaskRequest,
+) ![]u8 {
+    const input = switch (request.input) {
+        .text => |value| value,
+        .none => "",
+        else => return error.InvalidInputPayload,
+    };
+
+    return try generateSingleUserTextWithRuntime(allocator, runtime, input, .{
+        .max_new_tokens = request.generation.max_tokens orelse 64,
+        .thinking_mode = .disabled,
+        .system_prompt = null,
+        .sampling = text_options.defaultSamplingConfig(.disabled),
+        .seed = 0,
+        .stream_output = false,
+        .stop_sequences = &.{},
+        .backend_scheme = .auto,
+        .kv_cache_scheme = .auto,
+        .q8_layout = kv_cache.default_q8_layout,
+        .thread_count = 0,
+    });
+}
+
 pub fn executeQwenBatch(
     allocator: std.mem.Allocator,
     model_dir: []const u8,
@@ -95,6 +131,19 @@ pub fn executeQwenBatch(
         0,
     );
     defer runtime.deinit();
+    return try executeQwenBatchWithRuntime(allocator, &runtime, requests);
+}
+
+pub fn executeQwenBatchWithRuntime(
+    allocator: std.mem.Allocator,
+    runtime: *text_runtime.GeneratorRuntime,
+    requests: []const task.TaskRequest,
+) !NativeBatchOutput {
+    if (requests.len == 0) return error.InvalidBatchSize;
+
+    const resolved_max_tokens = resolveMaxTokens(requests);
+    if (resolvedMaxTokensMismatch(requests, resolved_max_tokens)) return error.InconsistentBatchGenerationOptions;
+
     const architecture = runtime.model.cfg.architecture;
 
     const resolved_kv_cache_scheme = kv_cache.resolveScheme(.auto, runtime.model.backendName());

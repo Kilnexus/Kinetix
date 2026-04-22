@@ -91,6 +91,13 @@ pub const Readiness = struct {
     output_tensor_count: usize = 0,
 };
 
+pub const LoadedModel = struct {
+    readiness: Readiness,
+    parsed_config: ?*const ParsedConfig = null,
+    image_processor: ?*const preprocess.ParsedImageProcessorConfig = null,
+    tensor_store: ?*const store.ChandraStore = null,
+};
+
 const PreprocessSummary = struct {
     image_width: usize,
     image_height: usize,
@@ -227,25 +234,45 @@ fn maxVisualPosition(
 }
 
 pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
+    return try executeWithLoadedModel(allocator, context, .{
+        .readiness = inspect(context.model_path),
+    });
+}
+
+pub fn executeWithLoadedModel(
+    allocator: std.mem.Allocator,
+    context: Context,
+    loaded_model: LoadedModel,
+) ![]u8 {
     if (context.execution != .sync) return error.UnsupportedExecutionMode;
-    const readiness = inspect(context.model_path);
+    const readiness = loaded_model.readiness;
     var summary: ?PreprocessSummary = null;
     defer if (summary) |*value| value.deinit(allocator);
 
     if (readiness.has_image_processor_config and isSupportedInputPath(context.input_path)) {
-        var image_processor = try preprocess.loadImageProcessorConfig(allocator, context.model_path);
-        defer image_processor.deinit();
+        var owned_image_processor: ?preprocess.ParsedImageProcessorConfig = null;
+        defer if (owned_image_processor) |*value| value.deinit();
+        var image_processor = loaded_model.image_processor;
+        if (image_processor == null) {
+            owned_image_processor = try preprocess.loadImageProcessorConfig(allocator, context.model_path);
+            if (owned_image_processor) |*value| image_processor = value;
+        }
+        const image_processor_config = image_processor.?.value;
 
-        var prepared = try loadPreparedInputFromPath(allocator, context.input_path, image_processor.value);
+        var prepared = try loadPreparedInputFromPath(allocator, context.input_path, image_processor_config);
         defer prepared.deinit();
 
-        var parsed_config: ?ParsedConfig = null;
-        const config_path = std.fs.path.join(allocator, &.{ context.model_path, "config.json" }) catch null;
-        defer if (config_path) |path| allocator.free(path);
-        if (config_path) |path| {
-            parsed_config = loadConfigFromFile(allocator, path) catch null;
+        var owned_parsed_config: ?ParsedConfig = null;
+        defer if (owned_parsed_config) |*config| config.deinit();
+        var parsed_config = loaded_model.parsed_config;
+        if (parsed_config == null) {
+            const config_path = std.fs.path.join(allocator, &.{ context.model_path, "config.json" }) catch null;
+            defer if (config_path) |path| allocator.free(path);
+            if (config_path) |path| {
+                owned_parsed_config = loadConfigFromFile(allocator, path) catch null;
+                if (owned_parsed_config) |*config| parsed_config = config;
+            }
         }
-        defer if (parsed_config) |*config| config.deinit();
 
         const vision_block_depth = if (parsed_config) |config|
             config.value.vision_config.depth
@@ -279,9 +306,14 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
         var decoded_token_count: usize = 0;
         var generated_output: ?[]u8 = null;
         if (readiness.has_patch_embedding_weight) {
-            var tensor_store = store.ChandraStore.open(allocator, context.model_path) catch null;
-            if (tensor_store) |*opened| {
-                defer opened.deinit();
+            var owned_tensor_store: ?store.ChandraStore = null;
+            defer if (owned_tensor_store) |*opened| opened.deinit();
+            var tensor_store = loaded_model.tensor_store;
+            if (tensor_store == null) {
+                owned_tensor_store = store.ChandraStore.open(allocator, context.model_path) catch null;
+                if (owned_tensor_store) |*opened| tensor_store = opened;
+            }
+            if (tensor_store) |opened| {
                 var patch_weights = opened.loadPatchEmbeddingWeights(allocator) catch null;
                 if (patch_weights) |*loaded| {
                     defer loaded.deinit();
@@ -336,7 +368,7 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
                             visual_mlp_blocks_executed = block_index + 1;
                         }
 
-                        var grouped = vision.mergeSpatialPatches(allocator, merged_input, image_processor.value.merge_size) catch null;
+                        var grouped = vision.mergeSpatialPatches(allocator, merged_input, image_processor_config.merge_size) catch null;
                         if (grouped) |*merged| {
                             defer merged.deinit();
                             var merger_weights = opened.loadVisualMergerWeights(allocator) catch null;
