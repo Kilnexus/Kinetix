@@ -2,6 +2,7 @@ pub const load_plan = @import("load_plan.zig");
 pub const ocr_pipeline = @import("ocr_pipeline.zig");
 pub const text = @import("text/text.zig");
 pub const types = @import("types.zig");
+pub const backend = @import("backend/registry.zig");
 pub const catalog = @import("catalog/catalog.zig");
 pub const model_resolver = @import("model/resolver/resolver.zig");
 pub const model = @import("model/model.zig");
