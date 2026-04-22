@@ -1,13 +1,7 @@
 const std = @import("std");
 const catalog_mod = @import("../../catalog/catalog.zig");
+const family_registry = @import("../../families/registry.zig");
 const normalized = @import("normalized_model.zig");
-const qwen3 = @import("../../families/text/qwen3/family.zig");
-const bert = @import("../../families/text/bert/family.zig");
-const yolo = @import("../../families/vision/yolo/family.zig");
-const swiftocr = @import("../../families/ocr/swiftocr/family.zig");
-const chandra = @import("../../families/ocr/chandra/family.zig");
-const moss_tts_nano = @import("../../families/tts/moss_tts_nano/family.zig");
-const generic = @import("../../families/generic/family.zig");
 const types = @import("../../types.zig");
 
 pub const RuntimeSupportReport = @import("support_report.zig").RuntimeSupportReport;
@@ -31,13 +25,9 @@ pub fn normalizeCatalog(
     catalog: *const catalog_mod.ArtifactCatalog,
     preferred_weights: types.WeightScheme,
 ) !NormalizedModel {
-    if (try qwen3.tryNormalize(allocator, catalog, preferred_weights)) |model| return model;
-    if (try bert.tryNormalize(allocator, catalog, preferred_weights)) |model| return model;
-    if (try yolo.tryNormalize(allocator, catalog, preferred_weights)) |model| return model;
-    if (try swiftocr.tryNormalize(allocator, catalog, preferred_weights)) |model| return model;
-    if (try chandra.tryNormalize(allocator, catalog, preferred_weights)) |model| return model;
-    if (try moss_tts_nano.tryNormalize(allocator, catalog, preferred_weights)) |model| return model;
-    if (try generic.tryNormalize(allocator, catalog, preferred_weights)) |model| return model;
+    for (family_registry.builtinFamilies()) |family| {
+        if (try family.try_normalize(allocator, catalog, preferred_weights)) |model| return model;
+    }
     return error.UnsupportedModelDirectory;
 }
 

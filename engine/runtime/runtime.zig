@@ -17,6 +17,7 @@ pub const planner = @import("planner/planner.zig");
 pub const executor = @import("executor/executor.zig");
 pub const session = @import("session/session.zig");
 pub const families = struct {
+    pub const registry = @import("families/registry.zig");
     pub const text = struct {
         pub const bert = @import("families/text/bert/family.zig");
         pub const qwen3 = @import("families/text/qwen3/family.zig");

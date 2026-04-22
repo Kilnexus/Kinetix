@@ -1,18 +1,15 @@
 const std = @import("std");
 const backend_registry = @import("../backend/registry.zig");
+const family_registry = @import("../families/registry.zig");
 const types = @import("../types.zig");
 
-pub const ProviderDescriptor = struct {
-    key: types.ProviderKey,
-    modality: types.Modality,
-    family: []const u8,
-};
+pub const ProviderDescriptor = family_registry.ProviderDescriptor;
 
 const builtin_descriptors = blk: {
-    const runtime_backends = backend_registry.builtinBackends();
-    var projected: [runtime_backends.len]ProviderDescriptor = undefined;
-    for (runtime_backends, 0..) |runtime_backend, index| {
-        projected[index] = describeProvider(runtime_backend.provider_key);
+    const families = family_registry.builtinFamilies();
+    var projected: [families.len]ProviderDescriptor = undefined;
+    for (families, 0..) |family, index| {
+        projected[index] = family.descriptor;
     }
     break :blk projected;
 };
@@ -23,7 +20,8 @@ pub fn descriptors() []const ProviderDescriptor {
 
 pub fn findByKey(key: types.ProviderKey) ?ProviderDescriptor {
     if (backend_registry.findByKey(key) == null) return null;
-    return describeProvider(key);
+    const family = family_registry.findBuiltinByKey(key) orelse return null;
+    return family.descriptor;
 }
 
 pub fn findByFamily(modality: types.Modality, family: []const u8) ?ProviderDescriptor {
@@ -32,18 +30,6 @@ pub fn findByFamily(modality: types.Modality, family: []const u8) ?ProviderDescr
         if (std.mem.eql(u8, descriptor.family, family)) return descriptor;
     }
     return null;
-}
-
-fn describeProvider(key: types.ProviderKey) ProviderDescriptor {
-    return switch (key) {
-        .qwen3_text => .{ .key = .qwen3_text, .modality = .text, .family = "qwen3" },
-        .bert_text => .{ .key = .bert_text, .modality = .text, .family = "bert" },
-        .yolo_vision => .{ .key = .yolo_vision, .modality = .vision, .family = "yolo" },
-        .swiftocr_ocr => .{ .key = .swiftocr_ocr, .modality = .ocr, .family = "swiftocr" },
-        .chandra_ocr => .{ .key = .chandra_ocr, .modality = .ocr, .family = "chandra" },
-        .moss_tts_nano_tts => .{ .key = .moss_tts_nano_tts, .modality = .tts, .family = "moss_tts_nano" },
-        .generic => .{ .key = .generic, .modality = .multimodal, .family = "generic" },
-    };
 }
 
 test "provider registry resolves builtin providers by key" {

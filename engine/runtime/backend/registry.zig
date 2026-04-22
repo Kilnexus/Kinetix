@@ -1,24 +1,17 @@
 const backend_mod = @import("backend.zig");
-const bert = @import("../families/text/bert/family.zig");
-const chandra = @import("../families/ocr/chandra/family.zig");
-const generic = @import("../families/generic/family.zig");
-const moss_tts_nano = @import("../families/tts/moss_tts_nano/family.zig");
-const qwen3 = @import("../families/text/qwen3/family.zig");
-const swiftocr = @import("../families/ocr/swiftocr/family.zig");
+const family_registry = @import("../families/registry.zig");
 const types = @import("../types.zig");
-const yolo = @import("../families/vision/yolo/family.zig");
 const std = @import("std");
 
 pub const RuntimeBackend = backend_mod.RuntimeBackend;
 
-const builtin_backends = [_]*const RuntimeBackend{
-    &qwen3.backend,
-    &bert.backend,
-    &yolo.backend,
-    &swiftocr.backend,
-    &chandra.backend,
-    &moss_tts_nano.backend,
-    &generic.backend,
+const builtin_backends = blk: {
+    const families = family_registry.builtinFamilies();
+    var projected: [families.len]*const RuntimeBackend = undefined;
+    for (families, 0..) |family, index| {
+        projected[index] = family.backend;
+    }
+    break :blk projected;
 };
 
 var dynamic_backends: std.ArrayListUnmanaged(*const RuntimeBackend) = .empty;
