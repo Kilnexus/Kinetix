@@ -1,10 +1,10 @@
 const std = @import("std");
-const ocr_artifacts = @import("../../../artifacts/ocr/ocr.zig");
-const backend_mod = @import("../backend.zig");
-const handle_mod = @import("../../model/handle.zig");
-const normalized = @import("../../model/resolver/normalized_model.zig");
-const swiftocr_native = @import("../../providers/swiftocr_native.zig");
-const types = @import("../../types.zig");
+const ocr_artifacts = @import("../../../../artifacts/ocr/ocr.zig");
+const backend_mod = @import("../../../backend/backend.zig");
+const handle_mod = @import("../../../model/handle.zig");
+const normalized = @import("../../../model/resolver/normalized_model.zig");
+const swiftocr_native = @import("native.zig");
+const types = @import("../../../types.zig");
 
 pub const backend = backend_mod.RuntimeBackend{
     .provider_key = .swiftocr_ocr,

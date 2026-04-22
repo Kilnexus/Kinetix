@@ -1,7 +1,7 @@
 const std = @import("std");
-const ocr_artifacts = @import("../../artifacts/ocr/ocr.zig");
-const ocr_pipeline = @import("../ocr_pipeline.zig");
-const task = @import("../../core/task.zig");
+const ocr_artifacts = @import("../../../../artifacts/ocr/ocr.zig");
+const ocr_pipeline = @import("../../../ocr_pipeline.zig");
+const task = @import("../../../../core/task.zig");
 
 pub const InferResult = ocr_pipeline.InferResult;
 

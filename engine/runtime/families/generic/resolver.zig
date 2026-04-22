@@ -1,11 +1,11 @@
 const std = @import("std");
-const catalog_mod = @import("../../../catalog/catalog.zig");
-const normalized = @import("../normalized_model.zig");
-const report_mod = @import("../support_report.zig");
-const types = @import("../../../types.zig");
+const catalog_mod = @import("../../catalog/catalog.zig");
+const normalized = @import("../../model/resolver/normalized_model.zig");
+const report_mod = @import("../../model/resolver/support_report.zig");
+const types = @import("../../types.zig");
 
-const operations = [_][]const u8{ "detect", "profile", "benchmark" };
-const accepted_inputs = [_]types.InputKind{.image_path};
+const operations = [_][]const u8{"infer"};
+const accepted_inputs = [_]types.InputKind{ .text, .image_path, .audio_path, .video_path };
 
 pub fn tryNormalize(
     allocator: std.mem.Allocator,
@@ -13,16 +13,16 @@ pub fn tryNormalize(
     preferred_weights: types.WeightScheme,
 ) !?normalized.NormalizedModel {
     _ = preferred_weights;
-    if (!catalog.has(.graph_json) or !catalog.has(.weights_bin)) return null;
+    if (catalog.artifactCount() == 0) return null;
 
     const basename = std.fs.path.basename(catalog.modelDir());
     const descriptor = normalized.RuntimeModelDescriptor{
         .allocator = allocator,
-        .id = try std.fmt.allocPrint(allocator, "runtime.vision.yolo.{s}", .{basename}),
-        .modality = .vision,
-        .family = try allocator.dupe(u8, "yolo"),
-        .source_format = .kinetix_graph_directory,
-        .normalized_format = .vision_graph,
+        .id = try std.fmt.allocPrint(allocator, "runtime.generic.{s}", .{basename}),
+        .modality = inferModality(catalog),
+        .family = try allocator.dupe(u8, "generic"),
+        .source_format = .unknown,
+        .normalized_format = .generic,
     };
     errdefer {
         var owned = descriptor;
@@ -39,7 +39,7 @@ pub fn tryNormalize(
         allocator,
         .degraded,
         &.{.graph_runtime_adapter_required},
-        &.{.graph_schema_accepted},
+        &.{},
     );
     errdefer {
         var owned = support;
@@ -53,12 +53,19 @@ pub fn tryNormalize(
             .supports_sync = true,
             .supports_async = false,
             .supports_stream = false,
-            .supports_batch = true,
+            .supports_batch = false,
             .supports_native_exec = false,
             .supported_operations = &operations,
             .accepted_inputs = &accepted_inputs,
         },
         .support = support,
-        .provider_key = .yolo_vision,
+        .provider_key = .generic,
     };
+}
+
+fn inferModality(catalog: *const catalog_mod.ArtifactCatalog) types.Modality {
+    if (catalog.has(.graph_json)) return .vision;
+    if (catalog.has(.ocr_model)) return .ocr;
+    if (catalog.has(.config)) return .text;
+    return .multimodal;
 }

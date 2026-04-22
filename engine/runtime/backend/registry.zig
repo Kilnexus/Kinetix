@@ -1,12 +1,12 @@
 const backend_mod = @import("backend.zig");
 const bert = @import("providers/bert.zig");
 const chandra = @import("../families/ocr/chandra/family.zig");
-const generic = @import("providers/generic.zig");
+const generic = @import("../families/generic/family.zig");
 const moss_tts_nano = @import("../families/tts/moss_tts_nano/family.zig");
-const qwen3 = @import("providers/qwen3.zig");
-const swiftocr = @import("providers/swiftocr.zig");
+const qwen3 = @import("../families/text/qwen3/family.zig");
+const swiftocr = @import("../families/ocr/swiftocr/family.zig");
 const types = @import("../types.zig");
-const yolo = @import("providers/yolo.zig");
+const yolo = @import("../families/vision/yolo/family.zig");
 const std = @import("std");
 
 pub const RuntimeBackend = backend_mod.RuntimeBackend;

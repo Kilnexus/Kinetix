@@ -1,11 +1,11 @@
 const std = @import("std");
 const catalog_mod = @import("../../../catalog/catalog.zig");
-const normalized = @import("../normalized_model.zig");
-const report_mod = @import("../support_report.zig");
+const normalized = @import("../../../model/resolver/normalized_model.zig");
+const report_mod = @import("../../../model/resolver/support_report.zig");
 const types = @import("../../../types.zig");
 
-const operations = [_][]const u8{"infer"};
-const accepted_inputs = [_]types.InputKind{ .text, .image_path, .audio_path, .video_path };
+const operations = [_][]const u8{"infer-ocr"};
+const accepted_inputs = [_]types.InputKind{.image_path};
 
 pub fn tryNormalize(
     allocator: std.mem.Allocator,
@@ -13,16 +13,16 @@ pub fn tryNormalize(
     preferred_weights: types.WeightScheme,
 ) !?normalized.NormalizedModel {
     _ = preferred_weights;
-    if (catalog.artifactCount() == 0) return null;
+    if (!catalog.has(.ocr_model)) return null;
 
     const basename = std.fs.path.basename(catalog.modelDir());
     const descriptor = normalized.RuntimeModelDescriptor{
         .allocator = allocator,
-        .id = try std.fmt.allocPrint(allocator, "runtime.generic.{s}", .{basename}),
-        .modality = inferModality(catalog),
-        .family = try allocator.dupe(u8, "generic"),
-        .source_format = .unknown,
-        .normalized_format = .generic,
+        .id = try std.fmt.allocPrint(allocator, "runtime.ocr.swiftocr.{s}", .{basename}),
+        .modality = .ocr,
+        .family = try allocator.dupe(u8, "swiftocr"),
+        .source_format = .swiftocr_bundle,
+        .normalized_format = .ocr_bundle,
     };
     errdefer {
         var owned = descriptor;
@@ -37,9 +37,9 @@ pub fn tryNormalize(
 
     const support = try report_mod.RuntimeSupportReport.init(
         allocator,
-        .degraded,
-        &.{.graph_runtime_adapter_required},
+        .supported,
         &.{},
+        &.{.ocr_single_file_bundle},
     );
     errdefer {
         var owned = support;
@@ -54,18 +54,11 @@ pub fn tryNormalize(
             .supports_async = false,
             .supports_stream = false,
             .supports_batch = false,
-            .supports_native_exec = false,
+            .supports_native_exec = true,
             .supported_operations = &operations,
             .accepted_inputs = &accepted_inputs,
         },
         .support = support,
-        .provider_key = .generic,
+        .provider_key = .swiftocr_ocr,
     };
-}
-
-fn inferModality(catalog: *const catalog_mod.ArtifactCatalog) types.Modality {
-    if (catalog.has(.graph_json)) return .vision;
-    if (catalog.has(.ocr_model)) return .ocr;
-    if (catalog.has(.config)) return .text;
-    return .multimodal;
 }

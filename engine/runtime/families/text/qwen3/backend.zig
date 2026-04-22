@@ -1,14 +1,14 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const backend_mod = @import("../backend.zig");
-const backend_scheme = @import("../../text/backend_scheme.zig");
-const task = @import("../../../core/task.zig");
-const handle_mod = @import("../../model/handle.zig");
-const normalized = @import("../../model/resolver/normalized_model.zig");
-const qwen_native = @import("../../text/families/qwen3/qwen_native.zig");
-const text_shared = @import("../../providers/text_shared.zig");
-const text_runtime = @import("../../text/generator_runtime.zig");
-const types = @import("../../types.zig");
+const backend_mod = @import("../../../backend/backend.zig");
+const backend_scheme = @import("../../../text/backend_scheme.zig");
+const task = @import("../../../../core/task.zig");
+const handle_mod = @import("../../../model/handle.zig");
+const normalized = @import("../../../model/resolver/normalized_model.zig");
+const qwen_native = @import("../../../text/families/qwen3/qwen_native.zig");
+const text_shared = @import("../../../providers/text_shared.zig");
+const text_runtime = @import("../../../text/generator_runtime.zig");
+const types = @import("../../../types.zig");
 
 pub const backend = backend_mod.RuntimeBackend{
     .provider_key = .qwen3_text,

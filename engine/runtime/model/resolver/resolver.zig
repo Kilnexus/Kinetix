@@ -1,13 +1,13 @@
 const std = @import("std");
 const catalog_mod = @import("../../catalog/catalog.zig");
 const normalized = @import("normalized_model.zig");
-const qwen3 = @import("providers/qwen3.zig");
+const qwen3 = @import("../../families/text/qwen3/family.zig");
 const bert = @import("providers/bert.zig");
-const yolo = @import("providers/yolo.zig");
-const swiftocr = @import("providers/swiftocr.zig");
+const yolo = @import("../../families/vision/yolo/family.zig");
+const swiftocr = @import("../../families/ocr/swiftocr/family.zig");
 const chandra = @import("../../families/ocr/chandra/family.zig");
 const moss_tts_nano = @import("../../families/tts/moss_tts_nano/family.zig");
-const generic = @import("providers/generic.zig");
+const generic = @import("../../families/generic/family.zig");
 const types = @import("../../types.zig");
 
 pub const RuntimeSupportReport = @import("support_report.zig").RuntimeSupportReport;

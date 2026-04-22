@@ -1,5 +1,5 @@
 const std = @import("std");
-const backend_mod = @import("../backend.zig");
+const backend_mod = @import("../../backend/backend.zig");
 const handle_mod = @import("../../model/handle.zig");
 const types = @import("../../types.zig");
 

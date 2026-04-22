@@ -17,12 +17,20 @@ pub const planner = @import("planner/planner.zig");
 pub const executor = @import("executor/executor.zig");
 pub const session = @import("session/session.zig");
 pub const families = struct {
+    pub const text = struct {
+        pub const qwen3 = @import("families/text/qwen3/family.zig");
+    };
+    pub const vision = struct {
+        pub const yolo = @import("families/vision/yolo/family.zig");
+    };
     pub const ocr = struct {
         pub const chandra = @import("families/ocr/chandra/family.zig");
+        pub const swiftocr = @import("families/ocr/swiftocr/family.zig");
     };
     pub const tts = struct {
         pub const moss_tts_nano = @import("families/tts/moss_tts_nano/family.zig");
     };
+    pub const generic = @import("families/generic/family.zig");
 };
 pub const providers = struct {
     pub const chandra_native = families.ocr.chandra.native;
@@ -30,7 +38,7 @@ pub const providers = struct {
     pub const chandra_store = families.ocr.chandra.store;
     pub const chandra_vision = families.ocr.chandra.vision;
     pub const chandra_weights = families.ocr.chandra.weights;
-    pub const swiftocr_native = @import("providers/swiftocr_native.zig");
+    pub const swiftocr_native = families.ocr.swiftocr.native;
     pub const text_shared = @import("providers/text_shared.zig");
     pub const vision_shared = @import("providers/vision_shared.zig");
 };
