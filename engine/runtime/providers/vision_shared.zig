@@ -1,5 +1,4 @@
 const std = @import("std");
-const fs_compat = @import("engine_fs_compat");
 const builtin = @import("builtin");
 const env_compat = @import("engine_env_compat");
 const ax_graph = @import("graph");
@@ -9,6 +8,8 @@ const ax_weights = @import("weights");
 const graph = @import("../../artifacts/graph/graph.zig");
 const task = @import("../../core/task.zig");
 const types = @import("../types.zig");
+
+const io = std.Options.debug_io;
 
 pub const Summary = graph.Summary;
 pub const Detection = types.RuntimeVisionDetection;
@@ -265,7 +266,7 @@ pub fn buildOutputJson(
 
 fn resolvePath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     if (std.fs.path.isAbsolute(path)) return try allocator.dupe(u8, path);
-    return try fs_compat.cwd().realpathAlloc(allocator, path);
+    return try std.Io.Dir.cwd().realPathFileAlloc(io, path, allocator);
 }
 
 fn shouldEmitDetectProfile() bool {

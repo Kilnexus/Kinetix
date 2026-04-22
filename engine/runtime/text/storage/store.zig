@@ -1,10 +1,11 @@
 const std = @import("std");
 const kernel_registry = @import("../kernel_registry/registry.zig");
 const bfloat16 = @import("../tensor/bfloat16.zig");
-const fs_compat = @import("engine_fs_compat");
 const parallel_rows = @import("../../../core/threading/parallel_rows.zig");
 const safetensors = @import("../safetensors.zig");
 const mapped_file = @import("mapped_file.zig");
+
+const io = std.Options.debug_io;
 
 pub const TensorStore = struct {
     allocator: std.mem.Allocator,
@@ -13,13 +14,13 @@ pub const TensorStore = struct {
 
     pub fn open(allocator: std.mem.Allocator, weights_path: []const u8) !TensorStore {
         const file = if (std.fs.path.isAbsolute(weights_path))
-            try fs_compat.openFileAbsolute(weights_path, .{})
+            try std.Io.Dir.openFileAbsolute(io, weights_path, .{})
         else
-            try fs_compat.cwd().openFile(weights_path, .{});
-        errdefer file.close();
+            try std.Io.Dir.cwd().openFile(io, weights_path, .{});
+        errdefer file.close(io);
 
-        var mapped = try mapped_file.MappedFile.open(file.inner);
-        file.close();
+        var mapped = try mapped_file.MappedFile.open(file);
+        file.close(io);
         errdefer mapped.deinit();
 
         var parsed = try safetensors.parseFromBytes(allocator, mapped.bytes);

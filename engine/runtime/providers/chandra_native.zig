@@ -1,6 +1,5 @@
 const std = @import("std");
 const imaging = @import("Pixio");
-const fs_compat = @import("engine_fs_compat");
 const task = @import("../../core/task.zig");
 const preprocess = @import("chandra_preprocess.zig");
 const store = @import("chandra_store.zig");
@@ -12,6 +11,8 @@ const decoder_types = @import("../text/decoder_types.zig");
 const text_backend_scheme = @import("../text/backend_scheme.zig");
 const kv_cache = @import("../text/kv_cache.zig");
 const streaming = @import("../text/streaming.zig");
+
+const io = std.Options.debug_io;
 
 pub const TextConfig = struct {
     model_type: []const u8,
@@ -621,7 +622,7 @@ pub fn loadConfigFromFile(backing_allocator: std.mem.Allocator, path: []const u8
     errdefer arena.deinit();
 
     const allocator = arena.allocator();
-    const bytes = try fs_compat.cwd().readFileAlloc(allocator, path, 2 * 1024 * 1024);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(2 * 1024 * 1024));
     const config = try std.json.parseFromSliceLeaky(Config, allocator, bytes, .{
         .ignore_unknown_fields = true,
     });
@@ -900,7 +901,7 @@ fn isFrameManifestPath(path: []const u8) bool {
 fn isDirectoryPath(path: []const u8) bool {
     const dir = openDirAtPath(path, .{}) catch return false;
     var opened = dir;
-    opened.close();
+    opened.close(io);
     return true;
 }
 
@@ -979,7 +980,7 @@ fn loadPreparedInputFromDirectory(
     config: preprocess.ImageProcessorConfig,
 ) !preprocess.PreparedImageInput {
     var dir = try openDirAtPath(directory_path, .{ .iterate = true });
-    defer dir.close();
+    defer dir.close(io);
 
     var entries = std.ArrayListUnmanaged([]u8).empty;
     defer {
@@ -988,7 +989,7 @@ fn loadPreparedInputFromDirectory(
     }
 
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(io)) |entry| {
         if (entry.kind != .file) continue;
         if (!isRasterImagePath(entry.name)) continue;
         try entries.append(allocator, try allocator.dupe(u8, entry.name));
@@ -1016,7 +1017,7 @@ fn loadPreparedInputFromManifest(
     manifest_path: []const u8,
     config: preprocess.ImageProcessorConfig,
 ) !preprocess.PreparedImageInput {
-    const bytes = try fs_compat.cwd().readFileAlloc(allocator, manifest_path, 4 * 1024 * 1024);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, manifest_path, allocator, .limited(4 * 1024 * 1024));
     defer allocator.free(bytes);
 
     const base_dir = std.fs.path.dirname(manifest_path) orelse ".";
@@ -1100,9 +1101,9 @@ fn cloneImageOwned(allocator: std.mem.Allocator, source: *const imaging.ImageU8)
     return cloned;
 }
 
-fn openDirAtPath(path: []const u8, flags: std.Io.Dir.OpenOptions) !fs_compat.Dir {
-    if (std.fs.path.isAbsolute(path)) return try fs_compat.openDirAbsolute(path, flags);
-    return try fs_compat.cwd().openDir(path, flags);
+fn openDirAtPath(path: []const u8, flags: std.Io.Dir.OpenOptions) !std.Io.Dir {
+    if (std.fs.path.isAbsolute(path)) return try std.Io.Dir.openDirAbsolute(io, path, flags);
+    return try std.Io.Dir.cwd().openDir(io, path, flags);
 }
 
 fn hasAnyFile(model_path: []const u8, names: []const []const u8) bool {
@@ -1113,10 +1114,10 @@ fn hasAnyFile(model_path: []const u8, names: []const []const u8) bool {
 }
 
 fn hasFile(model_path: []const u8, name: []const u8) bool {
-    var dir = fs_compat.openDirAbsolute(model_path, .{}) catch return false;
-    defer dir.close();
+    var dir = std.Io.Dir.openDirAbsolute(io, model_path, .{}) catch return false;
+    defer dir.close(io);
 
-    dir.access(name, .{}) catch return false;
+    dir.access(io, name, .{}) catch return false;
     return true;
 }
 
@@ -1158,7 +1159,7 @@ test "native chandra config parser accepts qwen3_5 document vl config" {
         \\}
     );
 
-    const config_path = try tmp.dir.realpathAlloc(std.testing.allocator, "config.json");
+    const config_path = try tmp.dir.realPathFileAlloc(io, "config.json", std.testing.allocator);
     defer std.testing.allocator.free(config_path);
 
     var parsed = try loadConfigFromFile(std.testing.allocator, config_path);
@@ -1228,7 +1229,7 @@ test "native chandra inspect reports tensor manifest readiness" {
         \\}
     );
 
-    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const root_path = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root_path);
 
     const readiness = inspect(root_path);
@@ -1308,11 +1309,11 @@ test "native chandra execute preprocesses image and runs patch embedding stage" 
     }
     const encoded = try imaging.encodePngAlloc(std.testing.allocator, &image);
     defer std.testing.allocator.free(encoded);
-    try tmp.dir.writeFile(.{ .sub_path = "input.png", .data = encoded });
+    try tmp.dir.writeFile(io, .{ .sub_path = "input.png", .data = encoded });
 
-    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const root_path = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root_path);
-    const image_path = try tmp.dir.realpathAlloc(std.testing.allocator, "input.png");
+    const image_path = try tmp.dir.realPathFileAlloc(io, "input.png", std.testing.allocator);
     defer std.testing.allocator.free(image_path);
 
     const payload = try execute(std.testing.allocator, .{
@@ -1346,7 +1347,7 @@ test "chandra input loader prepares frame sequence from directory" {
     try writeSolidPng(tmp.dir, "frame_02.png", 2, 2, 255);
     try writeSolidPng(tmp.dir, "frame_01.png", 2, 2, 0);
 
-    const frames_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const frames_path = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
     defer std.testing.allocator.free(frames_path);
 
     var prepared = try loadPreparedInputFromDirectory(std.testing.allocator, frames_path, .{
@@ -1382,7 +1383,7 @@ test "chandra input loader prepares frame sequence from manifest" {
         \\a.png
     );
 
-    const manifest_path = try tmp.dir.realpathAlloc(std.testing.allocator, "frames.frames");
+    const manifest_path = try tmp.dir.realPathFileAlloc(io, "frames.frames", std.testing.allocator);
     defer std.testing.allocator.free(manifest_path);
 
     var prepared = try loadPreparedInputFromManifest(std.testing.allocator, manifest_path, .{
@@ -1409,7 +1410,7 @@ test "chandra input loader handles gif via pixio codec" {
     defer tmp.cleanup();
 
     try writeAnimatedGif(tmp.dir, "animated.gif");
-    const gif_path = try tmp.dir.realpathAlloc(std.testing.allocator, "animated.gif");
+    const gif_path = try tmp.dir.realPathFileAlloc(io, "animated.gif", std.testing.allocator);
     defer std.testing.allocator.free(gif_path);
 
     var prepared = try loadPreparedInputFromPath(std.testing.allocator, gif_path, .{
@@ -1444,7 +1445,7 @@ test "chandra input loader handles webp via pixio codec" {
     defer tmp.cleanup();
 
     try writeAnimatedWebp(tmp.dir, "animated.webp");
-    const webp_path = try tmp.dir.realpathAlloc(std.testing.allocator, "animated.webp");
+    const webp_path = try tmp.dir.realPathFileAlloc(io, "animated.webp", std.testing.allocator);
     defer std.testing.allocator.free(webp_path);
 
     var prepared = try loadPreparedInputFromPath(std.testing.allocator, webp_path, .{
@@ -1480,7 +1481,7 @@ test "chandra directory loader expands animated webp entries into frame sequence
 
     try writeAnimatedWebp(tmp.dir, "000.webp");
     try writeSolidPng(tmp.dir, "001.png", 1, 1, 32);
-    const dir_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const dir_path = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
     defer std.testing.allocator.free(dir_path);
 
     var prepared = try loadPreparedInputFromPath(std.testing.allocator, dir_path, .{
@@ -1519,7 +1520,7 @@ test "chandra manifest loader expands animated gif entries into frame sequence" 
         \\tail.png
         \\
     );
-    const manifest_path = try tmp.dir.realpathAlloc(std.testing.allocator, "frames.lst");
+    const manifest_path = try tmp.dir.realPathFileAlloc(io, "frames.lst", std.testing.allocator);
     defer std.testing.allocator.free(manifest_path);
 
     var prepared = try loadPreparedInputFromPath(std.testing.allocator, manifest_path, .{
@@ -1641,11 +1642,11 @@ test "native chandra execute exposes mrope prefill metadata" {
     }
     const encoded = try imaging.encodePngAlloc(std.testing.allocator, &image);
     defer std.testing.allocator.free(encoded);
-    try tmp.dir.writeFile(.{ .sub_path = "input.png", .data = encoded });
+    try tmp.dir.writeFile(io, .{ .sub_path = "input.png", .data = encoded });
 
-    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const root_path = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root_path);
-    const image_path = try tmp.dir.realpathAlloc(std.testing.allocator, "input.png");
+    const image_path = try tmp.dir.realPathFileAlloc(io, "input.png", std.testing.allocator);
     defer std.testing.allocator.free(image_path);
 
     const payload = try execute(std.testing.allocator, .{
@@ -1731,11 +1732,11 @@ test "native chandra execute decodes content with synthetic tokenizer" {
     }
     const encoded = try imaging.encodePngAlloc(std.testing.allocator, &image);
     defer std.testing.allocator.free(encoded);
-    try tmp.dir.writeFile(.{ .sub_path = "input.png", .data = encoded });
+    try tmp.dir.writeFile(io, .{ .sub_path = "input.png", .data = encoded });
 
-    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const root_path = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root_path);
-    const image_path = try tmp.dir.realpathAlloc(std.testing.allocator, "input.png");
+    const image_path = try tmp.dir.realPathFileAlloc(io, "input.png", std.testing.allocator);
     defer std.testing.allocator.free(image_path);
 
     const payload = try execute(std.testing.allocator, .{
@@ -1755,23 +1756,27 @@ test "native chandra execute decodes content with synthetic tokenizer" {
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"markdown\":\"OCR\"") != null);
 }
 
-fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {
-    var file = try dir.createFile(relative_path, .{});
-    defer file.close();
-    try file.writeAll(contents);
+fn writeTmpFile(dir: std.Io.Dir, relative_path: []const u8, contents: []const u8) !void {
+    var file = try dir.createFile(io, relative_path, .{});
+    defer file.close(io);
+
+    var writer_impl = file.writer(io, &.{});
+    const writer = &writer_impl.interface;
+    try writer.writeAll(contents);
+    try writer.flush();
 }
 
-fn writeSolidPng(dir: std.fs.Dir, relative_path: []const u8, width: usize, height: usize, value: u8) !void {
+fn writeSolidPng(dir: std.Io.Dir, relative_path: []const u8, width: usize, height: usize, value: u8) !void {
     var image = try imaging.ImageU8.init(std.testing.allocator, width, height, 3);
     defer image.deinit();
     image.fill(value);
 
     const encoded = try imaging.encodePngAlloc(std.testing.allocator, &image);
     defer std.testing.allocator.free(encoded);
-    try dir.writeFile(.{ .sub_path = relative_path, .data = encoded });
+    try dir.writeFile(io, .{ .sub_path = relative_path, .data = encoded });
 }
 
-fn writeAnimatedGif(dir: std.fs.Dir, relative_path: []const u8) !void {
+fn writeAnimatedGif(dir: std.Io.Dir, relative_path: []const u8) !void {
     const gif_bytes = [_]u8{
         'G',  'I',  'F',  '8',  '9',  'a',
         0x01, 0x00, 0x01, 0x00, 0x80, 0x00,
@@ -1785,10 +1790,10 @@ fn writeAnimatedGif(dir: std.fs.Dir, relative_path: []const u8) !void {
         0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
         0x02, 0x02, 0x4c, 0x01, 0x00, 0x3b,
     };
-    try dir.writeFile(.{ .sub_path = relative_path, .data = &gif_bytes });
+    try dir.writeFile(io, .{ .sub_path = relative_path, .data = &gif_bytes });
 }
 
-fn writeAnimatedWebp(dir: std.fs.Dir, relative_path: []const u8) !void {
+fn writeAnimatedWebp(dir: std.Io.Dir, relative_path: []const u8) !void {
     const webp_bytes = [_]u8{
         0x52, 0x49, 0x46, 0x46, 0x84, 0x00, 0x00, 0x00,
         0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x58,
@@ -1809,21 +1814,23 @@ fn writeAnimatedWebp(dir: std.fs.Dir, relative_path: []const u8) !void {
         0x00, 0x07, 0xd0, 0xff, 0x88, 0xfe, 0x07, 0x22,
         0xa2, 0xff, 0x01, 0x00,
     };
-    try dir.writeFile(.{ .sub_path = relative_path, .data = &webp_bytes });
+    try dir.writeFile(io, .{ .sub_path = relative_path, .data = &webp_bytes });
 }
 
-fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []const u8) !void {
+fn writeSyntheticPatchEmbeddingSafetensors(dir: std.Io.Dir, relative_path: []const u8) !void {
     const header =
         \\{"visual.patch_embed.proj.weight":{"dtype":"F32","shape":[2,3,1,2,2],"data_offsets":[0,96]},"visual.patch_embed.proj.bias":{"dtype":"F32","shape":[2],"data_offsets":[96,104]},"visual.pos_embed":{"dtype":"F32","shape":[4,2],"data_offsets":[104,136]},"visual.blocks.0.norm1.weight":{"dtype":"F32","shape":[2],"data_offsets":[136,144]},"visual.blocks.0.norm1.bias":{"dtype":"F32","shape":[2],"data_offsets":[144,152]},"visual.blocks.0.attn.qkv.weight":{"dtype":"F32","shape":[6,2],"data_offsets":[152,200]},"visual.blocks.0.attn.qkv.bias":{"dtype":"F32","shape":[6],"data_offsets":[200,224]},"visual.blocks.0.attn.proj.weight":{"dtype":"F32","shape":[2,2],"data_offsets":[224,240]},"visual.blocks.0.attn.proj.bias":{"dtype":"F32","shape":[2],"data_offsets":[240,248]},"visual.blocks.0.norm2.weight":{"dtype":"F32","shape":[2],"data_offsets":[248,256]},"visual.blocks.0.norm2.bias":{"dtype":"F32","shape":[2],"data_offsets":[256,264]},"visual.blocks.0.mlp.linear_fc1.weight":{"dtype":"F32","shape":[3,2],"data_offsets":[264,288]},"visual.blocks.0.mlp.linear_fc1.bias":{"dtype":"F32","shape":[3],"data_offsets":[288,300]},"visual.blocks.0.mlp.linear_fc2.weight":{"dtype":"F32","shape":[2,3],"data_offsets":[300,324]},"visual.blocks.0.mlp.linear_fc2.bias":{"dtype":"F32","shape":[2],"data_offsets":[324,332]},"visual.blocks.1.norm1.weight":{"dtype":"F32","shape":[2],"data_offsets":[332,340]},"visual.blocks.1.norm1.bias":{"dtype":"F32","shape":[2],"data_offsets":[340,348]},"visual.blocks.1.attn.qkv.weight":{"dtype":"F32","shape":[6,2],"data_offsets":[348,396]},"visual.blocks.1.attn.qkv.bias":{"dtype":"F32","shape":[6],"data_offsets":[396,420]},"visual.blocks.1.attn.proj.weight":{"dtype":"F32","shape":[2,2],"data_offsets":[420,436]},"visual.blocks.1.attn.proj.bias":{"dtype":"F32","shape":[2],"data_offsets":[436,444]},"visual.blocks.1.norm2.weight":{"dtype":"F32","shape":[2],"data_offsets":[444,452]},"visual.blocks.1.norm2.bias":{"dtype":"F32","shape":[2],"data_offsets":[452,460]},"visual.blocks.1.mlp.linear_fc1.weight":{"dtype":"F32","shape":[3,2],"data_offsets":[460,484]},"visual.blocks.1.mlp.linear_fc1.bias":{"dtype":"F32","shape":[3],"data_offsets":[484,496]},"visual.blocks.1.mlp.linear_fc2.weight":{"dtype":"F32","shape":[2,3],"data_offsets":[496,520]},"visual.blocks.1.mlp.linear_fc2.bias":{"dtype":"F32","shape":[2],"data_offsets":[520,528]},"visual.merger.mlp.0.weight":{"dtype":"F32","shape":[3,2],"data_offsets":[528,552]},"visual.merger.mlp.0.bias":{"dtype":"F32","shape":[3],"data_offsets":[552,564]},"visual.merger.mlp.2.weight":{"dtype":"F32","shape":[2,3],"data_offsets":[564,588]},"visual.merger.mlp.2.bias":{"dtype":"F32","shape":[2],"data_offsets":[588,596]},"model.embed_tokens.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[596,604]},"lm_head.weight":{"dtype":"F32","shape":[1,2],"data_offsets":[604,612]}}
     ;
 
-    const file = try dir.createFile(relative_path, .{});
-    defer file.close();
+    var file = try dir.createFile(io, relative_path, .{});
+    defer file.close(io);
+    var writer_impl = file.writer(io, &.{});
+    const writer = &writer_impl.interface;
 
     var length_prefix: [8]u8 = undefined;
     std.mem.writeInt(u64, &length_prefix, header.len, .little);
-    try file.writeAll(&length_prefix);
-    try file.writeAll(header);
+    try writer.writeAll(&length_prefix);
+    try writer.writeAll(header);
 
     var payload: [612]u8 = undefined;
     @memset(&payload, 0);
@@ -1897,7 +1904,8 @@ fn writeSyntheticPatchEmbeddingSafetensors(dir: std.fs.Dir, relative_path: []con
     writeF32Scalar(&payload, 588, 0.25);
     writeF32Scalar(&payload, 592, -0.25);
 
-    try file.writeAll(&payload);
+    try writer.writeAll(&payload);
+    try writer.flush();
 }
 
 const SyntheticTensorSpec = struct {
@@ -1906,7 +1914,7 @@ const SyntheticTensorSpec = struct {
     values: []const f32,
 };
 
-fn writeSyntheticRuntimeReadySafetensors(dir: std.fs.Dir, relative_path: []const u8) !void {
+fn writeSyntheticRuntimeReadySafetensors(dir: std.Io.Dir, relative_path: []const u8) !void {
     const patch_weight_shape = [_]usize{ 2, 3, 1, 2, 2 };
     const patch_bias_shape = [_]usize{2};
     const pos_shape = [_]usize{ 4, 2 };
@@ -2049,7 +2057,7 @@ fn writeSyntheticRuntimeReadySafetensors(dir: std.fs.Dir, relative_path: []const
     try writeSyntheticF32Safetensors(std.testing.allocator, dir, relative_path, &specs);
 }
 
-fn writeSyntheticTokenizerFiles(dir: std.fs.Dir) !void {
+fn writeSyntheticTokenizerFiles(dir: std.Io.Dir) !void {
     try writeTmpFile(dir, "vocab.json", "{}");
     try writeTmpFile(dir, "merges.txt", "# synthetic\n");
     try writeTmpFile(dir, "tokenizer_config.json",
@@ -2066,7 +2074,7 @@ fn writeSyntheticTokenizerFiles(dir: std.fs.Dir) !void {
 
 fn writeSyntheticF32Safetensors(
     allocator: std.mem.Allocator,
-    dir: std.fs.Dir,
+    dir: std.Io.Dir,
     relative_path: []const u8,
     specs: []const SyntheticTensorSpec,
 ) !void {
@@ -2097,21 +2105,24 @@ fn writeSyntheticF32Safetensors(
     }
     try header.append('}');
 
-    const file = try dir.createFile(relative_path, .{});
-    defer file.close();
+    var file = try dir.createFile(io, relative_path, .{});
+    defer file.close(io);
+    var writer_impl = file.writer(io, &.{});
+    const writer = &writer_impl.interface;
 
     var length_prefix: [8]u8 = undefined;
     std.mem.writeInt(u64, &length_prefix, header.items.len, .little);
-    try file.writeAll(&length_prefix);
-    try file.writeAll(header.items);
+    try writer.writeAll(&length_prefix);
+    try writer.writeAll(header.items);
 
     for (specs) |spec| {
         for (spec.values) |value| {
             var bytes: [4]u8 = undefined;
             std.mem.writeInt(u32, &bytes, @bitCast(value), .little);
-            try file.writeAll(&bytes);
+            try writer.writeAll(&bytes);
         }
     }
+    try writer.flush();
 }
 
 fn tensorElementCount(shape: []const usize) !usize {

@@ -1,9 +1,10 @@
 const std = @import("std");
-const fs_compat = @import("engine_fs_compat");
 const safetensors = @import("../safetensors.zig");
 const tensor_store = @import("../storage/store.zig");
 const codec = @import("codec.zig");
 const types = @import("types.zig");
+
+const io = std.Options.debug_io;
 
 const QuantizedEntry = struct {
     name: []const u8,
@@ -31,10 +32,12 @@ pub fn quantizeModel(
     defer allocator.free(temp_path);
 
     const temp_file = if (std.fs.path.isAbsolute(temp_path))
-        try fs_compat.createFileAbsolute(temp_path, .{ .truncate = true, .read = true })
+        try std.Io.Dir.createFileAbsolute(io, temp_path, .{ .truncate = true, .read = true })
     else
-        try fs_compat.cwd().createFile(temp_path, .{ .truncate = true, .read = true });
-    defer temp_file.close();
+        try std.Io.Dir.cwd().createFile(io, temp_path, .{ .truncate = true, .read = true });
+    defer temp_file.close(io);
+    var temp_writer_impl = temp_file.writer(io, &.{});
+    const temp_writer = &temp_writer_impl.interface;
 
     var entries = std.ArrayListUnmanaged(QuantizedEntry).empty;
     defer entries.deinit(allocator);
@@ -64,7 +67,7 @@ pub fn quantizeModel(
                 const offset = idx * 4;
                 std.mem.writeInt(u32, raw[offset .. offset + 4][0..4], @bitCast(value), .little);
             }
-            try temp_file.writeAll(raw);
+            try temp_writer.writeAll(raw);
             current_offset += raw.len;
         } else {
             const rows = std.math.cast(usize, item.info.shape[0]) orelse return error.DimensionTooLarge;
@@ -85,7 +88,7 @@ pub fn quantizeModel(
                     .q4_0 => codec.encodeQ4Row(encoded_row, row_values),
                     .f32 => unreachable,
                 }
-                try temp_file.writeAll(encoded_row);
+                try temp_writer.writeAll(encoded_row);
                 current_offset += encoded_row.len;
             }
         }
@@ -99,32 +102,37 @@ pub fn quantizeModel(
         });
     }
 
-    try temp_file.seekTo(0);
+    try temp_writer.flush();
     const header = try buildHeader(allocator, entries.items, scheme);
     defer allocator.free(header);
 
     const output_file = if (std.fs.path.isAbsolute(output_path))
-        try fs_compat.createFileAbsolute(output_path, .{ .truncate = true })
+        try std.Io.Dir.createFileAbsolute(io, output_path, .{ .truncate = true })
     else
-        try fs_compat.cwd().createFile(output_path, .{ .truncate = true });
-    defer output_file.close();
+        try std.Io.Dir.cwd().createFile(io, output_path, .{ .truncate = true });
+    defer output_file.close(io);
+    var output_writer_impl = output_file.writer(io, &.{});
+    const output_writer = &output_writer_impl.interface;
 
     var header_len_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &header_len_bytes, header.len, .little);
-    try output_file.writeAll(&header_len_bytes);
-    try output_file.writeAll(header);
+    try output_writer.writeAll(&header_len_bytes);
+    try output_writer.writeAll(header);
 
     var copy_buffer: [64 * 1024]u8 = undefined;
+    var copy_offset: u64 = 0;
     while (true) {
-        const read = try temp_file.read(&copy_buffer);
+        const read = try temp_file.readPositionalAll(io, &copy_buffer, copy_offset);
         if (read == 0) break;
-        try output_file.writeAll(copy_buffer[0..read]);
+        try output_writer.writeAll(copy_buffer[0..read]);
+        copy_offset += read;
     }
+    try output_writer.flush();
 
     if (std.fs.path.isAbsolute(temp_path)) {
-        try fs_compat.deleteFileAbsolute(temp_path);
+        try std.Io.Dir.deleteFileAbsolute(io, temp_path);
     } else {
-        try fs_compat.cwd().deleteFile(temp_path);
+        try std.Io.Dir.cwd().deleteFile(io, temp_path);
     }
 }
 

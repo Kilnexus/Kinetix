@@ -1,6 +1,7 @@
 const std = @import("std");
 const imaging = @import("Pixio");
-const fs_compat = @import("engine_fs_compat");
+
+const io = std.Options.debug_io;
 
 pub const SizeConfig = struct {
     longest_edge: usize,
@@ -95,7 +96,7 @@ pub fn loadFromPreprocessorConfig(backing_allocator: std.mem.Allocator, path: []
     errdefer arena.deinit();
 
     const allocator = arena.allocator();
-    const bytes = try fs_compat.cwd().readFileAlloc(allocator, path, 1024 * 1024);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024));
     const config = try std.json.parseFromSliceLeaky(ImageProcessorConfig, allocator, bytes, .{
         .ignore_unknown_fields = true,
     });
@@ -108,7 +109,7 @@ pub fn loadFromProcessorConfig(backing_allocator: std.mem.Allocator, path: []con
     errdefer arena.deinit();
 
     const allocator = arena.allocator();
-    const bytes = try fs_compat.cwd().readFileAlloc(allocator, path, 1024 * 1024);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024));
     const wrapper = try std.json.parseFromSliceLeaky(ProcessorConfig, allocator, bytes, .{
         .ignore_unknown_fields = true,
     });
@@ -294,8 +295,8 @@ fn statsF32(values: []const f64, storage: *[4]f32, channels: usize) ![]const f32
 }
 
 fn pathExists(path: []const u8) bool {
-    const file = fs_compat.openFileAbsolute(path, .{}) catch return false;
-    file.close();
+    const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch return false;
+    file.close(io);
     return true;
 }
 
@@ -325,7 +326,7 @@ test "chandra preprocessor config parser accepts official qwen image processor s
         \\}
     );
 
-    const path = try tmp.dir.realpathAlloc(std.testing.allocator, "preprocessor_config.json");
+    const path = try tmp.dir.realPathFileAlloc(io, "preprocessor_config.json", std.testing.allocator);
     defer std.testing.allocator.free(path);
 
     var parsed = try loadFromPreprocessorConfig(std.testing.allocator, path);
@@ -365,7 +366,7 @@ test "chandra processor config parser prefers nested image_processor" {
         \\}
     );
 
-    const path = try tmp.dir.realpathAlloc(std.testing.allocator, "processor_config.json");
+    const path = try tmp.dir.realPathFileAlloc(io, "processor_config.json", std.testing.allocator);
     defer std.testing.allocator.free(path);
 
     var parsed = try loadFromProcessorConfig(std.testing.allocator, path);
@@ -439,8 +440,12 @@ test "chandra frame preprocessing pads temporal batch and preserves distinct fra
     try std.testing.expectEqual(@as(f32, 255.0), prepared.tensor.data[prepared.tensor.stride_n]);
 }
 
-fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {
-    var file = try dir.createFile(relative_path, .{});
-    defer file.close();
-    try file.writeAll(contents);
+fn writeTmpFile(dir: std.Io.Dir, relative_path: []const u8, contents: []const u8) !void {
+    var file = try dir.createFile(io, relative_path, .{});
+    defer file.close(io);
+
+    var writer_impl = file.writer(io, &.{});
+    const writer = &writer_impl.interface;
+    try writer.writeAll(contents);
+    try writer.flush();
 }

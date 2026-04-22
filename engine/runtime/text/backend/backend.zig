@@ -1,10 +1,11 @@
 const std = @import("std");
 const parallel_rows = @import("../../../core/threading/parallel_rows.zig");
-const fs_compat = @import("engine_fs_compat");
 const quantized = @import("../quantized.zig");
 const safetensors = @import("../safetensors.zig");
 const tensor_store = @import("../storage/store.zig");
 const shared = @import("../backend_scheme.zig");
+
+const io = std.Options.debug_io;
 
 pub const Scheme = shared.Scheme;
 
@@ -182,11 +183,11 @@ pub const Backend = union(Scheme) {
 
 fn pathExists(path: []const u8) bool {
     const file = if (std.fs.path.isAbsolute(path))
-        fs_compat.openFileAbsolute(path, .{})
+        std.Io.Dir.openFileAbsolute(io, path, .{})
     else
-        fs_compat.cwd().openFile(path, .{});
+        std.Io.Dir.cwd().openFile(io, path, .{});
     if (file) |handle| {
-        handle.close();
+        handle.close(io);
         return true;
     } else |_| {
         return false;

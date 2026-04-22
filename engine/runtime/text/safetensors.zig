@@ -1,5 +1,6 @@
 const std = @import("std");
-const fs_compat = @import("engine_fs_compat");
+
+const io = std.Options.debug_io;
 
 pub const DType = enum {
     bool,
@@ -119,28 +120,31 @@ pub const ParsedFile = struct {
 };
 
 pub fn loadFromFile(backing_allocator: std.mem.Allocator, path: []const u8) !ParsedFile {
-    const file = try fs_compat.cwd().openFile(path, .{});
+    const file = if (std.fs.path.isAbsolute(path))
+        try std.Io.Dir.openFileAbsolute(io, path, .{})
+    else
+        try std.Io.Dir.cwd().openFile(io, path, .{});
     return loadFromOpenFile(backing_allocator, file);
 }
 
-pub fn loadFromOpenFile(backing_allocator: std.mem.Allocator, file_handle: fs_compat.File) !ParsedFile {
+pub fn loadFromOpenFile(backing_allocator: std.mem.Allocator, file_handle: std.Io.File) !ParsedFile {
     const parsed = try parseFromFileHandle(backing_allocator, file_handle);
-    file_handle.close();
+    file_handle.close(io);
     return parsed;
 }
 
-pub fn parseFromFileHandle(backing_allocator: std.mem.Allocator, file: fs_compat.File) !ParsedFile {
+pub fn parseFromFileHandle(backing_allocator: std.mem.Allocator, file: std.Io.File) !ParsedFile {
     var arena = std.heap.ArenaAllocator.init(backing_allocator);
     errdefer arena.deinit();
 
     const allocator = arena.allocator();
 
-    const stat = try file.stat();
+    const stat = try file.stat(io);
     const file_size = stat.size;
     if (file_size < 8) return error.InvalidSafetensorsFile;
 
     var header_len_bytes: [8]u8 = undefined;
-    const prefix_read = try file.readPositionalAll(&header_len_bytes, 0);
+    const prefix_read = try file.readPositionalAll(io, &header_len_bytes, 0);
     if (prefix_read != header_len_bytes.len) return error.InvalidSafetensorsFile;
 
     const header_len = std.mem.readInt(u64, &header_len_bytes, .little);
@@ -149,7 +153,7 @@ pub fn parseFromFileHandle(backing_allocator: std.mem.Allocator, file: fs_compat
 
     const header_len_usize = std.math.cast(usize, header_len) orelse return error.HeaderTooLarge;
     const header_buffer = try allocator.alloc(u8, header_len_usize);
-    const header_read = try file.readPositionalAll(header_buffer, 8);
+    const header_read = try file.readPositionalAll(io, header_buffer, 8);
     if (header_read != header_buffer.len) return error.InvalidSafetensorsFile;
 
     const header_json = std.mem.trim(u8, header_buffer, " ");
@@ -347,18 +351,21 @@ test "parse synthetic safetensors file" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = try tmp.dir.createFile("tiny.safetensors", .{});
-    defer file.close();
+    var file = try tmp.dir.createFile(io, "tiny.safetensors", .{});
+    defer file.close(io);
+    var writer_impl = file.writer(io, &.{});
+    const writer = &writer_impl.interface;
 
     var length_prefix: [8]u8 = undefined;
     std.mem.writeInt(u64, &length_prefix, header.len, .little);
-    try file.writeAll(&length_prefix);
-    try file.writeAll(header);
+    try writer.writeAll(&length_prefix);
+    try writer.writeAll(header);
 
     const payload = [_]u8{0} ** 16;
-    try file.writeAll(&payload);
+    try writer.writeAll(&payload);
+    try writer.flush();
 
-    const read_file = try tmp.dir.openFile("tiny.safetensors", .{});
+    const read_file = try tmp.dir.openFile(io, "tiny.safetensors", .{});
     var parsed = try loadFromOpenFile(testing.allocator, read_file);
     defer parsed.deinit();
 

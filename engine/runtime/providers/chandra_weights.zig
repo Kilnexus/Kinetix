@@ -1,6 +1,7 @@
 const std = @import("std");
 const safetensors = @import("../text/safetensors.zig");
-const fs_compat = @import("engine_fs_compat");
+
+const io = std.Options.debug_io;
 
 pub const TensorGroup = enum {
     text,
@@ -74,7 +75,7 @@ pub fn loadManifest(allocator: std.mem.Allocator, model_path: []const u8) !Tenso
 }
 
 fn loadFromIndex(allocator: std.mem.Allocator, index_path: []const u8) !TensorManifest {
-    const bytes = try fs_compat.cwd().readFileAlloc(allocator, index_path, 32 * 1024 * 1024);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, index_path, allocator, .limited(32 * 1024 * 1024));
     defer allocator.free(bytes);
 
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, bytes, .{});
@@ -110,15 +111,15 @@ fn loadFromIndex(allocator: std.mem.Allocator, index_path: []const u8) !TensorMa
 }
 
 fn loadFromSafetensorsFiles(allocator: std.mem.Allocator, model_path: []const u8) !TensorManifest {
-    var dir = try fs_compat.openDirAbsolute(model_path, .{ .iterate = true });
-    defer dir.close();
+    var dir = try std.Io.Dir.openDirAbsolute(io, model_path, .{ .iterate = true });
+    defer dir.close(io);
 
     var records = std.ArrayListUnmanaged(TensorRecord).empty;
     errdefer deinitRecordList(allocator, records.items);
 
     var counts: GroupCounts = .{};
     var iter = dir.iterate();
-    while (try iter.next()) |entry| {
+    while (try iter.next(io)) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.name, ".safetensors")) continue;
 
@@ -207,11 +208,11 @@ fn findIndexPath(allocator: std.mem.Allocator, model_path: []const u8) !?[]u8 {
     if (pathExists(fixed_path)) return fixed_path;
     allocator.free(fixed_path);
 
-    var dir = try fs_compat.openDirAbsolute(model_path, .{ .iterate = true });
-    defer dir.close();
+    var dir = try std.Io.Dir.openDirAbsolute(io, model_path, .{ .iterate = true });
+    defer dir.close(io);
 
     var iter = dir.iterate();
-    while (try iter.next()) |entry| {
+    while (try iter.next(io)) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.name, ".safetensors.index.json")) continue;
         return try std.fs.path.join(allocator, &.{ model_path, entry.name });
@@ -221,8 +222,8 @@ fn findIndexPath(allocator: std.mem.Allocator, model_path: []const u8) !?[]u8 {
 }
 
 fn pathExists(path: []const u8) bool {
-    const file = fs_compat.openFileAbsolute(path, .{}) catch return false;
-    file.close();
+    const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch return false;
+    file.close(io);
     return true;
 }
 
@@ -251,7 +252,7 @@ test "chandra weight manifest parses safetensors index weight map" {
         \\}
     );
 
-    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const root_path = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root_path);
 
     var manifest = try loadManifest(std.testing.allocator, root_path);
@@ -265,8 +266,12 @@ test "chandra weight manifest parses safetensors index weight map" {
     try std.testing.expect(manifest.findPatchEmbeddingWeight() != null);
 }
 
-fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {
-    var file = try dir.createFile(relative_path, .{});
-    defer file.close();
-    try file.writeAll(contents);
+fn writeTmpFile(dir: std.Io.Dir, relative_path: []const u8, contents: []const u8) !void {
+    var file = try dir.createFile(io, relative_path, .{});
+    defer file.close(io);
+
+    var writer_impl = file.writer(io, &.{});
+    const writer = &writer_impl.interface;
+    try writer.writeAll(contents);
+    try writer.flush();
 }

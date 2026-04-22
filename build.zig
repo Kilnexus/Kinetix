@@ -53,7 +53,6 @@ const LegacyImports = struct {
     tensor: *std.Build.Module,
     ops: *std.Build.Module,
     weights: *std.Build.Module,
-    fs_compat: *std.Build.Module,
     env_compat: *std.Build.Module,
     stopwatch: *std.Build.Module,
     runtime: *std.Build.Module,
@@ -141,11 +140,6 @@ fn addLegacyImports(
         .optimize = optimize,
     });
     weights.addImport("graph", graph);
-    const fs_compat = b.createModule(.{
-        .root_source_file = b.path("engine/core/fs_compat.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
     const env_compat = b.createModule(.{
         .root_source_file = b.path("engine/core/env_compat.zig"),
         .target = target,
@@ -219,7 +213,6 @@ fn addLegacyImports(
     engine_root.addImport("tensor", tensor);
     engine_root.addImport("ops", ops);
     engine_root.addImport("weights", weights);
-    engine_root.addImport("engine_fs_compat", fs_compat);
     engine_root.addImport("engine_env_compat", env_compat);
     engine_root.addImport("engine_stopwatch", stopwatch);
     engine_root.addImport("runtime", runtime);
@@ -239,7 +232,6 @@ fn addLegacyImports(
         .tensor = tensor,
         .ops = ops,
         .weights = weights,
-        .fs_compat = fs_compat,
         .env_compat = env_compat,
         .stopwatch = stopwatch,
         .runtime = runtime,
