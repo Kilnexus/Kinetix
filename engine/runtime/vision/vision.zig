@@ -19,4 +19,11 @@ pub const inspect = analysis.inspect;
 pub const base = api.base;
 pub const engine = api.engine;
 pub const runtime = api.runtime;
-pub const modules = @import("modules/modules.zig");
+pub const modules = struct {
+    pub const blocks = @import("modules/blocks.zig");
+    pub const detect = @import("modules/detect.zig");
+    pub const psa = @import("modules/psa.zig");
+};
+pub const blocks = modules.blocks;
+pub const detect = modules.detect;
+pub const psa = modules.psa;

@@ -5,8 +5,14 @@ pub const types = @import("types.zig");
 pub const backend = @import("backend/registry.zig");
 pub const catalog = @import("catalog/catalog.zig");
 pub const model_resolver = @import("model/resolver/resolver.zig");
-pub const model = @import("model/model.zig");
-pub const registry = @import("registry/registry.zig");
+pub const model = struct {
+    pub const RuntimeModelDescriptor = @import("model/descriptor.zig").RuntimeModelDescriptor;
+    pub const RuntimeCapabilitySet = @import("model/features.zig").RuntimeCapabilitySet;
+    pub const ModelHandle = @import("model/handle.zig").ModelHandle;
+};
+pub const registry = struct {
+    pub const provider_registry = @import("registry/provider_registry.zig");
+};
 pub const planner = @import("planner/planner.zig");
 pub const executor = @import("executor/executor.zig");
 pub const session = @import("session/session.zig");

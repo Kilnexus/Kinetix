@@ -18,8 +18,19 @@ pub const storage = @import("storage/store.zig");
 pub const streaming = @import("streaming.zig");
 pub const generator_runtime = @import("generator_runtime.zig");
 pub const parallel_rows = @import("../../core/threading/parallel_rows.zig");
-pub const families = @import("families/families.zig");
-pub const common = families.common;
-pub const family_registry = families.registry;
-pub const qwen3 = families.qwen3;
-pub const qwen_native = families.qwen3.native_runtime;
+pub const common = @import("families/common/common.zig");
+pub const family_registry = @import("families/registry.zig");
+pub const bert = struct {
+    pub const config = @import("families/bert/config.zig");
+    pub const family = @import("families/bert/family.zig");
+};
+pub const qwen3 = struct {
+    pub const config = @import("families/qwen3/config.zig");
+    pub const family = @import("families/qwen3/family.zig");
+    pub const chat_template = @import("families/qwen3/chat_template.zig");
+    pub const generation_policy = @import("families/qwen3/generation_policy.zig");
+    pub const layout = @import("families/qwen3/layout.zig");
+    pub const weights = @import("families/qwen3/weights.zig");
+    pub const native_runtime = @import("families/qwen3/qwen_native.zig");
+};
+pub const qwen_native = qwen3.native_runtime;

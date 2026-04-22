@@ -1,5 +1,5 @@
 const std = @import("std");
-const core = @import("../core/core.zig");
+const ArenaPool = @import("../core/memory/arena_pool.zig").ArenaPool;
 const ocr_artifacts = @import("../artifacts/ocr/ocr.zig");
 
 pub const InferRequest = struct {
@@ -15,12 +15,12 @@ pub const InferResult = struct {
 
 pub const OCRPipeline = struct {
     allocator: std.mem.Allocator,
-    pool: core.memory.ArenaPool,
+    pool: ArenaPool,
 
     pub fn init(allocator: std.mem.Allocator) OCRPipeline {
         return .{
             .allocator = allocator,
-            .pool = core.memory.ArenaPool.init(allocator),
+            .pool = ArenaPool.init(allocator),
         };
     }
 
