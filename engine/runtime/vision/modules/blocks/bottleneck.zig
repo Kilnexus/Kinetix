@@ -4,6 +4,7 @@ const ops = @import("ops");
 const weights_mod = @import("weights");
 const conv = @import("conv.zig");
 const types = @import("types.zig");
+const stopwatch = @import("engine_stopwatch");
 
 pub const Tensor = types.Tensor;
 pub const BottleneckProfiledTensor = types.BottleneckProfiledTensor;
@@ -94,7 +95,7 @@ pub fn runBottleneckProfileNodeUnchecked(
     input: *const Tensor,
 ) !BottleneckProfiledTensor {
     var profile = types.BottleneckProfile{};
-    var timer = try std.time.Timer.start();
+    var timer = stopwatch.start();
 
     var hidden = try conv.runConvNode(allocator, model_graph, weights_blob, &module.children[0], input);
     profile.cv1_ns = timer.read();

@@ -1,6 +1,8 @@
 const std = @import("std");
 const engine = @import("engine_root");
 const execution = @import("sdk_execution");
+const fs_compat = @import("engine_fs_compat");
+const io = std.Options.debug_io;
 
 const backend = engine.artifacts.backend;
 const runtime_types = engine.runtime.types;
@@ -929,7 +931,7 @@ test "client generateText returns typed result for qwen3 native execution" {
     try writeTmpFile(tmp.dir, "tokenizer.json", "{}");
     try writeTmpFile(tmp.dir, "model.q8.zinfer", "q8");
 
-    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const root_path = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root_path);
 
     const client = KinetixClient.init(std.testing.allocator);
@@ -968,7 +970,7 @@ test "client detect returns typed detection result" {
     );
     try writeTmpFile(tmp.dir, "weights.bin", "vision");
 
-    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const root_path = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root_path);
 
     const client = KinetixClient.init(std.testing.allocator);
@@ -983,13 +985,13 @@ test "client detect returns typed detection result" {
 }
 
 test "client detect smoke test runs compat yolo11n on bundled bus image" {
-    std.fs.cwd().access("models/vision/compat_yolo11n/graph.json", .{}) catch return error.SkipZigTest;
-    std.fs.cwd().access("models/vision/compat_yolo11n/weights.bin", .{}) catch return error.SkipZigTest;
-    std.fs.cwd().access("testdata/vision/bus.jpg", .{}) catch return error.SkipZigTest;
+    fs_compat.cwd().access("models/vision/compat_yolo11n/graph.json", .{}) catch return error.SkipZigTest;
+    fs_compat.cwd().access("models/vision/compat_yolo11n/weights.bin", .{}) catch return error.SkipZigTest;
+    fs_compat.cwd().access("testdata/vision/bus.jpg", .{}) catch return error.SkipZigTest;
 
-    const model_dir = try std.fs.cwd().realpathAlloc(std.testing.allocator, "models/vision/compat_yolo11n");
+    const model_dir = try fs_compat.cwd().realpathAlloc(std.testing.allocator, "models/vision/compat_yolo11n");
     defer std.testing.allocator.free(model_dir);
-    const image_path = try std.fs.cwd().realpathAlloc(std.testing.allocator, "testdata/vision/bus.jpg");
+    const image_path = try fs_compat.cwd().realpathAlloc(std.testing.allocator, "testdata/vision/bus.jpg");
     defer std.testing.allocator.free(image_path);
 
     const client = KinetixClient.init(std.testing.allocator);
@@ -1013,9 +1015,9 @@ test "client inferOCR returns typed result" {
     try writeOCRModel(tmp.dir, "demo.swm", 0);
     try writePPMImage(tmp.dir, "demo.ppm", 1, 1, &[_]u8{ 1, 2, 3 });
 
-    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const root_path = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root_path);
-    const image_path = try tmp.dir.realpathAlloc(std.testing.allocator, "demo.ppm");
+    const image_path = try tmp.dir.realPathFileAlloc(io, "demo.ppm", std.testing.allocator);
     defer std.testing.allocator.free(image_path);
 
     const client = KinetixClient.init(std.testing.allocator);
@@ -1037,7 +1039,7 @@ test "client generateTextBatch returns batched typed generation when unified run
     try writeTmpFile(tmp.dir, "tokenizer.json", "{}");
     try writeTmpFile(tmp.dir, "model.q8.zinfer", "q8");
 
-    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const root_path = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root_path);
 
     const requests = [_]TextBatchItem{
@@ -1063,7 +1065,7 @@ test "client openTextModel exposes operation-specific methods without operation 
     try writeTmpFile(tmp.dir, "tokenizer.json", "{}");
     try writeTmpFile(tmp.dir, "model.q8.zinfer", "q8");
 
-    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const root_path = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root_path);
 
     const client = KinetixClient.init(std.testing.allocator);
@@ -1093,7 +1095,7 @@ test "client openModel auto-detects text models" {
     try writeTmpFile(tmp.dir, "tokenizer.json", "{}");
     try writeTmpFile(tmp.dir, "model.q8.zinfer", "q8");
 
-    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const root_path = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root_path);
 
     const client = KinetixClient.init(std.testing.allocator);
@@ -1129,7 +1131,7 @@ test "client openModel auto-detects vision models" {
     );
     try writeTmpFile(tmp.dir, "weights.bin", "vision");
 
-    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const root_path = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root_path);
 
     const client = KinetixClient.init(std.testing.allocator);
@@ -1148,7 +1150,7 @@ test "client openModel auto-detects ocr models" {
 
     try writeOCRModel(tmp.dir, "demo.swm", 0);
 
-    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    const root_path = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
     defer std.testing.allocator.free(root_path);
 
     const client = KinetixClient.init(std.testing.allocator);
@@ -1161,28 +1163,32 @@ test "client openModel auto-detects ocr models" {
     }
 }
 
-fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {
-    var file = try dir.createFile(relative_path, .{});
-    defer file.close();
-    try file.writeAll(contents);
+fn writeTmpFile(dir: std.Io.Dir, relative_path: []const u8, contents: []const u8) !void {
+    var file = try dir.createFile(io, relative_path, .{});
+    defer file.close(io);
+
+    var writer_impl = file.writer(io, &.{});
+    const writer = &writer_impl.interface;
+    try writer.writeAll(contents);
+    try writer.flush();
 }
 
-fn writeOCRModel(dir: std.fs.Dir, relative_path: []const u8, tensor_count: u32) !void {
-    var file = try dir.createFile(relative_path, .{});
-    defer file.close();
+fn writeOCRModel(dir: std.Io.Dir, relative_path: []const u8, tensor_count: u32) !void {
+    var file = try dir.createFile(io, relative_path, .{});
+    defer file.close(io);
 
-    var writer_impl = file.writer(&.{});
+    var writer_impl = file.writer(io, &.{});
     const writer = &writer_impl.interface;
     try writer.writeAll(&[_]u8{ 'S', 'W', 'O', 'C', 'R', '0', '1', 0 });
     try writer.writeInt(u32, tensor_count, .little);
     try writer.flush();
 }
 
-fn writePPMImage(dir: std.fs.Dir, relative_path: []const u8, width: usize, height: usize, pixels: []const u8) !void {
-    var file = try dir.createFile(relative_path, .{});
-    defer file.close();
+fn writePPMImage(dir: std.Io.Dir, relative_path: []const u8, width: usize, height: usize, pixels: []const u8) !void {
+    var file = try dir.createFile(io, relative_path, .{});
+    defer file.close(io);
 
-    var writer_impl = file.writer(&.{});
+    var writer_impl = file.writer(io, &.{});
     const writer = &writer_impl.interface;
     try writer.print("P6\n{d} {d}\n255\n", .{ width, height });
     try writer.writeAll(pixels);

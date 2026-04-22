@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = std.Options.debug_io;
 
 pub const RangeFn = *const fn (ctx: *anyopaque, start_row: usize, end_row: usize) void;
 
@@ -57,10 +58,10 @@ pub const Pool = struct {
             return;
         }
 
-        self.shared.mutex.lock();
+        self.shared.mutex.lockUncancelable(io);
         self.shared.stop = true;
-        self.shared.work_ready.broadcast();
-        self.shared.mutex.unlock();
+        self.shared.work_ready.broadcast(io);
+        self.shared.mutex.unlock(io);
 
         for (self.threads) |thread| thread.join();
         self.allocator.free(self.workers);
@@ -80,24 +81,24 @@ pub const Pool = struct {
             return;
         }
 
-        self.shared.mutex.lock();
+        self.shared.mutex.lockUncancelable(io);
         self.shared.row_count = row_count;
         self.shared.ctx = ctx;
         self.shared.range_fn = range_fn;
         self.shared.pending_workers = self.threads.len;
         self.shared.generation += 1;
-        self.shared.work_ready.broadcast();
-        self.shared.mutex.unlock();
+        self.shared.work_ready.broadcast(io);
+        self.shared.mutex.unlock(io);
 
         const main_range = computeRange(row_count, self.shared.total_workers, 0);
         if (main_range.start < main_range.end) {
             range_fn(ctx, main_range.start, main_range.end);
         }
 
-        self.shared.mutex.lock();
-        defer self.shared.mutex.unlock();
+        self.shared.mutex.lockUncancelable(io);
+        defer self.shared.mutex.unlock(io);
         while (self.shared.pending_workers != 0) {
-            self.shared.work_done.wait(&self.shared.mutex);
+            self.shared.work_done.waitUncancelable(io, &self.shared.mutex);
         }
     }
 
@@ -113,9 +114,9 @@ pub const Pool = struct {
     }
 
     const Shared = struct {
-        mutex: std.Thread.Mutex = .{},
-        work_ready: std.Thread.Condition = .{},
-        work_done: std.Thread.Condition = .{},
+        mutex: std.Io.Mutex = .init,
+        work_ready: std.Io.Condition = .init,
+        work_done: std.Io.Condition = .init,
         stop: bool = false,
         generation: u64 = 0,
         row_count: usize = 0,
@@ -132,12 +133,12 @@ pub const Pool = struct {
 
         fn run(self: *Worker) void {
             while (true) {
-                self.shared.mutex.lock();
+                self.shared.mutex.lockUncancelable(io);
                 while (!self.shared.stop and self.shared.generation == self.observed_generation) {
-                    self.shared.work_ready.wait(&self.shared.mutex);
+                    self.shared.work_ready.waitUncancelable(io, &self.shared.mutex);
                 }
                 if (self.shared.stop) {
-                    self.shared.mutex.unlock();
+                    self.shared.mutex.unlock(io);
                     return;
                 }
 
@@ -146,19 +147,19 @@ pub const Pool = struct {
                 const total_workers = self.shared.total_workers;
                 const ctx = self.shared.ctx;
                 const range_fn = self.shared.range_fn;
-                self.shared.mutex.unlock();
+                self.shared.mutex.unlock(io);
 
                 const range = computeRange(row_count, total_workers, self.worker_index);
                 if (range.start < range.end) {
                     range_fn(ctx, range.start, range.end);
                 }
 
-                self.shared.mutex.lock();
+                self.shared.mutex.lockUncancelable(io);
                 self.shared.pending_workers -= 1;
                 if (self.shared.pending_workers == 0) {
-                    self.shared.work_done.signal();
+                    self.shared.work_done.signal(io);
                 }
-                self.shared.mutex.unlock();
+                self.shared.mutex.unlock(io);
             }
         }
     };

@@ -1,4 +1,5 @@
 const std = @import("std");
+const fs_compat = @import("engine_fs_compat");
 const safetensors = @import("../safetensors.zig");
 const tensor_store = @import("../storage/store.zig");
 const codec = @import("codec.zig");
@@ -30,9 +31,9 @@ pub fn quantizeModel(
     defer allocator.free(temp_path);
 
     const temp_file = if (std.fs.path.isAbsolute(temp_path))
-        try std.fs.createFileAbsolute(temp_path, .{ .truncate = true, .read = true })
+        try fs_compat.createFileAbsolute(temp_path, .{ .truncate = true, .read = true })
     else
-        try std.fs.cwd().createFile(temp_path, .{ .truncate = true, .read = true });
+        try fs_compat.cwd().createFile(temp_path, .{ .truncate = true, .read = true });
     defer temp_file.close();
 
     var entries = std.ArrayListUnmanaged(QuantizedEntry).empty;
@@ -103,9 +104,9 @@ pub fn quantizeModel(
     defer allocator.free(header);
 
     const output_file = if (std.fs.path.isAbsolute(output_path))
-        try std.fs.createFileAbsolute(output_path, .{ .truncate = true })
+        try fs_compat.createFileAbsolute(output_path, .{ .truncate = true })
     else
-        try std.fs.cwd().createFile(output_path, .{ .truncate = true });
+        try fs_compat.cwd().createFile(output_path, .{ .truncate = true });
     defer output_file.close();
 
     var header_len_bytes: [8]u8 = undefined;
@@ -121,9 +122,9 @@ pub fn quantizeModel(
     }
 
     if (std.fs.path.isAbsolute(temp_path)) {
-        try std.fs.deleteFileAbsolute(temp_path);
+        try fs_compat.deleteFileAbsolute(temp_path);
     } else {
-        try std.fs.cwd().deleteFile(temp_path);
+        try fs_compat.cwd().deleteFile(temp_path);
     }
 }
 

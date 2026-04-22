@@ -1,4 +1,5 @@
 const std = @import("std");
+const fs_compat = @import("engine_fs_compat");
 const chat_types = @import("common/chat_types.zig");
 const bpe_tokenizer = @import("../bpe.zig");
 const decoder_types = @import("../decoder_types.zig");
@@ -201,11 +202,11 @@ fn readFileAllocAtPath(
     max_bytes: usize,
 ) ![]u8 {
     if (std.fs.path.isAbsolute(path)) {
-        const file = try std.fs.openFileAbsolute(path, .{});
+        const file = try fs_compat.openFileAbsolute(path, .{});
         defer file.close();
         return file.readToEndAlloc(allocator, max_bytes);
     }
-    return std.fs.cwd().readFileAlloc(allocator, path, max_bytes);
+    return fs_compat.cwd().readFileAlloc(allocator, path, max_bytes);
 }
 
 test "registry detects known family architectures" {

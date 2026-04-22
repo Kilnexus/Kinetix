@@ -8,6 +8,7 @@ const detect_types = @import("types.zig");
 const plan = @import("plan.zig");
 const branch_exec = @import("branch_exec.zig");
 const postprocess = @import("postprocess.zig");
+const stopwatch = @import("engine_stopwatch");
 
 const Tensor = detect_types.Tensor;
 const Detection = detect_types.Detection;
@@ -21,13 +22,14 @@ const CachedDetectPlan = detect_types.CachedDetectPlan;
 const DetectPostprocessMode = detect_types.DetectPostprocessMode;
 const max_detect_branch_levels = detect_types.max_detect_branch_levels;
 const max_level_top_classes = detect_types.max_level_top_classes;
+const io = std.Options.debug_io;
 
 const DetectCacheKey = struct {
     module_ptr: usize,
     weights_ptr: usize,
 };
 
-var detect_plan_cache_mutex: std.Thread.Mutex = .{};
+var detect_plan_cache_mutex: std.Io.Mutex = .init;
 var detect_plan_cache: std.AutoHashMapUnmanaged(DetectCacheKey, CachedDetectPlan) = .empty;
 
 const TensorStats = struct {
@@ -209,7 +211,7 @@ pub fn runDetectProfileNode(
         profile.levels[level].feature_abs_max = feature_stats.abs_max;
         profile.levels[level].max_class_logit = -std.math.inf(f32);
         var reg_profile = DetectBranchProfile{};
-        var timer = try std.time.Timer.start();
+        var timer = stopwatch.start();
         var reg = try branch_exec.runDetectBranchPlanProfile(tensor_allocator, model_graph, weights_blob, reg_plans[level], feature, &reg_profile);
         profile.levels[level].reg_ns = timer.read();
         profile.levels[level].reg_detail = reg_profile;
@@ -226,7 +228,7 @@ pub fn runDetectProfileNode(
             return error.InvalidAttributeType;
         }
 
-        var decode_timer = try std.time.Timer.start();
+        var decode_timer = stopwatch.start();
         const stride = model_graph.strides[level];
         const reg_plane = reg.shape[2] * reg.shape[3];
         const cls_plane = cls.shape[2] * cls.shape[3];
@@ -281,7 +283,7 @@ pub fn runDetectProfileNode(
     }
 
     profile.candidate_count = candidate_count;
-    var nms_timer = try std.time.Timer.start();
+    var nms_timer = stopwatch.start();
     const selected = switch (cached.postprocess_mode) {
         .nms => try postprocess.nms(scratch_allocator, output_allocator, candidates[0..candidate_count], options),
         .one2one_topk => try postprocess.topKByScore(scratch_allocator, output_allocator, candidates[0..candidate_count], options),
@@ -309,8 +311,8 @@ fn getCachedDetectPlan(
         .weights_ptr = @intFromPtr(weights_blob.data.ptr),
     };
 
-    detect_plan_cache_mutex.lock();
-    defer detect_plan_cache_mutex.unlock();
+    detect_plan_cache_mutex.lockUncancelable(io);
+    defer detect_plan_cache_mutex.unlock(io);
 
     if (detect_plan_cache.get(key)) |cached| return cached;
 

@@ -2,6 +2,7 @@ const std = @import("std");
 const detect_types = @import("types.zig");
 const exec_common = @import("exec_common.zig");
 const exec_fast = @import("exec_fast.zig");
+const stopwatch = @import("engine_stopwatch");
 
 const Tensor = detect_types.Tensor;
 const Cv3StagePlan = detect_types.Cv3StagePlan;
@@ -39,7 +40,7 @@ pub fn runDetectCv3BranchPlannedProfile(
     input: *const Tensor,
     profile: *DetectBranchProfile,
 ) !Tensor {
-    var timer = try std.time.Timer.start();
+    var timer = stopwatch.start();
     var hidden0 = if (plan.stage0.depthwise_fast)
         try exec_fast.runDetectFastDepthwise3x3Batch1(allocator, input, &plan.stage0.depthwise)
     else

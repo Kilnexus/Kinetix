@@ -2,6 +2,7 @@ const std = @import("std");
 const detect_types = @import("types.zig");
 const exec_common = @import("exec_common.zig");
 const exec_fast = @import("exec_fast.zig");
+const stopwatch = @import("engine_stopwatch");
 
 const Tensor = detect_types.Tensor;
 const Cv2BranchPlan = detect_types.Cv2BranchPlan;
@@ -31,7 +32,7 @@ pub fn runDetectCv2BranchPlannedProfile(
     input: *const Tensor,
     profile: *DetectBranchProfile,
 ) !Tensor {
-    var timer = try std.time.Timer.start();
+    var timer = stopwatch.start();
     var hidden0 = if (plan.conv0_fast)
         try exec_fast.runDetectFast3x3Conv64Batch1(allocator, input, &plan.conv0)
     else

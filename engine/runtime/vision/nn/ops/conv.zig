@@ -4,13 +4,14 @@ const common = @import("conv/common.zig");
 const kernel_3x3 = @import("conv/kernel_3x3.zig");
 const kernel_general = @import("conv/kernel_general.zig");
 const kernel_pointwise = @import("conv/kernel_pointwise.zig");
+const env_compat = @import("engine_env_compat");
 
 pub const Tensor = types.Tensor;
 pub const OpError = types.OpError;
 pub const Conv2DOptions = types.Conv2DOptions;
 
 fn envFlagEnabled(name: []const u8) bool {
-    const value = std.process.getEnvVarOwned(std.heap.page_allocator, name) catch return false;
+    const value = env_compat.getOwned(std.heap.page_allocator, name) catch return false;
     defer std.heap.page_allocator.free(value);
     return value.len != 0 and !std.mem.eql(u8, value, "0");
 }

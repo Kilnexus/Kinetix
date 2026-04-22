@@ -2,11 +2,12 @@ const builtin = @import("builtin");
 const std = @import("std");
 
 const windows = std.os.windows;
+const io = std.Options.debug_io;
 
 pub const MappedFile = struct {
     bytes: []align(std.heap.page_size_min) const u8,
 
-    pub fn open(file: std.fs.File) !MappedFile {
+    pub fn open(file: std.Io.File) !MappedFile {
         return switch (builtin.os.tag) {
             .windows => openWindows(file),
             else => openPosix(file),
@@ -17,15 +18,16 @@ pub const MappedFile = struct {
         switch (builtin.os.tag) {
             .windows => {
                 const ok = UnmapViewOfFile(self.bytes.ptr);
-                std.debug.assert(ok != 0);
+                std.debug.assert(ok.toBool());
             },
             else => std.posix.munmap(self.bytes),
         }
     }
 };
 
-fn openPosix(file: std.fs.File) !MappedFile {
-    const file_len = std.math.cast(usize, try file.getEndPos()) orelse return error.FileTooLarge;
+fn openPosix(file: std.Io.File) !MappedFile {
+    const stat = try file.stat(io);
+    const file_len = std.math.cast(usize, stat.size) orelse return error.FileTooLarge;
     const mapped = try std.posix.mmap(
         null,
         file_len,
@@ -37,9 +39,10 @@ fn openPosix(file: std.fs.File) !MappedFile {
     return .{ .bytes = mapped };
 }
 
-fn openWindows(file: std.fs.File) !MappedFile {
-    const file_len = std.math.cast(usize, try file.getEndPos()) orelse return error.FileTooLarge;
-    const mapping = CreateFileMappingW(file.handle, null, windows.PAGE_READONLY, 0, 0, null) orelse return error.Unexpected;
+fn openWindows(file: std.Io.File) !MappedFile {
+    const stat = try file.stat(io);
+    const file_len = std.math.cast(usize, stat.size) orelse return error.FileTooLarge;
+    const mapping = CreateFileMappingW(file.handle, null, page_readonly, 0, 0, null) orelse return error.Unexpected;
     defer windows.CloseHandle(mapping);
 
     const view = MapViewOfFile(mapping, file_map_read, 0, 0, file_len) orelse return error.Unexpected;
@@ -48,6 +51,7 @@ fn openWindows(file: std.fs.File) !MappedFile {
 }
 
 const file_map_read: windows.DWORD = 0x0004;
+const page_readonly: windows.DWORD = 0x0002;
 
 extern "kernel32" fn CreateFileMappingW(
     hFile: windows.HANDLE,

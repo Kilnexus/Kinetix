@@ -2,6 +2,7 @@ const std = @import("std");
 const common = @import("common.zig");
 const parallel = @import("parallel.zig");
 const tasks = @import("tasks.zig");
+const io = std.Options.debug_io;
 
 const PointwisePackKey = struct {
     ptr: usize,
@@ -22,7 +23,7 @@ const PackedPointwiseWeights = struct {
 const PointwisePackCache = struct {
     const threadlocal_capacity = 16;
 
-    var mutex: std.Thread.Mutex = .{};
+    var mutex: std.Io.Mutex = .init;
     var cache: std.AutoHashMapUnmanaged(PointwisePackKey, PackedPointwiseWeights) = .{};
     threadlocal var tl_len: usize = 0;
     threadlocal var tl_next: usize = 0;
@@ -33,8 +34,8 @@ const PointwisePackCache = struct {
         const key = makeKey(weights, groups) orelse return null;
         if (getThreadLocal(key)) |cached| return cached;
 
-        mutex.lock();
-        defer mutex.unlock();
+        mutex.lockUncancelable(io);
+        defer mutex.unlock(io);
 
         if (cache.get(key)) |cached| {
             putThreadLocal(key, cached);

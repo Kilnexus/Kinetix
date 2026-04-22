@@ -146,7 +146,7 @@ pub const ReuseAllocator = struct {
 };
 
 test "reuse allocator reuses exact-size buffers" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
 
     var reuse = ReuseAllocator.init(gpa.allocator());

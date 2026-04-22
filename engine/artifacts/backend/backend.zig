@@ -1,4 +1,5 @@
 const std = @import("std");
+const io = std.Options.debug_io;
 
 pub const WeightScheme = enum {
     auto,
@@ -168,11 +169,11 @@ fn roleForWeightScheme(scheme: WeightScheme) ?ArtifactRole {
 
 fn pathExists(path: []const u8) bool {
     const file = if (std.fs.path.isAbsolute(path))
-        std.fs.openFileAbsolute(path, .{})
+        std.Io.Dir.openFileAbsolute(io, path, .{})
     else
-        std.fs.cwd().openFile(path, .{});
+        std.Io.Dir.cwd().openFile(io, path, .{});
     if (file) |handle| {
-        handle.close();
+        handle.close(io);
         return true;
     } else |_| {
         return false;
@@ -185,13 +186,13 @@ fn discoverExtensionArtifacts(
     found: *std.ArrayListUnmanaged(ArtifactLocation),
 ) !void {
     var dir = if (std.fs.path.isAbsolute(model_dir))
-        try std.fs.openDirAbsolute(model_dir, .{ .iterate = true })
+        try std.Io.Dir.openDirAbsolute(io, model_dir, .{ .iterate = true })
     else
-        try std.fs.cwd().openDir(model_dir, .{ .iterate = true });
-    defer dir.close();
+        try std.Io.Dir.cwd().openDir(io, model_dir, .{ .iterate = true });
+    defer dir.close(io);
 
     var iter = dir.iterate();
-    while (try iter.next()) |entry| {
+    while (try iter.next(io)) |entry| {
         if (entry.kind != .file) continue;
 
         if (std.mem.endsWith(u8, entry.name, ".swm") and !containsRole(found.items, .ocr_model)) {

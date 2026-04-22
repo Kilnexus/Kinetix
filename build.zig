@@ -7,10 +7,7 @@ pub fn build(b: *std.Build) void {
         bool,
         "local_pixio",
         "Use local lib/Pixio checkout for development instead of the pinned remote Pixio dependency",
-    ) orelse blk: {
-        std.fs.cwd().access("lib/Pixio/src/Pixio.zig", .{}) catch break :blk false;
-        break :blk true;
-    };
+    ) orelse true;
     const legacy_imports = addLegacyImports(b, target, optimize, local_pixio);
 
     const kinetix_module = createRootModule(b, target, optimize, legacy_imports, "sdk/kinetix.zig");
@@ -56,6 +53,9 @@ const LegacyImports = struct {
     tensor: *std.Build.Module,
     ops: *std.Build.Module,
     weights: *std.Build.Module,
+    fs_compat: *std.Build.Module,
+    env_compat: *std.Build.Module,
+    stopwatch: *std.Build.Module,
     global_thread_pool: *std.Build.Module,
     runtime: *std.Build.Module,
     legacy_vision: *std.Build.Module,
@@ -142,12 +142,31 @@ fn addLegacyImports(
         .optimize = optimize,
     });
     weights.addImport("graph", graph);
+    const fs_compat = b.createModule(.{
+        .root_source_file = b.path("engine/core/fs_compat.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const env_compat = b.createModule(.{
+        .root_source_file = b.path("engine/core/env_compat.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const stopwatch = b.createModule(.{
+        .root_source_file = b.path("engine/core/stopwatch.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     const global_thread_pool = b.createModule(.{
         .root_source_file = b.path("engine/core/threading/global_thread_pool_module.zig"),
         .target = target,
         .optimize = optimize,
     });
     ops.addImport("engine_global_thread_pool", global_thread_pool);
+    ops.addImport("engine_env_compat", env_compat);
+    kinetix_sdk.addImport("engine_fs_compat", fs_compat);
+    graph.addImport("engine_fs_compat", fs_compat);
+    weights.addImport("engine_fs_compat", fs_compat);
     const engine_vision_modules = b.createModule(.{
         .root_source_file = b.path("engine/runtime/vision/modules/modules.zig"),
         .target = target,
@@ -158,7 +177,9 @@ fn addLegacyImports(
     engine_vision_modules.addImport("ops", ops);
     engine_vision_modules.addImport("tensor", tensor);
     engine_vision_modules.addImport("engine_global_thread_pool", global_thread_pool);
+    engine_vision_modules.addImport("engine_env_compat", env_compat);
     engine_vision_modules.addImport("engine_vision_base", engine_vision_base);
+    engine_vision_modules.addImport("engine_stopwatch", stopwatch);
     const engine_vision_reuse_allocator = b.createModule(.{
         .root_source_file = b.path("engine/runtime/vision/memory/reuse_allocator.zig"),
         .target = target,
@@ -176,6 +197,7 @@ fn addLegacyImports(
     engine_vision_engine.addImport("engine_vision_base", engine_vision_base);
     engine_vision_engine.addImport("engine_vision_modules", engine_vision_modules);
     engine_vision_engine.addImport("engine_vision_reuse_allocator", engine_vision_reuse_allocator);
+    engine_vision_engine.addImport("engine_stopwatch", stopwatch);
 
     const runtime = b.createModule(.{
         .root_source_file = b.path("engine/runtime/vision/runtime.zig"),
@@ -209,6 +231,9 @@ fn addLegacyImports(
     engine_root.addImport("tensor", tensor);
     engine_root.addImport("ops", ops);
     engine_root.addImport("weights", weights);
+    engine_root.addImport("engine_fs_compat", fs_compat);
+    engine_root.addImport("engine_env_compat", env_compat);
+    engine_root.addImport("engine_stopwatch", stopwatch);
     engine_root.addImport("engine_global_thread_pool", global_thread_pool);
     engine_root.addImport("runtime", runtime);
     engine_root.addImport("vision", legacy_vision);
@@ -227,6 +252,9 @@ fn addLegacyImports(
         .tensor = tensor,
         .ops = ops,
         .weights = weights,
+        .fs_compat = fs_compat,
+        .env_compat = env_compat,
+        .stopwatch = stopwatch,
         .global_thread_pool = global_thread_pool,
         .runtime = runtime,
         .legacy_vision = legacy_vision,
@@ -240,12 +268,6 @@ fn resolvePixioModule(
     local_pixio: bool,
 ) *std.Build.Module {
     if (local_pixio) {
-        std.fs.cwd().access("lib/Pixio/src/Pixio.zig", .{}) catch {
-            std.debug.panic(
-                "local_pixio=true requires a local checkout at lib/Pixio; disable -Dlocal_pixio or restore the local repository",
-                .{},
-            );
-        };
         return b.createModule(.{
             .root_source_file = b.path("lib/Pixio/src/Pixio.zig"),
             .target = target,
@@ -274,6 +296,9 @@ fn addImportsToRoot(root: *std.Build.Module, imports: LegacyImports) void {
     root.addImport("tensor", imports.tensor);
     root.addImport("ops", imports.ops);
     root.addImport("weights", imports.weights);
+    root.addImport("engine_fs_compat", imports.fs_compat);
+    root.addImport("engine_env_compat", imports.env_compat);
+    root.addImport("engine_stopwatch", imports.stopwatch);
     root.addImport("engine_global_thread_pool", imports.global_thread_pool);
     root.addImport("runtime", imports.runtime);
     root.addImport("vision", imports.legacy_vision);

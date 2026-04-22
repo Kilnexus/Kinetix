@@ -1,4 +1,5 @@
 const std = @import("std");
+const fs_compat = @import("engine_fs_compat");
 const decoder_types = @import("../../decoder_types.zig");
 const chat_types = @import("../common/chat_types.zig");
 const bpe_tokenizer = @import("../../bpe.zig");
@@ -68,7 +69,7 @@ pub fn loadParsedConfig(backing_allocator: std.mem.Allocator, path: []const u8) 
     errdefer arena.deinit();
 
     const allocator = arena.allocator();
-    const bytes = try std.fs.cwd().readFileAlloc(allocator, path, 2 * 1024 * 1024);
+    const bytes = try fs_compat.cwd().readFileAlloc(allocator, path, 2 * 1024 * 1024);
 
     if (std.json.parseFromSliceLeaky(config.Config, allocator, bytes, .{
         .ignore_unknown_fields = true,

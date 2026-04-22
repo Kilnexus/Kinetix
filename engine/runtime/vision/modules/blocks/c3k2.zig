@@ -7,6 +7,7 @@ const c3k = @import("c3k.zig");
 const conv = @import("conv.zig");
 const types = @import("types.zig");
 const utils = @import("engine_vision_base").utils;
+const stopwatch = @import("engine_stopwatch");
 
 pub const Tensor = types.Tensor;
 const c3k2_stack_part_limit = 8;
@@ -121,7 +122,7 @@ pub fn runC3k2ProfileNode(
     ));
 
     var profile = types.C3k2Profile{};
-    var timer = try std.time.Timer.start();
+    var timer = stopwatch.start();
 
     var stem = try conv.runConvNode(allocator, model_graph, weights_blob, &module.children[0], input);
     profile.cv1_ns = timer.read();

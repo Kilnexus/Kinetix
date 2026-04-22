@@ -1,4 +1,5 @@
 const std = @import("std");
+const fs_compat = @import("engine_fs_compat");
 
 const magic = [_]u8{ 'S', 'W', 'O', 'C', 'R', '0', '1', 0 };
 
@@ -15,7 +16,7 @@ pub const Model = struct {
     pub fn init(allocator: std.mem.Allocator) Model {
         return .{
             .allocator = allocator,
-            .tensors = .{},
+            .tensors = .empty,
         };
     }
 
@@ -34,9 +35,9 @@ pub const Model = struct {
 
     pub fn loadFromFile(allocator: std.mem.Allocator, path: []const u8) !Model {
         const file = if (std.fs.path.isAbsolute(path))
-            try std.fs.openFileAbsolute(path, .{})
+            try fs_compat.openFileAbsolute(path, .{})
         else
-            try std.fs.cwd().openFile(path, .{});
+            try fs_compat.cwd().openFile(path, .{});
         defer file.close();
 
         const stat = try file.stat();
@@ -50,22 +51,21 @@ pub const Model = struct {
         if (bytes.len < magic.len) return error.InvalidFormat;
         if (!std.mem.eql(u8, bytes[0..magic.len], &magic)) return error.InvalidMagic;
 
-        var stream = std.io.fixedBufferStream(bytes[magic.len..]);
-        const reader = stream.reader();
+        var cursor: usize = magic.len;
 
-        const tensor_count = try reader.readInt(u32, .little);
+        const tensor_count = try readIntAt(u32, bytes, &cursor);
         var model = Model.init(allocator);
         errdefer model.deinit();
 
         for (0..tensor_count) |_| {
-            const name_len = try reader.readInt(u16, .little);
+            const name_len = try readIntAt(u16, bytes, &cursor);
             if (name_len == 0) return error.InvalidFormat;
 
             const name = try allocator.alloc(u8, name_len);
             errdefer allocator.free(name);
-            try reader.readNoEof(name);
+            try readNoEof(bytes, &cursor, name);
 
-            const ndim = try reader.readByte();
+            const ndim = try readByteAt(bytes, &cursor);
             if (ndim == 0) return error.InvalidFormat;
 
             const shape = try allocator.alloc(usize, ndim);
@@ -73,19 +73,19 @@ pub const Model = struct {
 
             var expected_len: usize = 1;
             for (0..ndim) |i| {
-                const dim = @as(usize, try reader.readInt(u32, .little));
+                const dim = @as(usize, try readIntAt(u32, bytes, &cursor));
                 if (dim == 0) return error.InvalidFormat;
                 shape[i] = dim;
                 expected_len = try std.math.mul(usize, expected_len, dim);
             }
 
-            const value_len = @as(usize, try reader.readInt(u32, .little));
+            const value_len = @as(usize, try readIntAt(u32, bytes, &cursor));
             if (value_len != expected_len) return error.InvalidFormat;
 
             const values = try allocator.alloc(f32, value_len);
             errdefer allocator.free(values);
             for (0..value_len) |i| {
-                values[i] = @bitCast(try reader.readInt(u32, .little));
+                values[i] = @bitCast(try readIntAt(u32, bytes, &cursor));
             }
 
             try model.tensors.append(allocator, .{
@@ -98,6 +98,27 @@ pub const Model = struct {
         return model;
     }
 };
+
+fn readNoEof(bytes: []const u8, cursor: *usize, dest: []u8) !void {
+    if (bytes.len - cursor.* < dest.len) return error.EndOfStream;
+    @memcpy(dest, bytes[cursor.* ..][0..dest.len]);
+    cursor.* += dest.len;
+}
+
+fn readByteAt(bytes: []const u8, cursor: *usize) !u8 {
+    if (cursor.* >= bytes.len) return error.EndOfStream;
+    const value = bytes[cursor.*];
+    cursor.* += 1;
+    return value;
+}
+
+fn readIntAt(comptime T: type, bytes: []const u8, cursor: *usize) !T {
+    const byte_count = @divExact(@bitSizeOf(T), 8);
+    if (bytes.len - cursor.* < byte_count) return error.EndOfStream;
+    const value = std.mem.readInt(T, bytes[cursor.* ..][0..byte_count], .little);
+    cursor.* += byte_count;
+    return value;
+}
 
 test "ocr model parser loads custom format" {
     var tmp = std.testing.tmpDir(.{});

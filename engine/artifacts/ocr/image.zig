@@ -1,4 +1,5 @@
 const std = @import("std");
+const fs_compat = @import("engine_fs_compat");
 
 pub const Image = struct {
     allocator: std.mem.Allocator,
@@ -13,9 +14,9 @@ pub const Image = struct {
 
     pub fn loadPpmFile(allocator: std.mem.Allocator, path: []const u8) !Image {
         const file = if (std.fs.path.isAbsolute(path))
-            try std.fs.openFileAbsolute(path, .{})
+            try fs_compat.openFileAbsolute(path, .{})
         else
-            try std.fs.cwd().openFile(path, .{});
+            try fs_compat.cwd().openFile(path, .{});
         defer file.close();
 
         const stat = try file.stat();

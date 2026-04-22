@@ -1,5 +1,6 @@
 const std = @import("std");
 const imaging = @import("Pixio");
+const fs_compat = @import("engine_fs_compat");
 const task = @import("../../core/task.zig");
 const preprocess = @import("chandra_preprocess.zig");
 const store = @import("chandra_store.zig");
@@ -567,7 +568,7 @@ pub fn execute(allocator: std.mem.Allocator, context: Context) ![]u8 {
 
 pub fn inspect(model_path: []const u8) Readiness {
     var supported_config = false;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const config_path = std.fs.path.join(allocator, &.{ model_path, "config.json" }) catch null;
@@ -620,7 +621,7 @@ pub fn loadConfigFromFile(backing_allocator: std.mem.Allocator, path: []const u8
     errdefer arena.deinit();
 
     const allocator = arena.allocator();
-    const bytes = try std.fs.cwd().readFileAlloc(allocator, path, 2 * 1024 * 1024);
+    const bytes = try fs_compat.cwd().readFileAlloc(allocator, path, 2 * 1024 * 1024);
     const config = try std.json.parseFromSliceLeaky(Config, allocator, bytes, .{
         .ignore_unknown_fields = true,
     });
@@ -1015,7 +1016,7 @@ fn loadPreparedInputFromManifest(
     manifest_path: []const u8,
     config: preprocess.ImageProcessorConfig,
 ) !preprocess.PreparedImageInput {
-    const bytes = try std.fs.cwd().readFileAlloc(allocator, manifest_path, 4 * 1024 * 1024);
+    const bytes = try fs_compat.cwd().readFileAlloc(allocator, manifest_path, 4 * 1024 * 1024);
     defer allocator.free(bytes);
 
     const base_dir = std.fs.path.dirname(manifest_path) orelse ".";
@@ -1099,9 +1100,9 @@ fn cloneImageOwned(allocator: std.mem.Allocator, source: *const imaging.ImageU8)
     return cloned;
 }
 
-fn openDirAtPath(path: []const u8, flags: std.fs.Dir.OpenOptions) !std.fs.Dir {
-    if (std.fs.path.isAbsolute(path)) return try std.fs.openDirAbsolute(path, flags);
-    return try std.fs.cwd().openDir(path, flags);
+fn openDirAtPath(path: []const u8, flags: std.Io.Dir.OpenOptions) !fs_compat.Dir {
+    if (std.fs.path.isAbsolute(path)) return try fs_compat.openDirAbsolute(path, flags);
+    return try fs_compat.cwd().openDir(path, flags);
 }
 
 fn hasAnyFile(model_path: []const u8, names: []const []const u8) bool {
@@ -1112,7 +1113,7 @@ fn hasAnyFile(model_path: []const u8, names: []const []const u8) bool {
 }
 
 fn hasFile(model_path: []const u8, name: []const u8) bool {
-    var dir = std.fs.openDirAbsolute(model_path, .{}) catch return false;
+    var dir = fs_compat.openDirAbsolute(model_path, .{}) catch return false;
     defer dir.close();
 
     dir.access(name, .{}) catch return false;

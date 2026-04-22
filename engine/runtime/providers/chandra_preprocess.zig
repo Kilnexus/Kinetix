@@ -1,5 +1,6 @@
 const std = @import("std");
 const imaging = @import("Pixio");
+const fs_compat = @import("engine_fs_compat");
 
 pub const SizeConfig = struct {
     longest_edge: usize,
@@ -94,7 +95,7 @@ pub fn loadFromPreprocessorConfig(backing_allocator: std.mem.Allocator, path: []
     errdefer arena.deinit();
 
     const allocator = arena.allocator();
-    const bytes = try std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024);
+    const bytes = try fs_compat.cwd().readFileAlloc(allocator, path, 1024 * 1024);
     const config = try std.json.parseFromSliceLeaky(ImageProcessorConfig, allocator, bytes, .{
         .ignore_unknown_fields = true,
     });
@@ -107,7 +108,7 @@ pub fn loadFromProcessorConfig(backing_allocator: std.mem.Allocator, path: []con
     errdefer arena.deinit();
 
     const allocator = arena.allocator();
-    const bytes = try std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024);
+    const bytes = try fs_compat.cwd().readFileAlloc(allocator, path, 1024 * 1024);
     const wrapper = try std.json.parseFromSliceLeaky(ProcessorConfig, allocator, bytes, .{
         .ignore_unknown_fields = true,
     });
@@ -293,7 +294,7 @@ fn statsF32(values: []const f64, storage: *[4]f32, channels: usize) ![]const f32
 }
 
 fn pathExists(path: []const u8) bool {
-    const file = std.fs.openFileAbsolute(path, .{}) catch return false;
+    const file = fs_compat.openFileAbsolute(path, .{}) catch return false;
     file.close();
     return true;
 }

@@ -5,6 +5,7 @@ const weights_mod = @import("weights");
 const bottleneck = @import("bottleneck.zig");
 const conv = @import("conv.zig");
 const types = @import("types.zig");
+const stopwatch = @import("engine_stopwatch");
 
 pub const Tensor = types.Tensor;
 pub const C3kProfiledTensor = types.C3kProfiledTensor;
@@ -61,7 +62,7 @@ pub fn runC3kProfileNode(
 ) !C3kProfiledTensor {
     if (!std.mem.eql(u8, module.kind, "C3k")) return error.InvalidModuleKind;
     var profile = types.C3kProfile{};
-    var timer = try std.time.Timer.start();
+    var timer = stopwatch.start();
 
     var left = try conv.runConvNode(allocator, model_graph, weights_blob, &module.children[0], input);
     profile.cv1_ns = timer.read();

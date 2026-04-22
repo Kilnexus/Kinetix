@@ -5,6 +5,7 @@ const weights_mod = @import("weights");
 const spec = @import("engine_vision_base").spec;
 const conv = @import("conv.zig");
 const types = @import("types.zig");
+const stopwatch = @import("engine_stopwatch");
 
 pub const Tensor = types.Tensor;
 pub const SPPFProfiledTensor = types.SPPFProfiledTensor;
@@ -95,7 +96,7 @@ pub fn runSPPFProfileNode(
     const has_add = module.cached_attrs.add orelse false;
 
     var profile = types.SPPFProfile{};
-    var timer = try std.time.Timer.start();
+    var timer = stopwatch.start();
 
     var base = try conv.runConvNode(allocator, model_graph, weights_blob, &module.children[0], input);
     profile.cv1_ns = timer.read();

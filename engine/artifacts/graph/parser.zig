@@ -1,4 +1,5 @@
 const std = @import("std");
+const fs_compat = @import("engine_fs_compat");
 const graph_index = @import("index.zig");
 const graph_types = @import("types.zig");
 
@@ -11,7 +12,7 @@ pub const PlanGraph = graph_types.PlanGraph;
 pub const Summary = graph_types.Summary;
 
 pub fn load(allocator: std.mem.Allocator, graph_path: []const u8) !PlanGraph {
-    const contents = try std.fs.cwd().readFileAlloc(allocator, graph_path, 64 * 1024 * 1024);
+    const contents = try fs_compat.cwd().readFileAlloc(allocator, graph_path, 64 * 1024 * 1024);
     defer allocator.free(contents);
 
     return try parseGraph(allocator, contents);

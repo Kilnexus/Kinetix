@@ -1,4 +1,5 @@
 const std = @import("std");
+const fs_compat = @import("engine_fs_compat");
 const graph = @import("graph");
 
 pub const WeightsBlob = struct {
@@ -7,9 +8,9 @@ pub const WeightsBlob = struct {
 
     pub fn load(allocator: std.mem.Allocator, weights_path: []const u8) !WeightsBlob {
         const file = if (std.fs.path.isAbsolute(weights_path))
-            try std.fs.openFileAbsolute(weights_path, .{})
+            try fs_compat.openFileAbsolute(weights_path, .{})
         else
-            try std.fs.cwd().openFile(weights_path, .{});
+            try fs_compat.cwd().openFile(weights_path, .{});
         defer file.close();
 
         const stat = try file.stat();

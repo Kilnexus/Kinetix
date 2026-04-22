@@ -1,5 +1,6 @@
 const std = @import("std");
 const kinetix = @import("root").kinetix;
+const fs_compat = @import("engine_fs_compat");
 
 const backend = kinetix.artifacts.backend;
 const execution = kinetix.execution;
@@ -51,10 +52,7 @@ const BatchRequestJson = struct {
     allows_batching: ?bool = null,
 };
 
-pub fn parse(allocator: std.mem.Allocator) !ParsedCommand {
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
-
+pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !ParsedCommand {
     var copied = try allocator.alloc([]u8, args.len);
     errdefer {
         for (copied, 0..) |arg, idx| {
@@ -371,7 +369,7 @@ fn runBatchRun(stdout: anytype, args: BatchPlanArgs) !void {
 }
 
 fn loadBatchItems(args: BatchPlanArgs) ![]execution.PrepareBatchItem {
-    const file_bytes = try std.fs.cwd().readFileAlloc(std.heap.page_allocator, args.requests_file, 4 * 1024 * 1024);
+    const file_bytes = try fs_compat.cwd().readFileAlloc(std.heap.page_allocator, args.requests_file, 4 * 1024 * 1024);
     defer std.heap.page_allocator.free(file_bytes);
 
     const parsed = try std.json.parseFromSlice([]BatchRequestJson, std.heap.page_allocator, file_bytes, .{});

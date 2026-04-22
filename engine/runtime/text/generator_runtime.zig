@@ -6,6 +6,7 @@ const decoder_runtime = @import("decoder_runtime.zig");
 const kv_cache = @import("kv_cache.zig");
 const sampler = @import("sampler.zig");
 const streaming = @import("streaming.zig");
+const io = std.Options.debug_io;
 
 pub const GeneratorRuntime = struct {
     allocator: std.mem.Allocator,
@@ -99,7 +100,9 @@ pub const GeneratorRuntime = struct {
         var history_ids = std.ArrayListUnmanaged(usize).empty;
         defer history_ids.deinit(self.allocator);
         try history_ids.appendSlice(self.allocator, prompt_ids);
-        const stdout = std.fs.File.stdout().deprecatedWriter();
+        var stdout_buffer: [4096]u8 = undefined;
+        var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
+        const stdout = &stdout_writer.interface;
         var streamed_len: usize = 0;
         var prng = std.Random.DefaultPrng.init(options.seed);
         for (0..options.max_new_tokens) |_| {
@@ -113,6 +116,9 @@ pub const GeneratorRuntime = struct {
             var effective_options = options;
             effective_options.stop_sequences = effective_stop_sequences;
             if (try streaming.analyzeAndMaybeStream(self.allocator, &self.tokenizer, generated.items, effective_options, stdout, &streamed_len)) |trimmed| {
+                if (options.stream_output) {
+                    try stdout.flush();
+                }
                 return trimmed;
             }
 
@@ -122,6 +128,7 @@ pub const GeneratorRuntime = struct {
         const response = try self.tokenizer.decodeAlloc(self.allocator, generated.items);
         if (options.stream_output and response.len > streamed_len) {
             try stdout.writeAll(response[streamed_len..]);
+            try stdout.flush();
         }
         return response;
     }

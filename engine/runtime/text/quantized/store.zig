@@ -2,6 +2,7 @@ const std = @import("std");
 const file_impl = @import("file.zig");
 const kernels = @import("kernels.zig");
 const types = @import("types.zig");
+const fs_compat = @import("engine_fs_compat");
 const parallel_rows = @import("../../../core/threading/parallel_rows.zig");
 const tensor_store = @import("../storage/store.zig");
 const mapped_file = @import("../storage/mapped_file.zig");
@@ -13,12 +14,12 @@ pub const Store = struct {
 
     pub fn open(allocator: std.mem.Allocator, path: []const u8) !Store {
         const file = if (std.fs.path.isAbsolute(path))
-            try std.fs.openFileAbsolute(path, .{})
+            try fs_compat.openFileAbsolute(path, .{})
         else
-            try std.fs.cwd().openFile(path, .{});
+            try fs_compat.cwd().openFile(path, .{});
         errdefer file.close();
 
-        var mapped = try mapped_file.MappedFile.open(file);
+        var mapped = try mapped_file.MappedFile.open(file.inner);
         file.close();
         errdefer mapped.deinit();
 

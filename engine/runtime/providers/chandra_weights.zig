@@ -1,5 +1,6 @@
 const std = @import("std");
 const safetensors = @import("../text/safetensors.zig");
+const fs_compat = @import("engine_fs_compat");
 
 pub const TensorGroup = enum {
     text,
@@ -73,7 +74,7 @@ pub fn loadManifest(allocator: std.mem.Allocator, model_path: []const u8) !Tenso
 }
 
 fn loadFromIndex(allocator: std.mem.Allocator, index_path: []const u8) !TensorManifest {
-    const bytes = try std.fs.cwd().readFileAlloc(allocator, index_path, 32 * 1024 * 1024);
+    const bytes = try fs_compat.cwd().readFileAlloc(allocator, index_path, 32 * 1024 * 1024);
     defer allocator.free(bytes);
 
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, bytes, .{});
@@ -109,7 +110,7 @@ fn loadFromIndex(allocator: std.mem.Allocator, index_path: []const u8) !TensorMa
 }
 
 fn loadFromSafetensorsFiles(allocator: std.mem.Allocator, model_path: []const u8) !TensorManifest {
-    var dir = try std.fs.openDirAbsolute(model_path, .{ .iterate = true });
+    var dir = try fs_compat.openDirAbsolute(model_path, .{ .iterate = true });
     defer dir.close();
 
     var records = std.ArrayListUnmanaged(TensorRecord).empty;
@@ -206,7 +207,7 @@ fn findIndexPath(allocator: std.mem.Allocator, model_path: []const u8) !?[]u8 {
     if (pathExists(fixed_path)) return fixed_path;
     allocator.free(fixed_path);
 
-    var dir = try std.fs.openDirAbsolute(model_path, .{ .iterate = true });
+    var dir = try fs_compat.openDirAbsolute(model_path, .{ .iterate = true });
     defer dir.close();
 
     var iter = dir.iterate();
@@ -220,7 +221,7 @@ fn findIndexPath(allocator: std.mem.Allocator, model_path: []const u8) !?[]u8 {
 }
 
 fn pathExists(path: []const u8) bool {
-    const file = std.fs.openFileAbsolute(path, .{}) catch return false;
+    const file = fs_compat.openFileAbsolute(path, .{}) catch return false;
     file.close();
     return true;
 }

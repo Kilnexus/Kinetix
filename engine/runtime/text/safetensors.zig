@@ -1,4 +1,5 @@
 const std = @import("std");
+const fs_compat = @import("engine_fs_compat");
 
 pub const DType = enum {
     bool,
@@ -118,17 +119,17 @@ pub const ParsedFile = struct {
 };
 
 pub fn loadFromFile(backing_allocator: std.mem.Allocator, path: []const u8) !ParsedFile {
-    const file = try std.fs.cwd().openFile(path, .{});
+    const file = try fs_compat.cwd().openFile(path, .{});
     return loadFromOpenFile(backing_allocator, file);
 }
 
-pub fn loadFromOpenFile(backing_allocator: std.mem.Allocator, file_handle: std.fs.File) !ParsedFile {
+pub fn loadFromOpenFile(backing_allocator: std.mem.Allocator, file_handle: fs_compat.File) !ParsedFile {
     const parsed = try parseFromFileHandle(backing_allocator, file_handle);
     file_handle.close();
     return parsed;
 }
 
-pub fn parseFromFileHandle(backing_allocator: std.mem.Allocator, file: std.fs.File) !ParsedFile {
+pub fn parseFromFileHandle(backing_allocator: std.mem.Allocator, file: fs_compat.File) !ParsedFile {
     var arena = std.heap.ArenaAllocator.init(backing_allocator);
     errdefer arena.deinit();
 
@@ -139,7 +140,7 @@ pub fn parseFromFileHandle(backing_allocator: std.mem.Allocator, file: std.fs.Fi
     if (file_size < 8) return error.InvalidSafetensorsFile;
 
     var header_len_bytes: [8]u8 = undefined;
-    const prefix_read = try file.preadAll(&header_len_bytes, 0);
+    const prefix_read = try file.readPositionalAll(&header_len_bytes, 0);
     if (prefix_read != header_len_bytes.len) return error.InvalidSafetensorsFile;
 
     const header_len = std.mem.readInt(u64, &header_len_bytes, .little);
@@ -148,10 +149,10 @@ pub fn parseFromFileHandle(backing_allocator: std.mem.Allocator, file: std.fs.Fi
 
     const header_len_usize = std.math.cast(usize, header_len) orelse return error.HeaderTooLarge;
     const header_buffer = try allocator.alloc(u8, header_len_usize);
-    const header_read = try file.preadAll(header_buffer, 8);
+    const header_read = try file.readPositionalAll(header_buffer, 8);
     if (header_read != header_buffer.len) return error.InvalidSafetensorsFile;
 
-    const header_json = std.mem.trimRight(u8, header_buffer, " ");
+    const header_json = std.mem.trim(u8, header_buffer, " ");
     const root = try std.json.parseFromSliceLeaky(std.json.Value, allocator, header_json, .{});
     if (root != .object) return error.InvalidHeaderJson;
 
@@ -199,7 +200,7 @@ pub fn parseFromBytes(backing_allocator: std.mem.Allocator, bytes: []const u8) !
 
     const header_len_usize = std.math.cast(usize, header_len) orelse return error.HeaderTooLarge;
     if (8 + header_len_usize > bytes.len) return error.InvalidSafetensorsFile;
-    const header_json = std.mem.trimRight(u8, bytes[8 .. 8 + header_len_usize], " ");
+    const header_json = std.mem.trim(u8, bytes[8 .. 8 + header_len_usize], " ");
     const root = try std.json.parseFromSliceLeaky(std.json.Value, allocator, header_json, .{});
     if (root != .object) return error.InvalidHeaderJson;
 

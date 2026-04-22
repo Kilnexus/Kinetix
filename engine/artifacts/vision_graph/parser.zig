@@ -1,4 +1,5 @@
 const std = @import("std");
+const fs_compat = @import("engine_fs_compat");
 const graph_index = @import("index.zig");
 const graph_types = @import("types.zig");
 
@@ -12,9 +13,9 @@ pub const TensorMeta = graph_types.TensorMeta;
 
 pub fn load(allocator: std.mem.Allocator, graph_path: []const u8) !Graph {
     const file = if (std.fs.path.isAbsolute(graph_path))
-        try std.fs.openFileAbsolute(graph_path, .{})
+        try fs_compat.openFileAbsolute(graph_path, .{})
     else
-        try std.fs.cwd().openFile(graph_path, .{});
+        try fs_compat.cwd().openFile(graph_path, .{});
     defer file.close();
 
     const contents = try file.readToEndAlloc(allocator, 64 * 1024 * 1024);

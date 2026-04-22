@@ -111,16 +111,16 @@ fn appendJsonString(
     output: *std.ArrayListUnmanaged(u8),
     value: []const u8,
 ) !void {
-    var temp = std.ArrayListUnmanaged(u8).empty;
-    defer temp.deinit(allocator);
-    try temp.writer(allocator).print("{f}", .{std.json.fmt(value, .{})});
-    try output.appendSlice(allocator, temp.items);
+    var temp: std.Io.Writer.Allocating = .init(allocator);
+    defer temp.deinit();
+    try temp.writer.print("{f}", .{std.json.fmt(value, .{})});
+    try output.appendSlice(allocator, temp.written());
 }
 
 fn stripHistoricalThinking(content: []const u8) []const u8 {
     const close_tag = "</think>";
     const close_index = std.mem.indexOf(u8, content, close_tag) orelse return content;
-    return std.mem.trimLeft(u8, content[close_index + close_tag.len ..], "\n");
+    return std.mem.trim(u8, content[close_index + close_tag.len ..], "\n");
 }
 
 test "single user prompt matches adapter thinking template" {

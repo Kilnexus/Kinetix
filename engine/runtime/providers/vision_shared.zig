@@ -1,5 +1,7 @@
 const std = @import("std");
+const fs_compat = @import("engine_fs_compat");
 const builtin = @import("builtin");
+const env_compat = @import("engine_env_compat");
 const ax_graph = @import("graph");
 const ax_runtime = @import("runtime");
 const ax_vision = @import("vision");
@@ -263,11 +265,11 @@ pub fn buildOutputJson(
 
 fn resolvePath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     if (std.fs.path.isAbsolute(path)) return try allocator.dupe(u8, path);
-    return try std.fs.cwd().realpathAlloc(allocator, path);
+    return try fs_compat.cwd().realpathAlloc(allocator, path);
 }
 
 fn shouldEmitDetectProfile() bool {
-    const value = std.process.getEnvVarOwned(std.heap.page_allocator, "KINETIX_VISION_PROFILE") catch return false;
+    const value = getEnvVarOwned(std.heap.page_allocator, "KINETIX_VISION_PROFILE") catch return false;
     defer std.heap.page_allocator.free(value);
     return value.len != 0 and !std.mem.eql(u8, value, "0");
 }
@@ -281,15 +283,19 @@ fn loadDetectOptionsFromEnv() ax_runtime.DetectOptions {
 }
 
 fn loadEnvFloat(name: []const u8, default: f32) f32 {
-    const value = std.process.getEnvVarOwned(std.heap.page_allocator, name) catch return default;
+    const value = getEnvVarOwned(std.heap.page_allocator, name) catch return default;
     defer std.heap.page_allocator.free(value);
     return std.fmt.parseFloat(f32, value) catch default;
 }
 
 fn loadEnvUsize(name: []const u8, default: usize) usize {
-    const value = std.process.getEnvVarOwned(std.heap.page_allocator, name) catch return default;
+    const value = getEnvVarOwned(std.heap.page_allocator, name) catch return default;
     defer std.heap.page_allocator.free(value);
     return std.fmt.parseInt(usize, value, 10) catch default;
+}
+
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    return env_compat.getOwned(allocator, name);
 }
 
 fn buildDetectProfileSummary(
@@ -491,7 +497,7 @@ fn buildDetectProfileSummary(
 }
 
 fn loadNodeProfileFilter(allocator: std.mem.Allocator) !?[][]const u8 {
-    const raw = std.process.getEnvVarOwned(allocator, "KINETIX_VISION_PROFILE_NODES") catch return null;
+    const raw = env_compat.getOwned(allocator, "KINETIX_VISION_PROFILE_NODES") catch return null;
     defer allocator.free(raw);
 
     var parts: std.ArrayListUnmanaged([]const u8) = .empty;

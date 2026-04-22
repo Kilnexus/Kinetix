@@ -6,6 +6,7 @@ const blocks = @import("engine_vision_modules").blocks;
 const reuse_allocator = @import("engine_vision_reuse_allocator");
 const types = @import("engine_vision_base").types;
 const weights_mod = @import("weights");
+const stopwatch = @import("engine_stopwatch");
 
 pub const Tensor = types.Tensor;
 pub const RuntimeError = types.RuntimeError;
@@ -259,7 +260,7 @@ pub fn profileGraph(
     errdefer allocator.free(profile_nodes);
 
     for (model_graph.execution_nodes, 0..) |*node, node_index| {
-        var timer = try std.time.Timer.start();
+        var timer = stopwatch.start();
 
         if (std.mem.eql(u8, node.kind, "Detect")) {
             var feature_ptr_stack: [node_input_stack_limit]*const Tensor = undefined;

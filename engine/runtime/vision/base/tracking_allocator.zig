@@ -134,7 +134,7 @@ pub const TrackingAllocator = struct {
 };
 
 test "tracking allocator records allocations and frees" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
 
     var tracker = TrackingAllocator.init(gpa.allocator());
