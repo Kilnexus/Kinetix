@@ -1,5 +1,5 @@
 const std = @import("std");
-const fs_compat = @import("engine_fs_compat");
+const io = std.Options.debug_io;
 
 pub const Config = struct {
     hidden_size: usize,
@@ -44,9 +44,11 @@ fn readFileAllocAtPath(
     max_bytes: usize,
 ) ![]u8 {
     if (std.fs.path.isAbsolute(path)) {
-        const file = try fs_compat.openFileAbsolute(path, .{});
-        defer file.close();
-        return file.readToEndAlloc(allocator, max_bytes);
+        var file = try std.Io.Dir.openFileAbsolute(io, path, .{});
+        defer file.close(io);
+        var buffer: [4096]u8 = undefined;
+        var reader = file.reader(io, &buffer);
+        return reader.interface.allocRemaining(allocator, .limited(max_bytes));
     }
-    return fs_compat.cwd().readFileAlloc(allocator, path, max_bytes);
+    return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_bytes));
 }

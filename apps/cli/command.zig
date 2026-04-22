@@ -1,6 +1,6 @@
 const std = @import("std");
 const kinetix = @import("root").kinetix;
-const fs_compat = @import("engine_fs_compat");
+const io = std.Options.debug_io;
 
 const backend = kinetix.artifacts.backend;
 const execution = kinetix.execution;
@@ -369,7 +369,7 @@ fn runBatchRun(stdout: anytype, args: BatchPlanArgs) !void {
 }
 
 fn loadBatchItems(args: BatchPlanArgs) ![]execution.PrepareBatchItem {
-    const file_bytes = try fs_compat.cwd().readFileAlloc(std.heap.page_allocator, args.requests_file, 4 * 1024 * 1024);
+    const file_bytes = try std.Io.Dir.cwd().readFileAlloc(io, args.requests_file, std.heap.page_allocator, .limited(4 * 1024 * 1024));
     defer std.heap.page_allocator.free(file_bytes);
 
     const parsed = try std.json.parseFromSlice([]BatchRequestJson, std.heap.page_allocator, file_bytes, .{});

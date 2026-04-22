@@ -1,5 +1,5 @@
 const std = @import("std");
-const fs_compat = @import("engine_fs_compat");
+const io = std.Options.debug_io;
 
 pub const Image = struct {
     allocator: std.mem.Allocator,
@@ -13,19 +13,19 @@ pub const Image = struct {
     }
 
     pub fn loadPpmFile(allocator: std.mem.Allocator, path: []const u8) !Image {
-        const file = if (std.fs.path.isAbsolute(path))
-            try fs_compat.openFileAbsolute(path, .{})
+        var file = if (std.fs.path.isAbsolute(path))
+            try std.Io.Dir.openFileAbsolute(io, path, .{})
         else
-            try fs_compat.cwd().openFile(path, .{});
-        defer file.close();
+            try std.Io.Dir.cwd().openFile(io, path, .{});
+        defer file.close(io);
 
-        const stat = try file.stat();
+        const stat = try file.stat(io);
         if (stat.size > std.math.maxInt(usize)) return error.FileTooLarge;
 
         const byte_len: usize = @intCast(stat.size);
         const bytes = try allocator.alloc(u8, byte_len);
         defer allocator.free(bytes);
-        _ = try file.readAll(bytes);
+        _ = try file.readPositionalAll(io, bytes, 0);
         return try parseP6(allocator, bytes);
     }
 };

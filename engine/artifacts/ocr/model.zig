@@ -1,5 +1,5 @@
 const std = @import("std");
-const fs_compat = @import("engine_fs_compat");
+const io = std.Options.debug_io;
 
 const magic = [_]u8{ 'S', 'W', 'O', 'C', 'R', '0', '1', 0 };
 
@@ -34,19 +34,19 @@ pub const Model = struct {
     }
 
     pub fn loadFromFile(allocator: std.mem.Allocator, path: []const u8) !Model {
-        const file = if (std.fs.path.isAbsolute(path))
-            try fs_compat.openFileAbsolute(path, .{})
+        var file = if (std.fs.path.isAbsolute(path))
+            try std.Io.Dir.openFileAbsolute(io, path, .{})
         else
-            try fs_compat.cwd().openFile(path, .{});
-        defer file.close();
+            try std.Io.Dir.cwd().openFile(io, path, .{});
+        defer file.close(io);
 
-        const stat = try file.stat();
+        const stat = try file.stat(io);
         if (stat.size > std.math.maxInt(usize)) return error.FileTooLarge;
 
         const byte_len: usize = @intCast(stat.size);
         const bytes = try allocator.alloc(u8, byte_len);
         defer allocator.free(bytes);
-        _ = try file.readAll(bytes);
+        _ = try file.readPositionalAll(io, bytes, 0);
 
         if (bytes.len < magic.len) return error.InvalidFormat;
         if (!std.mem.eql(u8, bytes[0..magic.len], &magic)) return error.InvalidMagic;

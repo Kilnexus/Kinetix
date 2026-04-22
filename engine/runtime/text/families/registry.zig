@@ -1,5 +1,4 @@
 const std = @import("std");
-const fs_compat = @import("engine_fs_compat");
 const chat_types = @import("common/chat_types.zig");
 const bpe_tokenizer = @import("../bpe.zig");
 const decoder_types = @import("../decoder_types.zig");
@@ -7,6 +6,7 @@ const generic_block = @import("../block_layout.zig");
 const weights_layout = @import("../weights_layout.zig");
 const bert_family = @import("bert/family.zig");
 const qwen3_family = @import("qwen3/family.zig");
+const io = std.Options.debug_io;
 
 pub const Architecture = decoder_types.Architecture;
 pub const ThinkingMode = chat_types.ThinkingMode;
@@ -202,11 +202,13 @@ fn readFileAllocAtPath(
     max_bytes: usize,
 ) ![]u8 {
     if (std.fs.path.isAbsolute(path)) {
-        const file = try fs_compat.openFileAbsolute(path, .{});
-        defer file.close();
-        return file.readToEndAlloc(allocator, max_bytes);
+        var file = try std.Io.Dir.openFileAbsolute(io, path, .{});
+        defer file.close(io);
+        var buffer: [4096]u8 = undefined;
+        var reader = file.reader(io, &buffer);
+        return reader.interface.allocRemaining(allocator, .limited(max_bytes));
     }
-    return fs_compat.cwd().readFileAlloc(allocator, path, max_bytes);
+    return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_bytes));
 }
 
 test "registry detects known family architectures" {

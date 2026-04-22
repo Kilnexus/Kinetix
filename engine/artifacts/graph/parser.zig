@@ -1,7 +1,7 @@
 const std = @import("std");
-const fs_compat = @import("engine_fs_compat");
 const graph_index = @import("index.zig");
 const graph_types = @import("types.zig");
+const io = std.Options.debug_io;
 
 pub const ArtifactTensor = graph_types.ArtifactTensor;
 pub const AttributeEntry = graph_types.AttributeEntry;
@@ -12,7 +12,7 @@ pub const PlanGraph = graph_types.PlanGraph;
 pub const Summary = graph_types.Summary;
 
 pub fn load(allocator: std.mem.Allocator, graph_path: []const u8) !PlanGraph {
-    const contents = try fs_compat.cwd().readFileAlloc(allocator, graph_path, 64 * 1024 * 1024);
+    const contents = try std.Io.Dir.cwd().readFileAlloc(io, graph_path, allocator, .limited(64 * 1024 * 1024));
     defer allocator.free(contents);
 
     return try parseGraph(allocator, contents);

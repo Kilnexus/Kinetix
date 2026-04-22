@@ -1,13 +1,13 @@
 const std = @import("std");
-const fs_compat = @import("engine_fs_compat");
 const types = @import("types.zig");
+const io = std.Options.debug_io;
 
 pub fn loadVocab(
     allocator: std.mem.Allocator,
     path: []const u8,
     vocab: *std.StringHashMapUnmanaged(u32),
 ) !usize {
-    const bytes = try fs_compat.cwd().readFileAlloc(allocator, path, 32 * 1024 * 1024);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(32 * 1024 * 1024));
     const root = try std.json.parseFromSliceLeaky(std.json.Value, allocator, bytes, .{});
     if (root != .object) return error.InvalidVocab;
 
@@ -29,7 +29,7 @@ pub fn loadMerges(
     path: []const u8,
     merges: *std.StringHashMapUnmanaged(u32),
 ) !void {
-    const bytes = try fs_compat.cwd().readFileAlloc(allocator, path, 16 * 1024 * 1024);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(16 * 1024 * 1024));
     var lines = std.mem.splitScalar(u8, bytes, '\n');
     var rank: u32 = 0;
     while (lines.next()) |line_raw| {
@@ -46,7 +46,7 @@ pub fn loadSpecialTokens(
     path: []const u8,
     vocab: *std.StringHashMapUnmanaged(u32),
 ) ![]const types.SpecialToken {
-    const bytes = try fs_compat.cwd().readFileAlloc(allocator, path, 4 * 1024 * 1024);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(4 * 1024 * 1024));
     const root = try std.json.parseFromSliceLeaky(std.json.Value, allocator, bytes, .{});
     if (root != .object) return error.InvalidTokenizerConfig;
 

@@ -157,9 +157,6 @@ fn addLegacyImports(
         .optimize = optimize,
     });
     ops.addImport("engine_env_compat", env_compat);
-    kinetix_sdk.addImport("engine_fs_compat", fs_compat);
-    graph.addImport("engine_fs_compat", fs_compat);
-    weights.addImport("engine_fs_compat", fs_compat);
     const engine_vision_modules = b.createModule(.{
         .root_source_file = b.path("engine/runtime/vision/modules/modules.zig"),
         .target = target,
@@ -285,7 +282,6 @@ fn addImportsToRoot(root: *std.Build.Module, imports: LegacyImports) void {
     root.addImport("tensor", imports.tensor);
     root.addImport("ops", imports.ops);
     root.addImport("weights", imports.weights);
-    root.addImport("engine_fs_compat", imports.fs_compat);
     root.addImport("engine_env_compat", imports.env_compat);
     root.addImport("engine_stopwatch", imports.stopwatch);
     root.addImport("runtime", imports.runtime);

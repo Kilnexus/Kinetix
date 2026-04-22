@@ -1,7 +1,7 @@
 const std = @import("std");
-const fs_compat = @import("engine_fs_compat");
 const graph_index = @import("index.zig");
 const graph_types = @import("types.zig");
+const io = std.Options.debug_io;
 
 pub const AttrEntry = graph_types.AttrEntry;
 pub const AttrValue = graph_types.AttrValue;
@@ -12,13 +12,15 @@ pub const Summary = graph_types.Summary;
 pub const TensorMeta = graph_types.TensorMeta;
 
 pub fn load(allocator: std.mem.Allocator, graph_path: []const u8) !Graph {
-    const file = if (std.fs.path.isAbsolute(graph_path))
-        try fs_compat.openFileAbsolute(graph_path, .{})
+    var file = if (std.fs.path.isAbsolute(graph_path))
+        try std.Io.Dir.openFileAbsolute(io, graph_path, .{})
     else
-        try fs_compat.cwd().openFile(graph_path, .{});
-    defer file.close();
+        try std.Io.Dir.cwd().openFile(io, graph_path, .{});
+    defer file.close(io);
 
-    const contents = try file.readToEndAlloc(allocator, 64 * 1024 * 1024);
+    var buffer: [4096]u8 = undefined;
+    var reader = file.reader(io, &buffer);
+    const contents = try reader.interface.allocRemaining(allocator, .limited(64 * 1024 * 1024));
     defer allocator.free(contents);
 
     return try parseGraph(allocator, contents);

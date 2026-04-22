@@ -1,19 +1,19 @@
 const std = @import("std");
-const fs_compat = @import("engine_fs_compat");
 const graph = @import("graph");
+const io = std.Options.debug_io;
 
 pub const WeightsBlob = struct {
     allocator: std.mem.Allocator,
     data: []f32,
 
     pub fn load(allocator: std.mem.Allocator, weights_path: []const u8) !WeightsBlob {
-        const file = if (std.fs.path.isAbsolute(weights_path))
-            try fs_compat.openFileAbsolute(weights_path, .{})
+        var file = if (std.fs.path.isAbsolute(weights_path))
+            try std.Io.Dir.openFileAbsolute(io, weights_path, .{})
         else
-            try fs_compat.cwd().openFile(weights_path, .{});
-        defer file.close();
+            try std.Io.Dir.cwd().openFile(io, weights_path, .{});
+        defer file.close(io);
 
-        const stat = try file.stat();
+        const stat = try file.stat(io);
         if (stat.size % @sizeOf(f32) != 0) return error.InvalidWeightsSize;
 
         const float_count: usize = @intCast(stat.size / @sizeOf(f32));
@@ -21,7 +21,7 @@ pub const WeightsBlob = struct {
         errdefer allocator.free(data);
 
         const bytes = std.mem.sliceAsBytes(data);
-        const read_len = try file.readAll(bytes);
+        const read_len = try file.readPositionalAll(io, bytes, 0);
         if (read_len != bytes.len) return error.UnexpectedEof;
 
         return .{

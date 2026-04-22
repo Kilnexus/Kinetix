@@ -1,5 +1,5 @@
 const std = @import("std");
-const fs_compat = @import("engine_fs_compat");
+const io = std.Options.debug_io;
 
 pub const Config = struct {
     architectures: []const []const u8 = &.{},
@@ -37,7 +37,7 @@ pub fn loadFromFile(backing_allocator: std.mem.Allocator, path: []const u8) !Par
     errdefer arena.deinit();
 
     const allocator = arena.allocator();
-    const bytes = try fs_compat.cwd().readFileAlloc(allocator, path, 1024 * 1024);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024));
     const config = try std.json.parseFromSliceLeaky(Config, allocator, bytes, .{
         .ignore_unknown_fields = true,
     });

@@ -1,8 +1,8 @@
 const std = @import("std");
-const fs_compat = @import("engine_fs_compat");
+const io = std.Options.debug_io;
 
 pub fn readModelTypeAlloc(allocator: std.mem.Allocator, config_path: []const u8) !?[]u8 {
-    const bytes = try fs_compat.cwd().readFileAlloc(allocator, config_path, 1024 * 1024);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, config_path, allocator, .limited(1024 * 1024));
     defer allocator.free(bytes);
 
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, bytes, .{});

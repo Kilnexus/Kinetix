@@ -1,7 +1,6 @@
 const std = @import("std");
 const engine = @import("engine_root");
 const execution = @import("sdk_execution");
-const fs_compat = @import("engine_fs_compat");
 const io = std.Options.debug_io;
 
 const backend = engine.artifacts.backend;
@@ -985,13 +984,13 @@ test "client detect returns typed detection result" {
 }
 
 test "client detect smoke test runs compat yolo11n on bundled bus image" {
-    fs_compat.cwd().access("models/vision/compat_yolo11n/graph.json", .{}) catch return error.SkipZigTest;
-    fs_compat.cwd().access("models/vision/compat_yolo11n/weights.bin", .{}) catch return error.SkipZigTest;
-    fs_compat.cwd().access("testdata/vision/bus.jpg", .{}) catch return error.SkipZigTest;
+    std.Io.Dir.cwd().access(io, "models/vision/compat_yolo11n/graph.json", .{}) catch return error.SkipZigTest;
+    std.Io.Dir.cwd().access(io, "models/vision/compat_yolo11n/weights.bin", .{}) catch return error.SkipZigTest;
+    std.Io.Dir.cwd().access(io, "testdata/vision/bus.jpg", .{}) catch return error.SkipZigTest;
 
-    const model_dir = try fs_compat.cwd().realpathAlloc(std.testing.allocator, "models/vision/compat_yolo11n");
+    const model_dir = try std.Io.Dir.cwd().realPathFileAlloc(io, "models/vision/compat_yolo11n", std.testing.allocator);
     defer std.testing.allocator.free(model_dir);
-    const image_path = try fs_compat.cwd().realpathAlloc(std.testing.allocator, "testdata/vision/bus.jpg");
+    const image_path = try std.Io.Dir.cwd().realPathFileAlloc(io, "testdata/vision/bus.jpg", std.testing.allocator);
     defer std.testing.allocator.free(image_path);
 
     const client = KinetixClient.init(std.testing.allocator);
