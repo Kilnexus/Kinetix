@@ -284,6 +284,7 @@ fn runCommand(stdout: anytype, args: RunArgs) !void {
         .none => {},
         .text => |value| try stdout.print("output_text: {s}\n", .{value}),
         .json => |value| try stdout.print("output_json: {s}\n", .{value}),
+        .audio_path => |value| try stdout.print("output_audio_path: {s}\n", .{value}),
     }
 }
 
@@ -363,6 +364,7 @@ fn runBatchRun(stdout: anytype, args: BatchPlanArgs) !void {
                 .none => {},
                 .text => |value| try stdout.print("text[{d}]: {s}\n", .{ result.request_index, value }),
                 .json => |value| try stdout.print("json[{d}]: {s}\n", .{ result.request_index, value }),
+                .audio_path => |value| try stdout.print("audio[{d}]: {s}\n", .{ result.request_index, value }),
             }
         }
     }

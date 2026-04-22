@@ -41,6 +41,7 @@ fn describeProvider(key: types.ProviderKey) ProviderDescriptor {
         .yolo_vision => .{ .key = .yolo_vision, .modality = .vision, .family = "yolo" },
         .swiftocr_ocr => .{ .key = .swiftocr_ocr, .modality = .ocr, .family = "swiftocr" },
         .chandra_ocr => .{ .key = .chandra_ocr, .modality = .ocr, .family = "chandra" },
+        .moss_tts_nano_tts => .{ .key = .moss_tts_nano_tts, .modality = .tts, .family = "moss_tts_nano" },
         .generic => .{ .key = .generic, .modality = .multimodal, .family = "generic" },
     };
 }

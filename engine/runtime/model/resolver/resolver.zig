@@ -6,6 +6,7 @@ const bert = @import("providers/bert.zig");
 const yolo = @import("providers/yolo.zig");
 const swiftocr = @import("providers/swiftocr.zig");
 const chandra = @import("providers/chandra.zig");
+const moss_tts_nano = @import("providers/moss_tts_nano.zig");
 const generic = @import("providers/generic.zig");
 const types = @import("../../types.zig");
 
@@ -35,6 +36,7 @@ pub fn normalizeCatalog(
     if (try yolo.tryNormalize(allocator, catalog, preferred_weights)) |model| return model;
     if (try swiftocr.tryNormalize(allocator, catalog, preferred_weights)) |model| return model;
     if (try chandra.tryNormalize(allocator, catalog, preferred_weights)) |model| return model;
+    if (try moss_tts_nano.tryNormalize(allocator, catalog, preferred_weights)) |model| return model;
     if (try generic.tryNormalize(allocator, catalog, preferred_weights)) |model| return model;
     return error.UnsupportedModelDirectory;
 }
@@ -116,6 +118,34 @@ test "support normalizes chandra huggingface directories into a runtime model" {
     try std.testing.expectEqual(types.Modality.ocr, model.descriptor.modality);
     try std.testing.expectEqualStrings("chandra", model.descriptor.family);
     try std.testing.expectEqual(types.RuntimeSupportStatus.supported, model.support.status);
+}
+
+test "support normalizes moss tts nano onnx bundle directories into a runtime model" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makeDir("MOSS-TTS-Nano-100M-ONNX");
+    try tmp.dir.makeDir("MOSS-Audio-Tokenizer-Nano-ONNX");
+    var tts_dir = try tmp.dir.openDir("MOSS-TTS-Nano-100M-ONNX", .{});
+    defer tts_dir.close();
+    var codec_dir = try tmp.dir.openDir("MOSS-Audio-Tokenizer-Nano-ONNX", .{});
+    defer codec_dir.close();
+
+    try writeTmpFile(tts_dir, "browser_poc_manifest.json", "{\"builtin_voices\":[],\"model_files\":{}}");
+    try writeTmpFile(tts_dir, "tts_browser_onnx_meta.json", "{}");
+    try writeTmpFile(tts_dir, "tokenizer.model", "spm");
+    try writeTmpFile(codec_dir, "codec_browser_onnx_meta.json", "{\"codec_config\":{\"sample_rate\":48000,\"channels\":2}}");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var model = try normalizeModel(std.testing.allocator, root_path, .auto);
+    defer model.deinit();
+
+    try std.testing.expectEqual(types.ProviderKey.moss_tts_nano_tts, model.provider_key);
+    try std.testing.expectEqual(types.Modality.tts, model.descriptor.modality);
+    try std.testing.expectEqualStrings("moss_tts_nano", model.descriptor.family);
+    try std.testing.expectEqual(types.RuntimeSupportStatus.degraded, model.support.status);
 }
 
 fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {

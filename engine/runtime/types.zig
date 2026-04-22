@@ -36,12 +36,14 @@ pub const OutputPayload = union(enum) {
     none,
     text: []const u8,
     json: []const u8,
+    audio_path: []const u8,
 
     pub fn deinit(self: *OutputPayload, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .none => {},
             .text => |value| allocator.free(value),
             .json => |value| allocator.free(value),
+            .audio_path => |value| allocator.free(value),
         }
         self.* = .none;
     }
@@ -64,6 +66,7 @@ pub const ExecutionNote = enum {
     ocr_model_ready,
     ocr_swiftocr_native,
     ocr_chandra_native,
+    tts_model_ready,
 };
 
 pub const ExecutionResult = struct {
@@ -98,6 +101,7 @@ pub const ProviderKey = enum {
     yolo_vision,
     swiftocr_ocr,
     chandra_ocr,
+    moss_tts_nano_tts,
     generic,
 
     pub fn name(self: ProviderKey) []const u8 {
@@ -107,6 +111,7 @@ pub const ProviderKey = enum {
             .yolo_vision => "yolo_vision",
             .swiftocr_ocr => "swiftocr_ocr",
             .chandra_ocr => "chandra_ocr",
+            .moss_tts_nano_tts => "moss_tts_nano_tts",
             .generic => "generic",
         };
     }
@@ -116,6 +121,7 @@ pub const SourceFormat = enum {
     huggingface_directory,
     kinetix_graph_directory,
     swiftocr_bundle,
+    onnx_bundle,
     unknown,
 };
 
@@ -124,6 +130,7 @@ pub const NormalizedFormat = enum {
     vision_graph,
     ocr_bundle,
     document_vlm,
+    tts_onnx_bundle,
     generic,
 };
 
@@ -137,6 +144,7 @@ pub const RuntimeSupportWarning = enum {
     graph_runtime_adapter_required,
     native_batch_unavailable,
     document_input_partial,
+    tts_runtime_pending,
 };
 
 pub const RuntimeSupportRewrite = enum {

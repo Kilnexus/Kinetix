@@ -2,6 +2,7 @@ const backend_mod = @import("backend.zig");
 const bert = @import("providers/bert.zig");
 const chandra = @import("providers/chandra.zig");
 const generic = @import("providers/generic.zig");
+const moss_tts_nano = @import("providers/moss_tts_nano.zig");
 const qwen3 = @import("providers/qwen3.zig");
 const swiftocr = @import("providers/swiftocr.zig");
 const types = @import("../types.zig");
@@ -16,6 +17,7 @@ const builtin_backends = [_]*const RuntimeBackend{
     &yolo.backend,
     &swiftocr.backend,
     &chandra.backend,
+    &moss_tts_nano.backend,
     &generic.backend,
 };
 
@@ -69,6 +71,7 @@ test "runtime backend registry resolves builtin backends" {
     try @import("std").testing.expect(findByKey(.qwen3_text) != null);
     try @import("std").testing.expect(findByKey(.bert_text) != null);
     try @import("std").testing.expect(findByKey(.chandra_ocr) != null);
+    try @import("std").testing.expect(findByKey(.moss_tts_nano_tts) != null);
     try @import("std").testing.expect(findByKey(.generic) != null);
 }
 

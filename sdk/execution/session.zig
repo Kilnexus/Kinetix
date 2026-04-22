@@ -403,10 +403,10 @@ fn resolveContextBatchItem(descriptor: runtime_types.Descriptor, item: ContextBa
 fn inferInputPayload(modality: task.Modality, input: ?[]const u8) task.InputPayload {
     const value = input orelse return .none;
     return switch (modality) {
-        .text, .multimodal => .{ .text = value },
+        .text, .tts, .multimodal => .{ .text = value },
         .vision => .{ .image_path = value },
         .ocr => if (isDocumentPath(value)) .{ .document_path = value } else .{ .image_path = value },
-        .audio, .tts => .{ .audio_path = value },
+        .audio => .{ .audio_path = value },
         .video => .{ .video_path = value },
     };
 }
@@ -640,6 +640,40 @@ test "execution context reuses one opened runtime handle across multiple text re
     try std.testing.expectEqualStrings("test-native-single", second.output.text);
 }
 
+test "prepared execution resolves tts requests through the unified runtime" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeMossTtsBundle(tmp.dir);
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var prepared = try prepare(std.testing.allocator, .{
+        .model_dir = root_path,
+        .operation = "synthesize",
+        .input = "hello moss",
+    });
+    defer prepared.deinit();
+
+    try std.testing.expectEqual(task.Modality.tts, prepared.descriptor.modality);
+    try std.testing.expectEqualStrings("moss_tts_nano", prepared.request.spec.model_family);
+    try std.testing.expectEqualStrings("hello moss", prepared.request.input.asString().?);
+    try std.testing.expectEqual(runtime_types.ExecutionPath.runtime_backend, prepared.runtime_plan.path);
+
+    var result = try prepared.execute();
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(runtime_types.ExecutionNote.tts_model_ready, result.note);
+    const payload = switch (result.output) {
+        .json => |value| value,
+        else => return error.ExpectedJsonOutput,
+    };
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"provider_key\":\"moss_tts_nano_tts\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"output_contract\":\"audio_path\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"input_text\":\"hello moss\"") != null);
+}
+
 test "ocr input inference maps pdf paths to document payloads" {
     const payload = inferInputPayload(.ocr, "demo.pdf");
     try std.testing.expectEqual(task.InputPayload.document_path, std.meta.activeTag(payload));
@@ -650,4 +684,38 @@ fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8
     var file = try dir.createFile(relative_path, .{});
     defer file.close();
     try file.writeAll(contents);
+}
+
+fn writeMossTtsBundle(dir: std.fs.Dir) !void {
+    try dir.makeDir("MOSS-TTS-Nano-100M-ONNX");
+    try dir.makeDir("MOSS-Audio-Tokenizer-Nano-ONNX");
+
+    var tts_dir = try dir.openDir("MOSS-TTS-Nano-100M-ONNX", .{});
+    defer tts_dir.close();
+    var codec_dir = try dir.openDir("MOSS-Audio-Tokenizer-Nano-ONNX", .{});
+    defer codec_dir.close();
+
+    try writeTmpFile(tts_dir, "browser_poc_manifest.json",
+        \\{
+        \\  "builtin_voices": ["speaker_a", "speaker_b"],
+        \\  "model_files": {}
+        \\}
+    );
+    try writeTmpFile(tts_dir, "tts_browser_onnx_meta.json",
+        \\{
+        \\  "model_info": {
+        \\    "name": "MOSS-TTS-Nano-100M"
+        \\  }
+        \\}
+    );
+    try writeTmpFile(tts_dir, "tokenizer.model", "synthetic sentencepiece model");
+    try writeTmpFile(codec_dir, "codec_browser_onnx_meta.json",
+        \\{
+        \\  "codec_config": {
+        \\    "sample_rate": 48000,
+        \\    "channels": 2,
+        \\    "num_quantizers": 32
+        \\  }
+        \\}
+    );
 }

@@ -520,6 +520,46 @@ test "runtime session materializes native chandra markdown output through the un
     }
 }
 
+test "runtime session routes moss tts nano bundles through the unified backend registry" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeMossTtsBundle(tmp.dir);
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var session = RuntimeSession.init(std.testing.allocator);
+    defer session.deinit();
+
+    var handle = try session.openModel(.{ .model_dir = root_path });
+    defer handle.deinit();
+
+    try std.testing.expectEqual(types.ProviderKey.moss_tts_nano_tts, handle.runtime_backend.provider_key);
+    try std.testing.expectEqual(types.Modality.tts, handle.normalized.descriptor.modality);
+
+    var plan = try session.plan(&handle, .{
+        .operation = "synthesize",
+        .input = .{ .text = "hello moss" },
+    });
+    defer plan.deinit();
+
+    var result = try session.execute(&handle, &plan);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(types.ExecutionOrigin.shared_adapter, result.origin);
+    try std.testing.expectEqual(types.ExecutionNote.tts_model_ready, result.note);
+
+    const payload = switch (result.output) {
+        .json => |value| value,
+        else => return error.ExpectedJsonOutput,
+    };
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"provider_key\":\"moss_tts_nano_tts\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"output_contract\":\"audio_path\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"sample_rate\":48000") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"builtin_voice_count\":2") != null);
+}
+
 test "runtime session routes bert models through the unified backend registry" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -596,6 +636,40 @@ fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8
     var file = try dir.createFile(relative_path, .{});
     defer file.close();
     try file.writeAll(contents);
+}
+
+fn writeMossTtsBundle(dir: std.fs.Dir) !void {
+    try dir.makeDir("MOSS-TTS-Nano-100M-ONNX");
+    try dir.makeDir("MOSS-Audio-Tokenizer-Nano-ONNX");
+
+    var tts_dir = try dir.openDir("MOSS-TTS-Nano-100M-ONNX", .{});
+    defer tts_dir.close();
+    var codec_dir = try dir.openDir("MOSS-Audio-Tokenizer-Nano-ONNX", .{});
+    defer codec_dir.close();
+
+    try writeTmpFile(tts_dir, "browser_poc_manifest.json",
+        \\{
+        \\  "builtin_voices": ["speaker_a", "speaker_b"],
+        \\  "model_files": {}
+        \\}
+    );
+    try writeTmpFile(tts_dir, "tts_browser_onnx_meta.json",
+        \\{
+        \\  "model_info": {
+        \\    "name": "MOSS-TTS-Nano-100M"
+        \\  }
+        \\}
+    );
+    try writeTmpFile(tts_dir, "tokenizer.model", "synthetic sentencepiece model");
+    try writeTmpFile(codec_dir, "codec_browser_onnx_meta.json",
+        \\{
+        \\  "codec_config": {
+        \\    "sample_rate": 48000,
+        \\    "channels": 2,
+        \\    "num_quantizers": 32
+        \\  }
+        \\}
+    );
 }
 
 fn writeOCRModel(dir: std.fs.Dir, relative_path: []const u8, tensor_count: u32) !void {
