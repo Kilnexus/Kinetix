@@ -431,6 +431,78 @@ test "runtime session reports native chandra readiness without external runtime"
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"has_multimodal_projector\":true") != null);
 }
 
+test "runtime session routes bert models through the unified backend registry" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "config.json", "{\"model_type\":\"bert\"}");
+    try writeTmpFile(tmp.dir, "tokenizer.json", "{}");
+    try writeTmpFile(tmp.dir, "model.safetensors", "bert");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var session = RuntimeSession.init(std.testing.allocator);
+    defer session.deinit();
+
+    var handle = try session.openModel(.{ .model_dir = root_path });
+    defer handle.deinit();
+
+    var plan = try session.plan(&handle, .{
+        .operation = "fill-mask",
+        .input = .{ .text = "kinetix [MASK]" },
+    });
+    defer plan.deinit();
+
+    var result = try session.execute(&handle, &plan);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(types.ProviderKey.bert_text, handle.runtime_backend.provider_key);
+    try std.testing.expectEqual(types.ExecutionNote.validated_only, result.note);
+
+    const payload = switch (result.output) {
+        .json => |value| value,
+        else => return error.ExpectedJsonOutput,
+    };
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"provider_key\":\"bert_text\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"status\":\"runtime_backend_ready\"") != null);
+}
+
+test "runtime session routes generic models through the unified backend registry" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "blob.bin", "generic");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var session = RuntimeSession.init(std.testing.allocator);
+    defer session.deinit();
+
+    var handle = try session.openModel(.{ .model_dir = root_path });
+    defer handle.deinit();
+
+    var plan = try session.plan(&handle, .{
+        .operation = "infer",
+        .input = .{ .text = "probe" },
+    });
+    defer plan.deinit();
+
+    var result = try session.execute(&handle, &plan);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(types.ProviderKey.generic, handle.runtime_backend.provider_key);
+    try std.testing.expectEqual(types.ExecutionNote.validated_only, result.note);
+
+    const payload = switch (result.output) {
+        .json => |value| value,
+        else => return error.ExpectedJsonOutput,
+    };
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"provider_key\":\"generic\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"status\":\"runtime_backend_ready\"") != null);
+}
+
 fn writeTmpFile(dir: std.fs.Dir, relative_path: []const u8, contents: []const u8) !void {
     var file = try dir.createFile(relative_path, .{});
     defer file.close();

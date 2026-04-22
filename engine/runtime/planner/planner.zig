@@ -76,8 +76,9 @@ fn validateRequest(handle: *const handle_mod.ModelHandle, request: types.Runtime
 }
 
 fn choosePath(handle: *const handle_mod.ModelHandle, request: types.RuntimeRequest) types.ExecutionPath {
-    if (request.generation.native_execution and handle.normalized.capabilities.supports_native_exec) return .native;
-    return .shared;
+    if (request.execution == .stream) return .stream;
+    if (request.generation.native_execution and handle.normalized.capabilities.supports_native_exec) return .native_accelerated;
+    return .runtime_backend;
 }
 
 fn supportsOperation(handle: *const handle_mod.ModelHandle, operation: []const u8) bool {

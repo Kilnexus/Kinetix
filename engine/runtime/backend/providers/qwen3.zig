@@ -15,6 +15,7 @@ pub const backend = backend_mod.RuntimeBackend{
     .open_fn = open,
     .deinit_fn = deinit,
     .execute_fn = execute,
+    .execute_stream_fn = executeStream,
     .execute_batch_fn = executeBatch,
 };
 
@@ -90,6 +91,14 @@ fn execute(
         handle.normalized.descriptor.id,
         buildTaskRequest(handle, request),
     );
+}
+
+fn executeStream(
+    allocator: std.mem.Allocator,
+    handle: *const handle_mod.ModelHandle,
+    request: types.RuntimeRequest,
+) !types.RuntimeResult {
+    return try execute(allocator, handle, request);
 }
 
 fn executeBatch(

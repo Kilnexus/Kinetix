@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const backend = @import("../../artifacts/backend/backend.zig");
 const task = @import("../../core/task.zig");
-const text_runtime = @import("../text/text.zig");
+const qwen_native = @import("../text/families/qwen3/qwen_native.zig");
 const types = @import("../types.zig");
 
 pub const NativeRuntimeBinding = if (builtin.is_test) struct {
@@ -55,7 +55,7 @@ pub const NativeRuntimeBinding = if (builtin.is_test) struct {
             .finished_requests = requests.len,
         };
     }
-} else text_runtime.native_dispatch.NativeQwenRuntime;
+} else qwen_native;
 
 pub fn buildSubmission(adapter_id: []const u8, execution: task.ExecutionMode) types.Submission {
     return .{
@@ -94,14 +94,20 @@ pub fn executeQwenSingle(
     adapter_id: []const u8,
     request: task.TaskRequest,
 ) !types.RuntimeResult {
-    var execution_result = try text_runtime.native_dispatch.executeSingle(
-        allocator,
-        NativeRuntimeBinding,
-        model_dir,
-        preferred_weights,
-        buildSubmission(adapter_id, request.spec.execution),
-        request,
-    );
+    var execution_result = buildReadyResult(buildSubmission(adapter_id, request.spec.execution));
+    if (canUseNativeQwenSingle(request)) {
+        execution_result = .{
+            .submission = buildSubmission(adapter_id, request.spec.execution),
+            .origin = .native_single,
+            .note = .text_native_qwen_single,
+            .output = .{ .text = try NativeRuntimeBinding.executeQwenSingle(
+                allocator,
+                model_dir,
+                preferred_weights,
+                request,
+            ) },
+        };
+    }
     return runtimeResultFromExecution(&execution_result);
 }
 
@@ -112,15 +118,79 @@ pub fn executeQwenBatch(
     adapter_id: []const u8,
     requests: []const task.TaskRequest,
 ) !types.RuntimeBatchResults {
-    const execution_results = try text_runtime.native_dispatch.executeBatch(
+    const execution_results = if (canUseNativeQwenBatch(requests))
+        try buildNativeQwenBatchResults(
+            allocator,
+            model_dir,
+            preferred_weights,
+            adapter_id,
+            requests,
+        )
+    else
+        try buildReadyBatchResults(allocator, adapter_id, requests);
+    return try runtimeBatchResultsFromExecution(allocator, execution_results);
+}
+
+fn canUseNativeQwenSingle(request: task.TaskRequest) bool {
+    if (!request.generation.native_execution) return false;
+    if (request.spec.execution != .sync) return false;
+    if (!std.mem.eql(u8, request.spec.operation, "generate") and !std.mem.eql(u8, request.spec.operation, "chat")) return false;
+    return switch (request.input) {
+        .none, .text => true,
+        else => false,
+    };
+}
+
+fn canUseNativeQwenBatch(requests: []const task.TaskRequest) bool {
+    if (requests.len <= 1) return false;
+
+    for (requests, 0..) |request, index| {
+        if (!request.generation.native_execution) return false;
+        if (request.spec.execution != .sync) return false;
+        if (!std.mem.eql(u8, request.spec.operation, "generate") and !std.mem.eql(u8, request.spec.operation, "chat")) return false;
+        switch (request.input) {
+            .text => {},
+            else => return false,
+        }
+
+        if (index != 0 and request.generation.max_tokens != requests[0].generation.max_tokens) return false;
+    }
+
+    return true;
+}
+
+fn buildNativeQwenBatchResults(
+    allocator: std.mem.Allocator,
+    model_dir: []const u8,
+    preferred_weights: backend.WeightScheme,
+    adapter_id: []const u8,
+    requests: []const task.TaskRequest,
+) ![]types.ExecutionResult {
+    var native_output = try NativeRuntimeBinding.executeQwenBatch(
         allocator,
-        NativeRuntimeBinding,
         model_dir,
         preferred_weights,
-        adapter_id,
         requests,
     );
-    return try runtimeBatchResultsFromExecution(allocator, execution_results);
+    defer native_output.deinit(allocator);
+
+    const results = try allocator.alloc(types.ExecutionResult, requests.len);
+    errdefer allocator.free(results);
+
+    for (requests, results, 0..) |request, *result, index| {
+        result.* = .{
+            .submission = .{
+                .adapter_id = adapter_id,
+                .accepted = true,
+                .execution = request.spec.execution,
+            },
+            .origin = .native_batch,
+            .note = .text_native_qwen_batch,
+            .output = .{ .text = try allocator.dupe(u8, native_output.texts[index]) },
+        };
+    }
+
+    return results;
 }
 
 pub fn runtimeResultFromExecution(execution_result: *types.ExecutionResult) types.RuntimeResult {

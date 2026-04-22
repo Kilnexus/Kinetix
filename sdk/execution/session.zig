@@ -522,7 +522,7 @@ test "prepared execution resolves text requests through the unified runtime" {
     try std.testing.expectEqualStrings("qwen3", prepared.request.spec.model_family);
     try std.testing.expectEqualStrings("hello", prepared.request.input.asString().?);
     try std.testing.expectEqual(@as(?usize, 32), prepared.request.generation.max_tokens);
-    try std.testing.expectEqual(runtime_types.ExecutionPath.shared, prepared.runtime_plan.path);
+    try std.testing.expectEqual(runtime_types.ExecutionPath.stream, prepared.runtime_plan.path);
     try std.testing.expect(prepared.descriptor.supports_streaming);
 
     var result = try prepared.execute();
@@ -554,7 +554,7 @@ test "prepared execution can request native text execution output" {
     var result = try prepared.execute();
     defer result.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(runtime_types.ExecutionPath.native, prepared.runtime_plan.path);
+    try std.testing.expectEqual(runtime_types.ExecutionPath.native_accelerated, prepared.runtime_plan.path);
     try std.testing.expectEqual(runtime_types.ExecutionOrigin.native_single, result.origin);
     try std.testing.expectEqual(runtime_types.ExecutionNote.text_native_qwen_single, result.note);
     try std.testing.expectEqualStrings("test-native-single", result.output.text);

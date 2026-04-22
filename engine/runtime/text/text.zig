@@ -22,5 +22,4 @@ pub const families = @import("families/families.zig");
 pub const common = families.common;
 pub const family_registry = families.registry;
 pub const qwen3 = families.qwen3;
-pub const native_dispatch = families.qwen3.native_dispatch;
 pub const qwen_native = families.qwen3.native_runtime;

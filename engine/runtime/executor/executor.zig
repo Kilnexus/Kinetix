@@ -12,6 +12,9 @@ pub const Executor = struct {
     pub fn execute(self: Executor, handle: *const handle_mod.ModelHandle, plan: *const types.ExecutionPlan) !types.RuntimeResult {
         if (plan.request_count != 1 or plan.requests.len != 1) return error.InvalidExecutionPlan;
 
+        if (plan.execution == .stream) {
+            return try handle.runtime_backend.executeStream(self.allocator, handle, plan.requests[0]);
+        }
         return try handle.runtime_backend.execute(self.allocator, handle, plan.requests[0]);
     }
 

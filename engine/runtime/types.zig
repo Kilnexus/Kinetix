@@ -176,8 +176,9 @@ pub const PlanBatch = struct {
 };
 
 pub const ExecutionPath = enum {
-    shared,
-    native,
+    runtime_backend,
+    stream,
+    native_accelerated,
     fallback,
 };
 

@@ -56,6 +56,12 @@ pub const ExecuteFn = *const fn (
     request: types.RuntimeRequest,
 ) anyerror!types.RuntimeResult;
 
+pub const ExecuteStreamFn = *const fn (
+    allocator: std.mem.Allocator,
+    handle: *const handle_mod.ModelHandle,
+    request: types.RuntimeRequest,
+) anyerror!types.RuntimeResult;
+
 pub const ExecuteBatchFn = *const fn (
     allocator: std.mem.Allocator,
     handle: *const handle_mod.ModelHandle,
@@ -67,6 +73,7 @@ pub const RuntimeBackend = struct {
     open_fn: ?OpenFn = null,
     deinit_fn: ?DeinitFn = null,
     execute_fn: ExecuteFn,
+    execute_stream_fn: ?ExecuteStreamFn = null,
     execute_batch_fn: ?ExecuteBatchFn = null,
 
     pub fn open(
@@ -93,6 +100,18 @@ pub const RuntimeBackend = struct {
         request: types.RuntimeRequest,
     ) !types.RuntimeResult {
         return try self.execute_fn(allocator, handle, request);
+    }
+
+    pub fn executeStream(
+        self: *const RuntimeBackend,
+        allocator: std.mem.Allocator,
+        handle: *const handle_mod.ModelHandle,
+        request: types.RuntimeRequest,
+    ) !types.RuntimeResult {
+        if (self.execute_stream_fn) |execute_stream| {
+            return try execute_stream(allocator, handle, request);
+        }
+        return try self.execute(allocator, handle, request);
     }
 
     pub fn executeBatch(
