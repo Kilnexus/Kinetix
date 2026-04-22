@@ -122,25 +122,25 @@ pub const LayerKVCache = struct {
 
     pub fn currentQ8Keys(self: *const LayerKVCache) []const i8 {
         std.debug.assert(self.scheme == .q8);
-        std.debug.assert(self.q8_layout == .token_major_legacy);
+        std.debug.assert(self.q8_layout == .token_major);
         return self.keys_q8[0 .. self.len * self.numKeyValueElementsPerToken()];
     }
 
     pub fn currentQ8Values(self: *const LayerKVCache) []const i8 {
         std.debug.assert(self.scheme == .q8);
-        std.debug.assert(self.q8_layout == .token_major_legacy);
+        std.debug.assert(self.q8_layout == .token_major);
         return self.values_q8[0 .. self.len * self.numKeyValueElementsPerToken()];
     }
 
     pub fn currentQ8KeyScales(self: *const LayerKVCache) []const u16 {
         std.debug.assert(self.scheme == .q8);
-        std.debug.assert(self.q8_layout == .token_major_legacy);
+        std.debug.assert(self.q8_layout == .token_major);
         return self.key_scales_q8[0 .. self.len * self.scaleGroupsPerToken()];
     }
 
     pub fn currentQ8ValueScales(self: *const LayerKVCache) []const u16 {
         std.debug.assert(self.scheme == .q8);
-        std.debug.assert(self.q8_layout == .token_major_legacy);
+        std.debug.assert(self.q8_layout == .token_major);
         return self.value_scales_q8[0 .. self.len * self.scaleGroupsPerToken()];
     }
 
@@ -249,7 +249,7 @@ pub const LayerKVCache = struct {
 
     fn appendQ8(self: *LayerKVCache, key: []const f32, value: []const f32) void {
         switch (self.q8_layout) {
-            .token_major_legacy => self.appendQ8TokenMajor(key, value),
+            .token_major => self.appendQ8TokenMajor(key, value),
             .head_major => self.appendQ8HeadMajor(key, value),
             .paged_head_major => self.appendQ8PagedHeadMajor(key, value),
         }
@@ -457,7 +457,7 @@ pub fn estimateBytesWithLayout(
 
 fn q8TotalElements(max_seq_len: usize, num_key_value_heads: usize, head_dim: usize, layout: types.Q8Layout) usize {
     return switch (layout) {
-        .token_major_legacy, .head_major => max_seq_len * num_key_value_heads * head_dim,
+        .token_major, .head_major => max_seq_len * num_key_value_heads * head_dim,
         .paged_head_major => blk: {
             const pages_per_head = std.math.divCeil(usize, max_seq_len, types.q8_page_len) catch unreachable;
             break :blk num_key_value_heads * pages_per_head * types.q8_page_len * head_dim;
@@ -468,7 +468,7 @@ fn q8TotalElements(max_seq_len: usize, num_key_value_heads: usize, head_dim: usi
 fn q8TotalScaleGroups(max_seq_len: usize, num_key_value_heads: usize, head_dim: usize, layout: types.Q8Layout) usize {
     const scale_groups_per_head = std.math.divCeil(usize, head_dim, types.q8_group_size) catch unreachable;
     return switch (layout) {
-        .token_major_legacy, .head_major => max_seq_len * num_key_value_heads * scale_groups_per_head,
+        .token_major, .head_major => max_seq_len * num_key_value_heads * scale_groups_per_head,
         .paged_head_major => blk: {
             const pages_per_head = std.math.divCeil(usize, max_seq_len, types.q8_page_len) catch unreachable;
             break :blk num_key_value_heads * pages_per_head * types.q8_page_len * scale_groups_per_head;

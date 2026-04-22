@@ -555,12 +555,12 @@ test "prepared execution can request native text execution output" {
     defer result.deinit(std.testing.allocator);
 
     try std.testing.expectEqual(runtime_types.ExecutionPath.native, prepared.runtime_plan.path);
-    try std.testing.expectEqual(runtime_types.ExecutionOrigin.native_single_bridge, result.origin);
+    try std.testing.expectEqual(runtime_types.ExecutionOrigin.native_single, result.origin);
     try std.testing.expectEqual(runtime_types.ExecutionNote.text_native_qwen_single, result.note);
-    try std.testing.expectEqualStrings("stub-native-single", result.output.text);
+    try std.testing.expectEqualStrings("test-native-single", result.output.text);
 }
 
-test "prepared batch execution groups compatible text requests in the unified planner" {
+test "prepared batch execution groups batchable text requests in the unified planner" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -634,10 +634,10 @@ test "execution context reuses one opened runtime handle across multiple text re
     });
     defer second.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(runtime_types.ExecutionOrigin.native_single_bridge, first.origin);
-    try std.testing.expectEqual(runtime_types.ExecutionOrigin.native_single_bridge, second.origin);
-    try std.testing.expectEqualStrings("stub-native-single", first.output.text);
-    try std.testing.expectEqualStrings("stub-native-single", second.output.text);
+    try std.testing.expectEqual(runtime_types.ExecutionOrigin.native_single, first.origin);
+    try std.testing.expectEqual(runtime_types.ExecutionOrigin.native_single, second.origin);
+    try std.testing.expectEqualStrings("test-native-single", first.output.text);
+    try std.testing.expectEqualStrings("test-native-single", second.output.text);
 }
 
 test "ocr input inference maps pdf paths to document payloads" {

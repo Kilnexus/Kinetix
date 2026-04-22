@@ -18,6 +18,6 @@ pub const estimateBytesWithLayout = shared_cache.estimateBytesWithLayout;
 pub const quantizeQ8Slice = shared_quantize.quantizeQ8Slice;
 pub const scaleGroupsPerToken = shared_quantize.scaleGroupsPerToken;
 
-test "bridge preserves default q8 layout" {
+test "runtime preserves default q8 layout" {
     try std.testing.expectEqual(default_q8_layout, types.default_q8_layout);
 }

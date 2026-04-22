@@ -42,14 +42,13 @@ fn executeQwen3(
     handle: *const handle_mod.ModelHandle,
     request: types.RuntimeRequest,
 ) !types.RuntimeResult {
-    var legacy_result = try text_shared.executeLegacySingle(
+    return try text_shared.executeQwenSingle(
         allocator,
         handle.normalized.artifacts.model_dir,
         .auto,
         handle.normalized.descriptor.id,
         buildTaskRequest(handle, request),
     );
-    return text_shared.adoptRuntimeResult(&legacy_result);
 }
 
 fn executeQwen3Batch(
@@ -64,14 +63,13 @@ fn executeQwen3Batch(
         slot.* = buildTaskRequest(handle, request);
     }
 
-    const legacy_results = try text_shared.executeLegacyBatch(
+    return try text_shared.executeQwenBatch(
         allocator,
         handle.normalized.artifacts.model_dir,
         .auto,
         handle.normalized.descriptor.id,
         task_requests,
     );
-    return try text_shared.adoptRuntimeBatchResults(allocator, legacy_results);
 }
 
 fn executeYoloVision(

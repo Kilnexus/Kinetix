@@ -5,7 +5,7 @@ const spec = vision_base.spec;
 const utils = vision_base.utils;
 const weights_mod = @import("weights");
 const detect_types = @import("types.zig");
-const env_compat = @import("engine_env_compat");
+const env = @import("engine_env");
 
 const BranchPlan = detect_types.BranchPlan;
 const ConvPlan = detect_types.ConvPlan;
@@ -49,15 +49,15 @@ pub fn buildDetectBranchPlans(
 }
 
 fn shouldForceGenericDetectBranch(branch_path: []const u8) bool {
-    const force_all = env_compat.getOwned(std.heap.page_allocator, "KINETIX_DETECT_FORCE_GENERIC_BRANCH") catch "";
+    const force_all = env.getOwned(std.heap.page_allocator, "KINETIX_DETECT_FORCE_GENERIC_BRANCH") catch "";
     defer if (force_all.len != 0) std.heap.page_allocator.free(force_all);
     if (force_all.len != 0 and !std.mem.eql(u8, force_all, "0")) return true;
 
-    const force_cv2 = env_compat.getOwned(std.heap.page_allocator, "KINETIX_DETECT_FORCE_GENERIC_CV2") catch "";
+    const force_cv2 = env.getOwned(std.heap.page_allocator, "KINETIX_DETECT_FORCE_GENERIC_CV2") catch "";
     defer if (force_cv2.len != 0) std.heap.page_allocator.free(force_cv2);
     if (force_cv2.len != 0 and !std.mem.eql(u8, force_cv2, "0") and std.mem.indexOf(u8, branch_path, "cv2") != null) return true;
 
-    const force_cv3 = env_compat.getOwned(std.heap.page_allocator, "KINETIX_DETECT_FORCE_GENERIC_CV3") catch "";
+    const force_cv3 = env.getOwned(std.heap.page_allocator, "KINETIX_DETECT_FORCE_GENERIC_CV3") catch "";
     defer if (force_cv3.len != 0) std.heap.page_allocator.free(force_cv3);
     if (force_cv3.len != 0 and !std.mem.eql(u8, force_cv3, "0") and std.mem.indexOf(u8, branch_path, "cv3") != null) return true;
 
@@ -122,7 +122,7 @@ fn cv3DepthwisePlanSupportsFast(module: *const graph.ModuleNode) bool {
 }
 
 fn detectFastEnabled() bool {
-    const value = env_compat.getOwned(std.heap.page_allocator, "KINETIX_DISABLE_DETECT_FAST") catch return true;
+    const value = env.getOwned(std.heap.page_allocator, "KINETIX_DISABLE_DETECT_FAST") catch return true;
     defer std.heap.page_allocator.free(value);
     return value.len == 0 or std.mem.eql(u8, value, "0");
 }

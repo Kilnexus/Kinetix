@@ -8,9 +8,9 @@ pub fn build(b: *std.Build) void {
         "local_pixio",
         "Use local lib/Pixio checkout for development instead of the pinned remote Pixio dependency",
     ) orelse true;
-    const legacy_imports = addLegacyImports(b, target, optimize, local_pixio);
+    const runtime_imports = addRuntimeImports(b, target, optimize, local_pixio);
 
-    const kinetix_module = createRootModule(b, target, optimize, legacy_imports, "sdk/kinetix.zig");
+    const kinetix_module = createRootModule(b, target, optimize, runtime_imports, "sdk/kinetix.zig");
 
     const kinetix_lib = b.addLibrary(.{
         .name = "kinetix",
@@ -21,7 +21,7 @@ pub fn build(b: *std.Build) void {
 
     const cli_exe = b.addExecutable(.{
         .name = "kinetix",
-        .root_module = createRootModule(b, target, optimize, legacy_imports, "apps/cli/entry.zig"),
+        .root_module = createRootModule(b, target, optimize, runtime_imports, "apps/cli/entry.zig"),
     });
     b.installArtifact(cli_exe);
 
@@ -32,14 +32,14 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the Kinetix CLI");
     run_step.dependOn(&run_cmd.step);
 
-    const unit_tests = b.addTest(.{ .root_module = createRootModule(b, target, optimize, legacy_imports, "sdk/kinetix.zig") });
+    const unit_tests = b.addTest(.{ .root_module = createRootModule(b, target, optimize, runtime_imports, "sdk/kinetix.zig") });
 
     const run_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run Kinetix engine tests");
     test_step.dependOn(&run_tests.step);
 }
 
-const LegacyImports = struct {
+const RuntimeImports = struct {
     engine_root: *std.Build.Module,
     sdk_execution: *std.Build.Module,
     kinetix_sdk: *std.Build.Module,
@@ -53,17 +53,17 @@ const LegacyImports = struct {
     tensor: *std.Build.Module,
     ops: *std.Build.Module,
     weights: *std.Build.Module,
-    env_compat: *std.Build.Module,
+    env: *std.Build.Module,
     stopwatch: *std.Build.Module,
     runtime: *std.Build.Module,
-    legacy_vision: *std.Build.Module,
+    vision_preprocess: *std.Build.Module,
 };
 
 fn createRootModule(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    imports: LegacyImports,
+    imports: RuntimeImports,
     root_source_file: []const u8,
 ) *std.Build.Module {
     const module = b.createModule(.{
@@ -75,12 +75,12 @@ fn createRootModule(
     return module;
 }
 
-fn addLegacyImports(
+fn addRuntimeImports(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     local_pixio: bool,
-) LegacyImports {
+) RuntimeImports {
     const engine_root = b.createModule(.{
         .root_source_file = b.path("engine/kinetix.zig"),
         .target = target,
@@ -140,8 +140,8 @@ fn addLegacyImports(
         .optimize = optimize,
     });
     weights.addImport("graph", graph);
-    const env_compat = b.createModule(.{
-        .root_source_file = b.path("engine/core/env_compat.zig"),
+    const env = b.createModule(.{
+        .root_source_file = b.path("engine/core/env.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -150,7 +150,7 @@ fn addLegacyImports(
         .target = target,
         .optimize = optimize,
     });
-    ops.addImport("engine_env_compat", env_compat);
+    ops.addImport("engine_env", env);
     const engine_vision_modules = b.createModule(.{
         .root_source_file = b.path("engine/runtime/vision/modules/modules.zig"),
         .target = target,
@@ -160,7 +160,7 @@ fn addLegacyImports(
     engine_vision_modules.addImport("weights", weights);
     engine_vision_modules.addImport("ops", ops);
     engine_vision_modules.addImport("tensor", tensor);
-    engine_vision_modules.addImport("engine_env_compat", env_compat);
+    engine_vision_modules.addImport("engine_env", env);
     engine_vision_modules.addImport("engine_vision_base", engine_vision_base);
     engine_vision_modules.addImport("engine_stopwatch", stopwatch);
     const engine_vision_reuse_allocator = b.createModule(.{
@@ -196,13 +196,13 @@ fn addLegacyImports(
     runtime.addImport("engine_vision_modules", engine_vision_modules);
     runtime.addImport("engine_vision_engine", engine_vision_engine);
 
-    const legacy_vision = b.createModule(.{
+    const vision_preprocess = b.createModule(.{
         .root_source_file = b.path("engine/runtime/vision/io/preprocess.zig"),
         .target = target,
         .optimize = optimize,
     });
-    legacy_vision.addImport("Pixio", pixio);
-    legacy_vision.addImport("runtime", runtime);
+    vision_preprocess.addImport("Pixio", pixio);
+    vision_preprocess.addImport("runtime", runtime);
 
     engine_root.addImport("graph", graph);
     engine_root.addImport("engine_vision_inspect", engine_vision_inspect);
@@ -213,10 +213,10 @@ fn addLegacyImports(
     engine_root.addImport("tensor", tensor);
     engine_root.addImport("ops", ops);
     engine_root.addImport("weights", weights);
-    engine_root.addImport("engine_env_compat", env_compat);
+    engine_root.addImport("engine_env", env);
     engine_root.addImport("engine_stopwatch", stopwatch);
     engine_root.addImport("runtime", runtime);
-    engine_root.addImport("vision", legacy_vision);
+    engine_root.addImport("vision", vision_preprocess);
 
     return .{
         .engine_root = engine_root,
@@ -232,10 +232,10 @@ fn addLegacyImports(
         .tensor = tensor,
         .ops = ops,
         .weights = weights,
-        .env_compat = env_compat,
+        .env = env,
         .stopwatch = stopwatch,
         .runtime = runtime,
-        .legacy_vision = legacy_vision,
+        .vision_preprocess = vision_preprocess,
     };
 }
 
@@ -260,7 +260,7 @@ fn resolvePixioModule(
     return pixio_dep.module("Pixio");
 }
 
-fn addImportsToRoot(root: *std.Build.Module, imports: LegacyImports) void {
+fn addImportsToRoot(root: *std.Build.Module, imports: RuntimeImports) void {
     root.addImport("engine_root", imports.engine_root);
     root.addImport("sdk_execution", imports.sdk_execution);
     root.addImport("kinetix_sdk", imports.kinetix_sdk);
@@ -274,8 +274,8 @@ fn addImportsToRoot(root: *std.Build.Module, imports: LegacyImports) void {
     root.addImport("tensor", imports.tensor);
     root.addImport("ops", imports.ops);
     root.addImport("weights", imports.weights);
-    root.addImport("engine_env_compat", imports.env_compat);
+    root.addImport("engine_env", imports.env);
     root.addImport("engine_stopwatch", imports.stopwatch);
     root.addImport("runtime", imports.runtime);
-    root.addImport("vision", imports.legacy_vision);
+    root.addImport("vision", imports.vision_preprocess);
 }

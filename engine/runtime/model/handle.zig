@@ -1,5 +1,5 @@
 const std = @import("std");
-const normalized = @import("../compat/normalized_model.zig");
+const normalized = @import("resolver/normalized_model.zig");
 
 pub const ModelHandle = struct {
     allocator: std.mem.Allocator,

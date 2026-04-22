@@ -1,5 +1,5 @@
 const std = @import("std");
-const compat = @import("../compat/compat.zig");
+const resolver = @import("../model/resolver/resolver.zig");
 const executor_mod = @import("../executor/executor.zig");
 const handle_mod = @import("../model/handle.zig");
 const planner_mod = @import("../planner/planner.zig");
@@ -21,8 +21,8 @@ pub const RuntimeSession = struct {
         self.* = undefined;
     }
 
-    pub fn normalizeModel(self: *const RuntimeSession, request: OpenModelRequest) !compat.NormalizedModel {
-        return try compat.normalizeModel(self.allocator, request.model_dir, request.preferred_weights);
+    pub fn normalizeModel(self: *const RuntimeSession, request: OpenModelRequest) !resolver.NormalizedModel {
+        return try resolver.normalizeModel(self.allocator, request.model_dir, request.preferred_weights);
     }
 
     pub fn openModel(self: *const RuntimeSession, request: OpenModelRequest) !handle_mod.ModelHandle {
@@ -53,7 +53,7 @@ pub const RuntimeSession = struct {
     }
 };
 
-test "runtime session opens normalized models through the unified compatibility entrypoint" {
+test "runtime session opens normalized models through the unified resolver entrypoint" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -104,9 +104,9 @@ test "runtime session can execute qwen3 requests through the unified executor" {
     var result = try session.execute(&handle, &plan);
     defer result.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(types.ExecutionOrigin.native_single_bridge, result.origin);
+    try std.testing.expectEqual(types.ExecutionOrigin.native_single, result.origin);
     try std.testing.expectEqualStrings("text_native_qwen_single", result.note);
-    try std.testing.expectEqualStrings("stub-native-single", result.output.text);
+    try std.testing.expectEqualStrings("test-native-single", result.output.text);
 }
 
 test "runtime session can execute qwen3 batch requests through the unified executor" {
@@ -146,7 +146,7 @@ test "runtime session can execute qwen3 batch requests through the unified execu
     defer results.deinit();
 
     try std.testing.expectEqual(@as(usize, 2), results.items.len);
-    try std.testing.expectEqual(types.ExecutionOrigin.native_batch_bridge, results.items[0].origin);
+    try std.testing.expectEqual(types.ExecutionOrigin.native_batch, results.items[0].origin);
     try std.testing.expectEqualStrings("text_native_qwen_batch", results.items[0].note);
 }
 
@@ -325,7 +325,7 @@ test "runtime session can batch swiftocr requests through the unified executor" 
     try std.testing.expectEqualStrings("ocr_shared_infer", results.items[1].note);
 }
 
-test "runtime session reports native chandra readiness without external bridge" {
+test "runtime session reports native chandra readiness without external runtime" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 

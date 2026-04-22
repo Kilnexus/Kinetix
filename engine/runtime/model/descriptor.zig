@@ -1,1 +1,1 @@
-pub const RuntimeModelDescriptor = @import("../compat/normalized_model.zig").RuntimeModelDescriptor;
+pub const RuntimeModelDescriptor = @import("resolver/normalized_model.zig").RuntimeModelDescriptor;

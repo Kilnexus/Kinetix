@@ -4,7 +4,7 @@ const task = @import("../../../../core/task.zig");
 const qwen_native = @import("qwen_native.zig");
 const types = @import("../../../types.zig");
 
-pub const NativeBatchBridge = struct {
+pub const NativeQwenRuntime = struct {
     pub fn executeQwenSingle(
         allocator: std.mem.Allocator,
         model_dir: []const u8,
@@ -58,7 +58,7 @@ pub fn canUseNativeQwenBatch(is_qwen3: bool, requests: []const task.TaskRequest)
 
 pub fn executeSingle(
     allocator: std.mem.Allocator,
-    bridge: type,
+    runtime_impl: type,
     model_dir: []const u8,
     preferred_weights: backend.WeightScheme,
     submission: types.Submission,
@@ -66,7 +66,7 @@ pub fn executeSingle(
 ) !types.ExecutionResult {
     const use_native = canUseNativeQwenSingle(true, request);
     const output = if (use_native)
-        types.OutputPayload{ .text = try bridge.executeQwenSingle(
+        types.OutputPayload{ .text = try runtime_impl.executeQwenSingle(
             allocator,
             model_dir,
             preferred_weights,
@@ -77,7 +77,7 @@ pub fn executeSingle(
 
     return .{
         .submission = submission,
-        .origin = if (use_native) .native_single_bridge else .shared_adapter,
+        .origin = if (use_native) .native_single else .shared_adapter,
         .note = if (use_native) .text_native_qwen_single else .text_request_ready,
         .output = output,
     };
@@ -85,18 +85,18 @@ pub fn executeSingle(
 
 pub fn executeBatch(
     allocator: std.mem.Allocator,
-    bridge: type,
+    runtime_impl: type,
     model_dir: []const u8,
     preferred_weights: backend.WeightScheme,
     adapter_id: []const u8,
     requests: []const task.TaskRequest,
 ) ![]types.ExecutionResult {
     const use_native = canUseNativeQwenBatch(true, requests);
-    var native_output: ?bridge.NativeBatchOutput = null;
+    var native_output: ?runtime_impl.NativeBatchOutput = null;
     defer if (native_output) |*output| output.deinit(allocator);
 
     if (use_native) {
-        native_output = try bridge.executeQwenBatch(
+        native_output = try runtime_impl.executeQwenBatch(
             allocator,
             model_dir,
             preferred_weights,
@@ -114,7 +114,7 @@ pub fn executeBatch(
                 .accepted = true,
                 .execution = request.spec.execution,
             },
-            .origin = if (use_native) .native_batch_bridge else .shared_adapter,
+            .origin = if (use_native) .native_batch else .shared_adapter,
             .note = if (use_native) .text_native_qwen_batch else .text_request_ready,
             .output = if (use_native)
                 .{ .text = try allocator.dupe(u8, native_output.?.texts[index]) }

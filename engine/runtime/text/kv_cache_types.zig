@@ -24,13 +24,13 @@ pub fn resolveScheme(cache_scheme: Scheme, backend_name: []const u8) Scheme {
 pub const q8_group_size: usize = 16;
 
 pub const Q8Layout = enum {
-    token_major_legacy,
+    token_major,
     head_major,
     paged_head_major,
 
     pub fn name(self: Q8Layout) []const u8 {
         return switch (self) {
-            .token_major_legacy => "token_major_legacy",
+            .token_major => "token_major",
             .head_major => "head_major",
             .paged_head_major => "paged_head_major",
         };

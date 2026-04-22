@@ -1,1 +1,1 @@
-pub const RuntimeCapabilitySet = @import("../compat/normalized_model.zig").RuntimeCapabilitySet;
+pub const RuntimeCapabilitySet = @import("resolver/normalized_model.zig").RuntimeCapabilitySet;

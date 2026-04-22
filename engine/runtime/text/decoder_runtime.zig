@@ -18,7 +18,7 @@ pub fn initRuntime(
     return try Runtime.init(allocator, model_dir, scheme, thread_count);
 }
 
-test "bridge maps backend schemes without loss" {
+test "runtime maps backend schemes without loss" {
     try std.testing.expectEqual(backend_scheme.Scheme.q8, schemeIdentity(.q8));
     try std.testing.expectEqual(backend_scheme.Scheme.bf16, schemeIdentity(.bf16));
 }

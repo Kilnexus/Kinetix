@@ -337,20 +337,20 @@ fn buildCachedDetectPlan(
     ));
     if (nl > max_detect_branch_levels) return error.InvalidAttributeType;
 
-    const legacy_reg_branch = plan.findDirectChildNamed(module, "cv2");
-    const legacy_cls_branch = plan.findDirectChildNamed(module, "cv3");
+    const nms_reg_branch = plan.findDirectChildNamed(module, "cv2");
+    const nms_cls_branch = plan.findDirectChildNamed(module, "cv3");
     const one2one_reg_branch = plan.findDirectChildNamed(module, "one2one_cv2");
     const one2one_cls_branch = plan.findDirectChildNamed(module, "one2one_cv3");
 
-    const postprocess_mode: DetectPostprocessMode = if (legacy_reg_branch != null and legacy_cls_branch != null)
+    const postprocess_mode: DetectPostprocessMode = if (nms_reg_branch != null and nms_cls_branch != null)
         .nms
     else if (one2one_reg_branch != null and one2one_cls_branch != null)
         .one2one_topk
     else
         return error.ModuleNotFound;
 
-    const reg_branch = if (postprocess_mode == .nms) legacy_reg_branch.? else one2one_reg_branch.?;
-    const cls_branch = if (postprocess_mode == .nms) legacy_cls_branch.? else one2one_cls_branch.?;
+    const reg_branch = if (postprocess_mode == .nms) nms_reg_branch.? else one2one_reg_branch.?;
+    const cls_branch = if (postprocess_mode == .nms) nms_cls_branch.? else one2one_cls_branch.?;
     var cached = CachedDetectPlan{
         .nl = nl,
         .nc = nc,

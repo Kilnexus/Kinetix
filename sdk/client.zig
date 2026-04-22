@@ -941,9 +941,9 @@ test "client generateText returns typed result for qwen3 native execution" {
     defer result.deinit(std.testing.allocator);
 
     try std.testing.expectEqualStrings("qwen3", result.model_family);
-    try std.testing.expectEqual(runtime_types.ExecutionOrigin.native_single_bridge, result.origin);
+    try std.testing.expectEqual(runtime_types.ExecutionOrigin.native_single, result.origin);
     try std.testing.expectEqual(runtime_types.ExecutionNote.text_native_qwen_single, result.note);
-    try std.testing.expectEqualStrings("stub-native-single", result.text);
+    try std.testing.expectEqualStrings("test-native-single", result.text);
 }
 
 test "client detect returns typed detection result" {
@@ -983,12 +983,12 @@ test "client detect returns typed detection result" {
     try std.testing.expectEqual(@as(usize, 1), result.detections[0].class_id);
 }
 
-test "client detect smoke test runs compat yolo11n on bundled bus image" {
-    std.Io.Dir.cwd().access(io, "models/vision/compat_yolo11n/graph.json", .{}) catch return error.SkipZigTest;
-    std.Io.Dir.cwd().access(io, "models/vision/compat_yolo11n/weights.bin", .{}) catch return error.SkipZigTest;
+test "client detect smoke test runs official yolo26n on bundled bus image" {
+    std.Io.Dir.cwd().access(io, "models/vision/official_yolo26n/graph.json", .{}) catch return error.SkipZigTest;
+    std.Io.Dir.cwd().access(io, "models/vision/official_yolo26n/weights.bin", .{}) catch return error.SkipZigTest;
     std.Io.Dir.cwd().access(io, "testdata/vision/bus.jpg", .{}) catch return error.SkipZigTest;
 
-    const model_dir = try std.Io.Dir.cwd().realPathFileAlloc(io, "models/vision/compat_yolo11n", std.testing.allocator);
+    const model_dir = try std.Io.Dir.cwd().realPathFileAlloc(io, "models/vision/official_yolo26n", std.testing.allocator);
     defer std.testing.allocator.free(model_dir);
     const image_path = try std.Io.Dir.cwd().realPathFileAlloc(io, "testdata/vision/bus.jpg", std.testing.allocator);
     defer std.testing.allocator.free(image_path);
@@ -1052,8 +1052,8 @@ test "client generateTextBatch returns batched typed generation when unified run
 
     try std.testing.expect(result.used_batching);
     try std.testing.expectEqual(@as(usize, 2), result.items.len);
-    try std.testing.expectEqualStrings("stub-native-batch", result.items[0].text);
-    try std.testing.expectEqualStrings("stub-native-batch", result.items[1].text);
+    try std.testing.expectEqualStrings("test-native-batch", result.items[0].text);
+    try std.testing.expectEqualStrings("test-native-batch", result.items[1].text);
 }
 
 test "client openTextModel exposes operation-specific methods without operation strings" {
@@ -1076,14 +1076,14 @@ test "client openTextModel exposes operation-specific methods without operation 
         .max_tokens = 8,
     });
     defer generate_result.deinit(std.testing.allocator);
-    try std.testing.expectEqualStrings("stub-native-single", generate_result.text);
+    try std.testing.expectEqualStrings("test-native-single", generate_result.text);
 
     var chat_result = try model.chat("hello", .{
         .native_exec = true,
         .max_tokens = 8,
     });
     defer chat_result.deinit(std.testing.allocator);
-    try std.testing.expectEqualStrings("stub-native-single", chat_result.text);
+    try std.testing.expectEqualStrings("test-native-single", chat_result.text);
 }
 
 test "client openModel auto-detects text models" {

@@ -143,7 +143,7 @@ pub const LayerWeights = struct {
                 workspace.scores[0..cache.len],
             ),
             .q8 => switch (cache.q8_layout) {
-                .token_major_legacy => try gqa_attention.forwardProjectedSingleTokenQ8Cache(
+                .token_major => try gqa_attention.forwardProjectedSingleTokenQ8Cache(
                     self.spec.attentionSpec(),
                     workspace.attn_flat,
                     workspace.q_proj,

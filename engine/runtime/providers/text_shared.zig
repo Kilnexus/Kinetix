@@ -5,7 +5,7 @@ const task = @import("../../core/task.zig");
 const text_runtime = @import("../text/text.zig");
 const types = @import("../types.zig");
 
-pub const NativeBridge = if (builtin.is_test) struct {
+pub const NativeRuntimeBinding = if (builtin.is_test) struct {
     pub fn executeQwenSingle(
         allocator: std.mem.Allocator,
         model_dir: []const u8,
@@ -15,7 +15,7 @@ pub const NativeBridge = if (builtin.is_test) struct {
         _ = model_dir;
         _ = preferred_weights;
         _ = request;
-        return try allocator.dupe(u8, "stub-native-single");
+        return try allocator.dupe(u8, "test-native-single");
     }
 
     pub const NativeBatchOutput = struct {
@@ -46,7 +46,7 @@ pub const NativeBridge = if (builtin.is_test) struct {
             for (texts[0..initialized]) |text| allocator.free(text);
         }
         for (texts) |*text| {
-            text.* = try allocator.dupe(u8, "stub-native-batch");
+            text.* = try allocator.dupe(u8, "test-native-batch");
             initialized += 1;
         }
         return .{
@@ -55,7 +55,7 @@ pub const NativeBridge = if (builtin.is_test) struct {
             .finished_requests = requests.len,
         };
     }
-} else text_runtime.native_dispatch.NativeBatchBridge;
+} else text_runtime.native_dispatch.NativeQwenRuntime;
 
 pub fn buildSubmission(adapter_id: []const u8, execution: task.ExecutionMode) types.Submission {
     return .{
@@ -87,60 +87,62 @@ pub fn buildReadyBatchResults(
     return results;
 }
 
-pub fn executeLegacySingle(
+pub fn executeQwenSingle(
     allocator: std.mem.Allocator,
     model_dir: []const u8,
     preferred_weights: backend.WeightScheme,
     adapter_id: []const u8,
     request: task.TaskRequest,
-) !types.ExecutionResult {
-    return try text_runtime.native_dispatch.executeSingle(
+) !types.RuntimeResult {
+    var execution_result = try text_runtime.native_dispatch.executeSingle(
         allocator,
-        NativeBridge,
+        NativeRuntimeBinding,
         model_dir,
         preferred_weights,
         buildSubmission(adapter_id, request.spec.execution),
         request,
     );
+    return runtimeResultFromExecution(&execution_result);
 }
 
-pub fn executeLegacyBatch(
+pub fn executeQwenBatch(
     allocator: std.mem.Allocator,
     model_dir: []const u8,
     preferred_weights: backend.WeightScheme,
     adapter_id: []const u8,
     requests: []const task.TaskRequest,
-) ![]types.ExecutionResult {
-    return try text_runtime.native_dispatch.executeBatch(
+) !types.RuntimeBatchResults {
+    const execution_results = try text_runtime.native_dispatch.executeBatch(
         allocator,
-        NativeBridge,
+        NativeRuntimeBinding,
         model_dir,
         preferred_weights,
         adapter_id,
         requests,
     );
+    return try runtimeBatchResultsFromExecution(allocator, execution_results);
 }
 
-pub fn adoptRuntimeResult(legacy_result: *types.ExecutionResult) types.RuntimeResult {
-    const output = legacy_result.output;
-    legacy_result.output = .none;
+pub fn runtimeResultFromExecution(execution_result: *types.ExecutionResult) types.RuntimeResult {
+    const output = execution_result.output;
+    execution_result.output = .none;
     return .{
-        .origin = legacy_result.origin,
-        .note = legacy_result.note,
+        .origin = execution_result.origin,
+        .note = execution_result.note,
         .output = output,
     };
 }
 
-pub fn adoptRuntimeBatchResults(
+pub fn runtimeBatchResultsFromExecution(
     allocator: std.mem.Allocator,
-    legacy_results: []types.ExecutionResult,
+    execution_results: []types.ExecutionResult,
 ) !types.RuntimeBatchResults {
-    defer allocator.free(legacy_results);
-    const results = try allocator.alloc(types.RuntimeResult, legacy_results.len);
+    defer allocator.free(execution_results);
+    const results = try allocator.alloc(types.RuntimeResult, execution_results.len);
     errdefer allocator.free(results);
 
-    for (legacy_results, results) |*legacy_result, *result| {
-        result.* = adoptRuntimeResult(legacy_result);
+    for (execution_results, results) |*execution_result, *result| {
+        result.* = runtimeResultFromExecution(execution_result);
     }
 
     return .{

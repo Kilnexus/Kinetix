@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const env_compat = @import("engine_env_compat");
+const env = @import("engine_env");
 const ax_graph = @import("graph");
 const ax_runtime = @import("runtime");
 const ax_vision = @import("vision");
@@ -296,7 +296,7 @@ fn loadEnvUsize(name: []const u8, default: usize) usize {
 }
 
 fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
-    return env_compat.getOwned(allocator, name);
+    return env.getOwned(allocator, name);
 }
 
 fn buildDetectProfileSummary(
@@ -498,7 +498,7 @@ fn buildDetectProfileSummary(
 }
 
 fn loadNodeProfileFilter(allocator: std.mem.Allocator) !?[][]const u8 {
-    const raw = env_compat.getOwned(allocator, "KINETIX_VISION_PROFILE_NODES") catch return null;
+    const raw = getEnvVarOwned(allocator, "KINETIX_VISION_PROFILE_NODES") catch return null;
     defer allocator.free(raw);
 
     var parts: std.ArrayListUnmanaged([]const u8) = .empty;

@@ -49,8 +49,8 @@ pub const OutputPayload = union(enum) {
 
 pub const ExecutionOrigin = enum {
     shared_adapter,
-    native_single_bridge,
-    native_batch_bridge,
+    native_single,
+    native_batch,
 };
 
 pub const ExecutionNote = enum {
@@ -127,21 +127,21 @@ pub const NormalizedFormat = enum {
     generic,
 };
 
-pub const CompatibilityStatus = enum {
+pub const RuntimeSupportStatus = enum {
     supported,
     degraded,
     unsupported,
 };
 
-pub const CompatibilityWarning = enum {
-    legacy_graph_bridge_required,
+pub const RuntimeSupportWarning = enum {
+    graph_runtime_adapter_required,
     native_batch_unavailable,
     document_input_partial,
 };
 
-pub const CompatibilityRewrite = enum {
+pub const RuntimeSupportRewrite = enum {
     quantized_weights_selected,
-    legacy_graph_schema_accepted,
+    graph_schema_accepted,
     ocr_single_file_bundle,
 };
 
