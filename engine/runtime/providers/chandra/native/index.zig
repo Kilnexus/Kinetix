@@ -32,6 +32,10 @@ pub const loadPreparedInputFromManifest = input.loadPreparedInputFromManifest;
 
 pub const execute = execute_mod.execute;
 pub const executeWithLoadedModel = execute_mod.executeWithLoadedModel;
+pub const MaterializedOutput = execute_mod.MaterializedOutput;
+pub const NativeExecutionResult = execute_mod.NativeExecutionResult;
+pub const executeDetailed = execute_mod.executeDetailed;
+pub const executeDetailedWithLoadedModel = execute_mod.executeDetailedWithLoadedModel;
 
 test {
     _ = @import("testing/native_test.zig");

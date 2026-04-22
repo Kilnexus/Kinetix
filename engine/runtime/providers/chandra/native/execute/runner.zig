@@ -11,6 +11,51 @@ const text_backend_scheme = @import("../../../../text/backend_scheme.zig");
 const kv_cache = @import("../../../../text/kv_cache.zig");
 const streaming = @import("../../../../text/streaming.zig");
 
+pub const MaterializedOutput = union(enum) {
+    text: []u8,
+    json: []u8,
+
+    pub fn deinit(self: *MaterializedOutput, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .text => |value| allocator.free(value),
+            .json => |value| allocator.free(value),
+        }
+        self.* = undefined;
+    }
+};
+
+pub const NativeExecutionResult = struct {
+    readiness: core.Readiness,
+    summary: ?core.PreprocessSummary = null,
+
+    pub fn deinit(self: *NativeExecutionResult, allocator: std.mem.Allocator) void {
+        if (self.summary) |*value| value.deinit(allocator);
+        self.* = undefined;
+    }
+
+    pub fn materializeOutput(
+        self: *const NativeExecutionResult,
+        allocator: std.mem.Allocator,
+        operation: []const u8,
+    ) !?MaterializedOutput {
+        const summary = self.summary orelse return null;
+        const generated = summary.generated_output orelse return null;
+
+        if (std.mem.eql(u8, operation, "render-json")) {
+            return .{ .json = try allocator.dupe(u8, generated) };
+        }
+        return .{ .text = try allocator.dupe(u8, generated) };
+    }
+
+    pub fn toJsonAlloc(
+        self: *const NativeExecutionResult,
+        allocator: std.mem.Allocator,
+        context: core.Context,
+    ) ![]u8 {
+        return try buildOutputJson(allocator, context, self.readiness, self.summary);
+    }
+};
+
 const ExecutionResources = struct {
     allocator: std.mem.Allocator,
     image_processor: ?*const preprocess.ParsedImageProcessorConfig = null,
@@ -64,9 +109,11 @@ const ExecutionResources = struct {
 };
 
 pub fn execute(allocator: std.mem.Allocator, context: core.Context) ![]u8 {
-    return try executeWithLoadedModel(allocator, context, .{
+    var result = try executeDetailedWithLoadedModel(allocator, context, .{
         .readiness = core.inspect(context.model_path),
     });
+    defer result.deinit(allocator);
+    return try result.toJsonAlloc(allocator, context);
 }
 
 pub fn executeWithLoadedModel(
@@ -74,10 +121,29 @@ pub fn executeWithLoadedModel(
     context: core.Context,
     loaded_model: core.LoadedModel,
 ) ![]u8 {
+    var result = try executeDetailedWithLoadedModel(allocator, context, loaded_model);
+    defer result.deinit(allocator);
+    return try result.toJsonAlloc(allocator, context);
+}
+
+pub fn executeDetailed(
+    allocator: std.mem.Allocator,
+    context: core.Context,
+) !NativeExecutionResult {
+    return try executeDetailedWithLoadedModel(allocator, context, .{
+        .readiness = core.inspect(context.model_path),
+    });
+}
+
+pub fn executeDetailedWithLoadedModel(
+    allocator: std.mem.Allocator,
+    context: core.Context,
+    loaded_model: core.LoadedModel,
+) !NativeExecutionResult {
     if (context.execution != .sync) return error.UnsupportedExecutionMode;
 
     var summary: ?core.PreprocessSummary = null;
-    defer if (summary) |*value| value.deinit(allocator);
+    errdefer if (summary) |*value| value.deinit(allocator);
 
     if (loaded_model.readiness.has_image_processor_config and input.isSupportedInputPath(context.input_path)) {
         var resources = try ExecutionResources.init(allocator, context, loaded_model);
@@ -100,7 +166,10 @@ pub fn executeWithLoadedModel(
         );
     }
 
-    return try buildIncompleteOutputJson(allocator, context, loaded_model.readiness, summary);
+    return .{
+        .readiness = loaded_model.readiness,
+        .summary = summary,
+    };
 }
 
 fn initSummary(prepared: *const preprocess.PreparedImageInput, vision_block_depth: usize) core.PreprocessSummary {
@@ -382,7 +451,7 @@ fn trimDecodedOutput(
     return try allocator.dupe(u8, text);
 }
 
-fn buildIncompleteOutputJson(
+fn buildOutputJson(
     allocator: std.mem.Allocator,
     context: core.Context,
     readiness: core.Readiness,

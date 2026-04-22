@@ -89,119 +89,40 @@ fn execute(
         .max_output_tokens = request.generation.max_tokens,
     };
     const maybe_state = stateFromHandle(handle);
-    const output = if (maybe_state) |state|
-        try chandra_native.executeWithLoadedModel(allocator, context, .{
+    var native_result = if (maybe_state) |state|
+        try chandra_native.executeDetailedWithLoadedModel(allocator, context, .{
             .readiness = state.readiness,
             .parsed_config = if (state.parsed_config) |*config| config else null,
             .image_processor = if (state.image_processor) |*image_processor| image_processor else null,
             .tensor_store = if (state.tensor_store) |*tensor_store| tensor_store else null,
         })
     else
-        try chandra_native.execute(allocator, context);
-    errdefer allocator.free(output);
+        try chandra_native.executeDetailed(allocator, context);
+    defer native_result.deinit(allocator);
 
-    if (try materializeNativeOutput(allocator, request.operation, output)) |materialized| {
-        allocator.free(output);
+    if (try native_result.materializeOutput(allocator, request.operation)) |materialized| {
+        defer {
+            var owned = materialized;
+            owned.deinit(allocator);
+        }
         return .{
             .origin = .native_single,
             .note = .ocr_chandra_native,
-            .output = materialized,
+            .output = switch (materialized) {
+                .text => |value| .{ .text = try allocator.dupe(u8, value) },
+                .json => |value| .{ .json = try allocator.dupe(u8, value) },
+            },
         };
     }
 
     return .{
         .origin = .native_single,
         .note = .ocr_chandra_native,
-        .output = .{ .json = output },
+        .output = .{ .json = try native_result.toJsonAlloc(allocator, context) },
     };
 }
 
 fn stateFromHandle(handle: *const handle_mod.ModelHandle) ?*State {
     const raw = handle.provider_state orelse return null;
     return @ptrCast(@alignCast(raw));
-}
-
-fn materializeNativeOutput(
-    allocator: std.mem.Allocator,
-    operation: []const u8,
-    receipt_json: []const u8,
-) !?types.OutputPayload {
-    const Receipt = struct {
-        content: ?[]const u8 = null,
-        markdown: ?[]const u8 = null,
-        html: ?[]const u8 = null,
-        json_output: ?[]const u8 = null,
-    };
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-
-    const receipt = std.json.parseFromSliceLeaky(Receipt, arena.allocator(), receipt_json, .{
-        .ignore_unknown_fields = true,
-    }) catch return null;
-
-    if (std.mem.eql(u8, operation, "render-markdown")) {
-        if (receipt.markdown) |value| return .{ .text = try allocator.dupe(u8, value) };
-        if (receipt.content) |value| return .{ .text = try allocator.dupe(u8, value) };
-        return null;
-    }
-
-    if (std.mem.eql(u8, operation, "render-html")) {
-        if (receipt.html) |value| return .{ .text = try allocator.dupe(u8, value) };
-        if (receipt.content) |value| return .{ .text = try allocator.dupe(u8, value) };
-        return null;
-    }
-
-    if (std.mem.eql(u8, operation, "render-json")) {
-        if (receipt.json_output) |value| return .{ .json = try allocator.dupe(u8, value) };
-        return null;
-    }
-
-    if (receipt.content) |value| return .{ .text = try allocator.dupe(u8, value) };
-    return null;
-}
-
-test "chandra backend materializes markdown content from native receipt" {
-    const receipt =
-        \\{
-        \\  "status": "ocr_native_text_decoded_partial",
-        \\  "content": "OCR",
-        \\  "markdown": "OCR"
-        \\}
-    ;
-
-    const output = (try materializeNativeOutput(std.testing.allocator, "render-markdown", receipt)) orelse return error.ExpectedTextOutput;
-    defer {
-        var owned = output;
-        owned.deinit(std.testing.allocator);
-    }
-
-    try std.testing.expectEqualStrings("OCR", output.text);
-}
-
-test "chandra backend materializes json content from native receipt" {
-    const receipt =
-        \\{
-        \\  "status": "ocr_native_text_decoded_partial",
-        \\  "json_output": "{\"ok\":true}"
-        \\}
-    ;
-
-    const output = (try materializeNativeOutput(std.testing.allocator, "render-json", receipt)) orelse return error.ExpectedJsonOutput;
-    defer {
-        var owned = output;
-        owned.deinit(std.testing.allocator);
-    }
-
-    try std.testing.expectEqualStrings("{\"ok\":true}", output.json);
-}
-
-test "chandra backend keeps receipt json when native content is absent" {
-    const receipt =
-        \\{
-        \\  "status": "ocr_native_backend_incomplete"
-        \\}
-    ;
-
-    try std.testing.expect((try materializeNativeOutput(std.testing.allocator, "render-markdown", receipt)) == null);
 }

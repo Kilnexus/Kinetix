@@ -30,6 +30,10 @@ pub const loadPreparedInputFromManifest = native.loadPreparedInputFromManifest;
 
 pub const execute = native.execute;
 pub const executeWithLoadedModel = native.executeWithLoadedModel;
+pub const MaterializedOutput = native.MaterializedOutput;
+pub const NativeExecutionResult = native.NativeExecutionResult;
+pub const executeDetailed = native.executeDetailed;
+pub const executeDetailedWithLoadedModel = native.executeDetailedWithLoadedModel;
 
 test {
     _ = @import("chandra/native/testing/native_test.zig");

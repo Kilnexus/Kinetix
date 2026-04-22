@@ -642,6 +642,103 @@ test "native chandra execute decodes content with synthetic tokenizer" {
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"markdown\":\"OCR\"") != null);
 }
 
+test "native chandra detailed execution materializes markdown output" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTmpFile(tmp.dir, "config.json",
+        \\{
+        \\  "model_type": "qwen3_5",
+        \\  "image_token_id": 3,
+        \\  "vision_start_token_id": 1,
+        \\  "vision_end_token_id": 2,
+        \\  "text_config": {
+        \\    "model_type": "qwen3_5_text",
+        \\    "hidden_size": 2,
+        \\    "intermediate_size": 8,
+        \\    "num_hidden_layers": 1,
+        \\    "num_attention_heads": 1,
+        \\    "num_key_value_heads": 1,
+        \\    "head_dim": 2,
+        \\    "vocab_size": 8,
+        \\    "max_position_embeddings": 1024,
+        \\    "rope_parameters": {
+        \\      "full_attention": {
+        \\        "rope_theta": 250000.0
+        \\      },
+        \\      "mrope_section": [1, 0, 0]
+        \\    }
+        \\  },
+        \\  "vision_config": {
+        \\    "model_type": "qwen3_5",
+        \\    "depth": 2,
+        \\    "hidden_size": 2,
+        \\    "intermediate_size": 8,
+        \\    "num_heads": 1,
+        \\    "out_hidden_size": 2,
+        \\    "patch_size": 2,
+        \\    "spatial_merge_size": 1,
+        \\    "temporal_patch_size": 1,
+        \\    "in_channels": 3
+        \\  }
+        \\}
+    );
+    try writeTmpFile(tmp.dir, "preprocessor_config.json",
+        \\{
+        \\  "do_normalize": false,
+        \\  "do_rescale": false,
+        \\  "do_resize": false,
+        \\  "merge_size": 1,
+        \\  "patch_size": 2,
+        \\  "temporal_patch_size": 1,
+        \\  "size": {
+        \\    "longest_edge": 1024,
+        \\    "shortest_edge": 1
+        \\  }
+        \\}
+    );
+    try writeSyntheticRuntimeReadySafetensors(tmp.dir, "model.safetensors");
+    try writeSyntheticTokenizerFiles(tmp.dir);
+
+    var image = try imaging.ImageU8.init(std.testing.allocator, 4, 2, 3);
+    defer image.deinit();
+    for (0..image.width * image.height) |pixel_index| {
+        const value: u8 = @intCast(pixel_index + 1);
+        image.data[pixel_index * 3] = value;
+        image.data[pixel_index * 3 + 1] = 0;
+        image.data[pixel_index * 3 + 2] = 0;
+    }
+    const encoded = try imaging.encodePngAlloc(std.testing.allocator, &image);
+    defer std.testing.allocator.free(encoded);
+    try tmp.dir.writeFile(io, .{ .sub_path = "input.png", .data = encoded });
+
+    const root_path = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root_path);
+    const image_path = try tmp.dir.realPathFileAlloc(io, "input.png", std.testing.allocator);
+    defer std.testing.allocator.free(image_path);
+
+    const context = core.Context{
+        .operation = "render-markdown",
+        .model_path = root_path,
+        .input_path = image_path,
+        .execution = .sync,
+        .max_output_tokens = 1,
+    };
+
+    var result = try exec.executeDetailed(std.testing.allocator, context);
+    defer result.deinit(std.testing.allocator);
+
+    var materialized = (try result.materializeOutput(std.testing.allocator, context.operation)) orelse return error.ExpectedMaterializedOutput;
+    defer materialized.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("OCR", materialized.text);
+
+    const payload = try result.toJsonAlloc(std.testing.allocator, context);
+    defer std.testing.allocator.free(payload);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"status\":\"ocr_native_text_decoded_partial\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"markdown\":\"OCR\"") != null);
+}
+
 fn writeTmpFile(dir: std.Io.Dir, relative_path: []const u8, contents: []const u8) !void {
     var file = try dir.createFile(io, relative_path, .{});
     defer file.close(io);
