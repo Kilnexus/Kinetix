@@ -56,7 +56,6 @@ const LegacyImports = struct {
     fs_compat: *std.Build.Module,
     env_compat: *std.Build.Module,
     stopwatch: *std.Build.Module,
-    global_thread_pool: *std.Build.Module,
     runtime: *std.Build.Module,
     legacy_vision: *std.Build.Module,
 };
@@ -157,12 +156,6 @@ fn addLegacyImports(
         .target = target,
         .optimize = optimize,
     });
-    const global_thread_pool = b.createModule(.{
-        .root_source_file = b.path("engine/core/threading/global_thread_pool_module.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    ops.addImport("engine_global_thread_pool", global_thread_pool);
     ops.addImport("engine_env_compat", env_compat);
     kinetix_sdk.addImport("engine_fs_compat", fs_compat);
     graph.addImport("engine_fs_compat", fs_compat);
@@ -176,7 +169,6 @@ fn addLegacyImports(
     engine_vision_modules.addImport("weights", weights);
     engine_vision_modules.addImport("ops", ops);
     engine_vision_modules.addImport("tensor", tensor);
-    engine_vision_modules.addImport("engine_global_thread_pool", global_thread_pool);
     engine_vision_modules.addImport("engine_env_compat", env_compat);
     engine_vision_modules.addImport("engine_vision_base", engine_vision_base);
     engine_vision_modules.addImport("engine_stopwatch", stopwatch);
@@ -208,7 +200,6 @@ fn addLegacyImports(
     runtime.addImport("tensor", tensor);
     runtime.addImport("ops", ops);
     runtime.addImport("weights", weights);
-    runtime.addImport("engine_global_thread_pool", global_thread_pool);
     runtime.addImport("engine_vision_inspect", engine_vision_inspect);
     runtime.addImport("engine_vision_base", engine_vision_base);
     runtime.addImport("engine_vision_modules", engine_vision_modules);
@@ -234,7 +225,6 @@ fn addLegacyImports(
     engine_root.addImport("engine_fs_compat", fs_compat);
     engine_root.addImport("engine_env_compat", env_compat);
     engine_root.addImport("engine_stopwatch", stopwatch);
-    engine_root.addImport("engine_global_thread_pool", global_thread_pool);
     engine_root.addImport("runtime", runtime);
     engine_root.addImport("vision", legacy_vision);
 
@@ -255,7 +245,6 @@ fn addLegacyImports(
         .fs_compat = fs_compat,
         .env_compat = env_compat,
         .stopwatch = stopwatch,
-        .global_thread_pool = global_thread_pool,
         .runtime = runtime,
         .legacy_vision = legacy_vision,
     };
@@ -299,7 +288,6 @@ fn addImportsToRoot(root: *std.Build.Module, imports: LegacyImports) void {
     root.addImport("engine_fs_compat", imports.fs_compat);
     root.addImport("engine_env_compat", imports.env_compat);
     root.addImport("engine_stopwatch", imports.stopwatch);
-    root.addImport("engine_global_thread_pool", imports.global_thread_pool);
     root.addImport("runtime", imports.runtime);
     root.addImport("vision", imports.legacy_vision);
 }
