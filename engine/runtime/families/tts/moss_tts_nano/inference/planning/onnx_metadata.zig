@@ -11,6 +11,8 @@ pub const Summary = struct {
     codec_decode_full_node_count: usize = 0,
     total_initializer_count: usize = 0,
     external_initializer_count: usize = 0,
+    supported_node_count: usize = 0,
+    unsupported_node_count: usize = 0,
 };
 
 pub fn inspect(
@@ -30,6 +32,7 @@ pub fn inspect(
         summary.loaded_graph_count += 1;
         summary.tts_prefill_node_count = metadata.graph.node_count;
         addInitializers(&summary, &metadata);
+        addOperatorSupport(&summary, &metadata);
     }
 
     if (try loadOptional(allocator, tts_dir, tts.files.decode_step)) |metadata_value| {
@@ -38,6 +41,7 @@ pub fn inspect(
         summary.loaded_graph_count += 1;
         summary.tts_decode_step_node_count = metadata.graph.node_count;
         addInitializers(&summary, &metadata);
+        addOperatorSupport(&summary, &metadata);
     }
 
     if (try loadOptional(allocator, codec_dir, codec.files.decode_full)) |metadata_value| {
@@ -46,6 +50,7 @@ pub fn inspect(
         summary.loaded_graph_count += 1;
         summary.codec_decode_full_node_count = metadata.graph.node_count;
         addInitializers(&summary, &metadata);
+        addOperatorSupport(&summary, &metadata);
     }
 
     return summary;
@@ -67,6 +72,16 @@ fn addInitializers(summary: *Summary, metadata: *const shared_graph.onnx.metadat
     summary.total_initializer_count += metadata.graph.initializers.len;
     for (metadata.graph.initializers) |initializer| {
         if (initializer.isExternal()) summary.external_initializer_count += 1;
+    }
+}
+
+fn addOperatorSupport(summary: *Summary, metadata: *const shared_graph.onnx.metadata.ModelMetadata) void {
+    for (metadata.graph.nodes) |node| {
+        if (shared_graph.runtime.ops.isSupported(node.op_type)) {
+            summary.supported_node_count += 1;
+        } else {
+            summary.unsupported_node_count += 1;
+        }
     }
 }
 

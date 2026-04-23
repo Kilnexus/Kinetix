@@ -68,6 +68,44 @@ pub const TensorInfo = struct {
         }
         return null;
     }
+
+    pub fn elementCount(self: TensorInfo) !usize {
+        if (self.dims.len == 0) return 0;
+        var total: usize = 1;
+        for (self.dims) |dim| {
+            const value = switch (dim) {
+                .value => |item| item,
+                else => return error.DynamicTensorShape,
+            };
+            if (value < 0) return error.DynamicTensorShape;
+            total = try std.math.mul(usize, total, @intCast(value));
+        }
+        return total;
+    }
+
+    pub fn elementByteSize(self: TensorInfo) !usize {
+        return switch (self.elem_type.raw) {
+            1, 6, 12 => 4,
+            2, 3, 9 => 1,
+            4, 5, 10, 16 => 2,
+            7, 11, 13 => 8,
+            else => error.UnsupportedOnnxElementType,
+        };
+    }
+
+    pub fn expectedByteSize(self: TensorInfo) !usize {
+        return try std.math.mul(usize, try self.elementCount(), try self.elementByteSize());
+    }
+
+    pub fn externalOffset(self: TensorInfo) !usize {
+        const value = self.externalValue("offset") orelse return 0;
+        return try std.fmt.parseInt(usize, value, 10);
+    }
+
+    pub fn externalLength(self: TensorInfo) !usize {
+        const value = self.externalValue("length") orelse return try self.expectedByteSize();
+        return try std.fmt.parseInt(usize, value, 10);
+    }
 };
 
 pub const ExternalDataEntry = struct {
