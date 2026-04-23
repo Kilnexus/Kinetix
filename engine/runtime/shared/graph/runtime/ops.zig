@@ -1,6 +1,7 @@
 const std = @import("std");
 const onnx_metadata = @import("../onnx/metadata.zig");
 const tensor_mod = @import("tensor.zig");
+const op_registry = @import("../../ops/index.zig").registry;
 
 const core = @import("ops/core.zig");
 const indexing = @import("ops/indexing.zig");
@@ -11,24 +12,7 @@ const shape = @import("ops/shape.zig");
 pub const Tensor = tensor_mod.Tensor;
 
 pub fn isSupported(op_type: []const u8) bool {
-    return std.mem.eql(u8, op_type, "Constant") or
-        std.mem.eql(u8, op_type, "Identity") or
-        std.mem.eql(u8, op_type, "Add") or
-        std.mem.eql(u8, op_type, "Mul") or
-        std.mem.eql(u8, op_type, "Relu") or
-        std.mem.eql(u8, op_type, "Reshape") or
-        std.mem.eql(u8, op_type, "MatMul") or
-        std.mem.eql(u8, op_type, "Cast") or
-        std.mem.eql(u8, op_type, "Shape") or
-        std.mem.eql(u8, op_type, "Gather") or
-        std.mem.eql(u8, op_type, "Unsqueeze") or
-        std.mem.eql(u8, op_type, "Squeeze") or
-        std.mem.eql(u8, op_type, "Concat") or
-        std.mem.eql(u8, op_type, "Transpose") or
-        std.mem.eql(u8, op_type, "Slice") or
-        std.mem.eql(u8, op_type, "Softmax") or
-        std.mem.eql(u8, op_type, "Gemm") or
-        std.mem.eql(u8, op_type, "LayerNormalization");
+    return op_registry.isGraphExecutableOnnx(op_type);
 }
 
 pub fn execute(
