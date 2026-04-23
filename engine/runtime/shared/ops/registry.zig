@@ -41,6 +41,9 @@ pub const entries = [_]Entry{
     .{ .name = "Add", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/graph/runtime/ops/core.zig" },
     .{ .name = "Mul", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/graph/runtime/ops/core.zig" },
     .{ .name = "Relu", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/graph/runtime/ops/core.zig" },
+    .{ .name = "Sigmoid", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/graph/runtime/ops/activation.zig" },
+    .{ .name = "LeakyRelu", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/graph/runtime/ops/activation.zig" },
+    .{ .name = "Gelu", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/graph/runtime/ops/activation.zig" },
     .{ .name = "Cast", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/graph/runtime/ops/core.zig" },
     .{ .name = "MatMul", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/graph/runtime/ops/linear.zig" },
     .{ .name = "Gemm", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/graph/runtime/ops/linear.zig" },
@@ -54,6 +57,7 @@ pub const entries = [_]Entry{
     .{ .name = "Slice", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/graph/runtime/ops/indexing.zig" },
     .{ .name = "Softmax", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/graph/runtime/ops/normalization.zig" },
     .{ .name = "LayerNormalization", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/graph/runtime/ops/normalization.zig" },
+    .{ .name = "RMSNormalization", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/graph/runtime/ops/normalization.zig" },
 
     .{ .name = "SiLU", .domain = .vision_nn, .status = .native_kernel, .module = "vision/nn/ops/activation.zig" },
     .{ .name = "Sigmoid", .domain = .vision_nn, .status = .native_kernel, .module = "vision/nn/ops/activation.zig" },
@@ -113,10 +117,6 @@ pub const entries = [_]Entry{
 
     .{ .name = "Conv", .domain = .onnx_graph, .status = .adapter_required, .module = "vision/nn/ops/conv.zig" },
     .{ .name = "MaxPool", .domain = .onnx_graph, .status = .adapter_required, .module = "vision/nn/ops/pooling.zig" },
-    .{ .name = "Sigmoid", .domain = .onnx_graph, .status = .adapter_required, .module = "vision/nn/ops/activation.zig" },
-    .{ .name = "LeakyRelu", .domain = .onnx_graph, .status = .adapter_required, .module = "vision/nn/ops/activation.zig" },
-    .{ .name = "RMSNormalization", .domain = .onnx_graph, .status = .adapter_required, .module = "text/core/cpu.zig" },
-    .{ .name = "Gelu", .domain = .onnx_graph, .status = .adapter_required, .module = "text/core/cpu.zig" },
     .{ .name = "SwiGLU", .domain = .onnx_graph, .status = .adapter_required, .module = "text/core/cpu.zig" },
 };
 
@@ -186,6 +186,8 @@ pub fn summarize() Summary {
 test "unified ops registry includes graph executable and native kernels" {
     try std.testing.expect(isGraphExecutableOnnx("MatMul"));
     try std.testing.expect(isGraphExecutableOnnx("LayerNormalization"));
+    try std.testing.expect(isGraphExecutableOnnx("RMSNormalization"));
+    try std.testing.expect(isGraphExecutableOnnx("Sigmoid"));
     try std.testing.expect(!isGraphExecutableOnnx("Conv"));
     try std.testing.expect(has("Conv2d", .vision_nn));
     try std.testing.expect(has("RmsNorm", .text_core));

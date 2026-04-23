@@ -3,6 +3,7 @@ const onnx_metadata = @import("../onnx/metadata.zig");
 const tensor_mod = @import("tensor.zig");
 const op_registry = @import("../../ops/index.zig").registry;
 
+const activation = @import("ops/activation.zig");
 const core = @import("ops/core.zig");
 const indexing = @import("ops/indexing.zig");
 const linear = @import("ops/linear.zig");
@@ -25,6 +26,9 @@ pub fn execute(
     if (std.mem.eql(u8, node.op_type, "Add")) return try core.elementwise(allocator, inputs, .add);
     if (std.mem.eql(u8, node.op_type, "Mul")) return try core.elementwise(allocator, inputs, .mul);
     if (std.mem.eql(u8, node.op_type, "Relu")) return try core.relu(allocator, inputs);
+    if (std.mem.eql(u8, node.op_type, "Sigmoid")) return try activation.sigmoid(allocator, inputs);
+    if (std.mem.eql(u8, node.op_type, "LeakyRelu")) return try activation.leakyRelu(allocator, node, inputs);
+    if (std.mem.eql(u8, node.op_type, "Gelu")) return try activation.gelu(allocator, inputs);
     if (std.mem.eql(u8, node.op_type, "Cast")) return try core.cast(allocator, node, inputs);
     if (std.mem.eql(u8, node.op_type, "MatMul")) return try linear.matmul(allocator, inputs);
     if (std.mem.eql(u8, node.op_type, "Gemm")) return try linear.gemm(allocator, node, inputs);
@@ -38,6 +42,7 @@ pub fn execute(
     if (std.mem.eql(u8, node.op_type, "Slice")) return try indexing.slice(allocator, node, inputs);
     if (std.mem.eql(u8, node.op_type, "Softmax")) return try normalization.softmax(allocator, node, inputs);
     if (std.mem.eql(u8, node.op_type, "LayerNormalization")) return try normalization.layerNormalization(allocator, node, inputs);
+    if (std.mem.eql(u8, node.op_type, "RMSNormalization")) return try normalization.rmsNormalization(allocator, node, inputs);
     return error.UnsupportedOnnxOperator;
 }
 
@@ -168,6 +173,47 @@ test "runtime ops execute slice softmax gemm and layer normalization" {
     try std.testing.expectApproxEqAbs(@as(f32, -1.2247356), normalized.buffer.f32[0], 0.00001);
     try std.testing.expectApproxEqAbs(@as(f32, 0), normalized.buffer.f32[1], 0.00001);
     try std.testing.expectApproxEqAbs(@as(f32, 1.2247356), normalized.buffer.f32[2], 0.00001);
+}
+
+test "runtime ops execute collected activation and rms normalization adapters" {
+    var values = try Tensor.fromF32(std.testing.allocator, &.{3}, &.{ -1, 0, 1 });
+    defer values.deinit();
+
+    const sigmoid_node = testNode("Sigmoid", &.{});
+    var sigmoid_out = try execute(std.testing.allocator, sigmoid_node, &.{&values});
+    defer sigmoid_out.deinit();
+    try std.testing.expectApproxEqAbs(@as(f32, 0.26894143), sigmoid_out.buffer.f32[0], 0.00001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), sigmoid_out.buffer.f32[1], 0.00001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.7310586), sigmoid_out.buffer.f32[2], 0.00001);
+
+    var leaky_attrs = [_]onnx_metadata.AttributeInfo{testFloatAttribute("alpha", 0.2)};
+    const leaky_node = testNode("LeakyRelu", leaky_attrs[0..]);
+    var leaky_out = try execute(std.testing.allocator, leaky_node, &.{&values});
+    defer leaky_out.deinit();
+    try std.testing.expectEqualSlices(f32, &.{ -0.2, 0, 1 }, leaky_out.buffer.f32);
+
+    const gelu_node = testNode("Gelu", &.{});
+    var gelu_out = try execute(std.testing.allocator, gelu_node, &.{&values});
+    defer gelu_out.deinit();
+    try std.testing.expectApproxEqAbs(@as(f32, -0.158808), gelu_out.buffer.f32[0], 0.00001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), gelu_out.buffer.f32[1], 0.00001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.841192), gelu_out.buffer.f32[2], 0.00001);
+
+    var matrix = try Tensor.fromF32(std.testing.allocator, &.{ 2, 2 }, &.{ 3, 4, 6, 8 });
+    defer matrix.deinit();
+    var scale = try Tensor.fromF32(std.testing.allocator, &.{2}, &.{ 1, 2 });
+    defer scale.deinit();
+    var rms_attrs = [_]onnx_metadata.AttributeInfo{
+        testIntAttribute("axis", 1),
+        testFloatAttribute("epsilon", 0),
+    };
+    const rms_node = testNode("RMSNormalization", rms_attrs[0..]);
+    var rms_out = try execute(std.testing.allocator, rms_node, &.{ &matrix, &scale });
+    defer rms_out.deinit();
+    try std.testing.expectApproxEqAbs(@as(f32, 0.84852814), rms_out.buffer.f32[0], 0.00001);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.2627418), rms_out.buffer.f32[1], 0.00001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.84852814), rms_out.buffer.f32[2], 0.00001);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.2627418), rms_out.buffer.f32[3], 0.00001);
 }
 
 fn testNode(op_type: []const u8, attributes: []onnx_metadata.AttributeInfo) onnx_metadata.NodeInfo {

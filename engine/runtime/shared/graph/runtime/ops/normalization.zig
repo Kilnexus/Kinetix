@@ -85,3 +85,32 @@ pub fn layerNormalization(allocator: std.mem.Allocator, node: onnx_metadata.Node
         .buffer = .{ .f32 = out },
     };
 }
+
+pub fn rmsNormalization(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
+    if (inputs.len != 2) return error.InvalidOperatorArity;
+    const input = inputs[0].*;
+    const scale = inputs[1].*;
+    if (input.buffer != .f32 or scale.buffer != .f32) return error.UnsupportedTensorDType;
+    const axis = try common.normalizeAxis(common.attributeInt(node, "axis") orelse -1, input.shape.len);
+    const epsilon = common.attributeFloat(node, "epsilon") orelse 0.00001;
+    const inner = common.elementCountFromShape(input.shape[axis..]);
+    const outer = common.elementCountFromShape(input.shape[0..axis]);
+    if (scale.elementCount() != inner) return error.ShapeMismatch;
+    const out = try allocator.alloc(f32, input.buffer.f32.len);
+    errdefer allocator.free(out);
+    for (0..outer) |outer_index| {
+        const base = outer_index * inner;
+        var mean_square: f32 = 0;
+        for (input.buffer.f32[base .. base + inner]) |value| mean_square += value * value;
+        mean_square /= @floatFromInt(inner);
+        const inv_rms = 1.0 / @sqrt(mean_square + epsilon);
+        for (0..inner) |index| {
+            out[base + index] = input.buffer.f32[base + index] * inv_rms * scale.buffer.f32[index];
+        }
+    }
+    return .{
+        .allocator = allocator,
+        .shape = try allocator.dupe(usize, input.shape),
+        .buffer = .{ .f32 = out },
+    };
+}
