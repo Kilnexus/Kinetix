@@ -109,8 +109,15 @@ fn execute(
     defer prepared_text.deinit();
     const token_plan = try inference.planning.token.build(allocator, tokenizerFromState(state), prepared_text);
     defer token_plan.deinit();
-    const request_plan = try inference.planning.request.build(allocator, state.manifest, token_plan);
+    const request_plan = try inference.planning.request.build(allocator, state.manifest, state.tts, token_plan);
     defer request_plan.deinit();
+    const graph_plan = try inference.planning.graph.build(
+        allocator,
+        state.tts,
+        state.codec,
+        if (state.manifest.tts_config.n_vq == 0) 0 else state.manifest.tts_config.n_vq + 1,
+        state.manifest.generation_defaults.max_new_frames,
+    );
 
     const Receipt = struct {
         status: []const u8,
@@ -126,6 +133,9 @@ fn execute(
         chunk_prefill_sequence_lengths: []const usize,
         chunk_request_row_widths: []const usize,
         chunk_prompt_audio_frame_counts: []const usize,
+        chunk_prefill_input_counts: []const usize,
+        chunk_prefill_output_counts: []const usize,
+        chunk_prefill_concrete_input_counts: []const usize,
         chunk_count: usize,
         uses_estimated_token_budget: bool,
         tokenizer_loaded: bool,
@@ -135,6 +145,14 @@ fn execute(
         tokenizer_eos_id: ?usize,
         tokenizer_pad_id: ?usize,
         request_rows_ready: bool,
+        graph_invocations_ready: bool,
+        graph_template_count: usize,
+        decode_step_template_ready: bool,
+        decode_step_template_input_count: usize,
+        decode_step_template_output_count: usize,
+        codec_decode_template_ready: bool,
+        codec_decode_template_input_count: usize,
+        codec_decode_template_output_count: usize,
         tts_n_vq: usize,
         tts_vocab_size: usize,
         generation_max_new_frames: usize,
@@ -189,6 +207,9 @@ fn execute(
         .chunk_prefill_sequence_lengths = request_plan.prefill_sequence_lengths,
         .chunk_request_row_widths = request_plan.row_widths,
         .chunk_prompt_audio_frame_counts = request_plan.prompt_audio_frame_counts,
+        .chunk_prefill_input_counts = request_plan.prefill_input_counts,
+        .chunk_prefill_output_counts = request_plan.prefill_output_counts,
+        .chunk_prefill_concrete_input_counts = request_plan.prefill_concrete_input_counts,
         .chunk_count = prepared_text.chunks.len,
         .uses_estimated_token_budget = token_plan.uses_estimated_token_budget,
         .tokenizer_loaded = token_plan.tokenizer_loaded,
@@ -198,6 +219,14 @@ fn execute(
         .tokenizer_eos_id = token_plan.tokenizer_summary.eos_id,
         .tokenizer_pad_id = token_plan.tokenizer_summary.pad_id,
         .request_rows_ready = request_plan.ready,
+        .graph_invocations_ready = request_plan.graph_invocations_ready and graph_plan.ready(),
+        .graph_template_count = graph_plan.template_count,
+        .decode_step_template_ready = graph_plan.decode_step_ready,
+        .decode_step_template_input_count = graph_plan.decode_step_input_count,
+        .decode_step_template_output_count = graph_plan.decode_step_output_count,
+        .codec_decode_template_ready = graph_plan.codec_decode_ready,
+        .codec_decode_template_input_count = graph_plan.codec_decode_input_count,
+        .codec_decode_template_output_count = graph_plan.codec_decode_output_count,
         .tts_n_vq = state.manifest.tts_config.n_vq,
         .tts_vocab_size = state.manifest.tts_config.vocab_size,
         .generation_max_new_frames = state.manifest.generation_defaults.max_new_frames,
