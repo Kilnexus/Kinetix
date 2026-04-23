@@ -2,11 +2,13 @@ const std = @import("std");
 
 pub const DType = enum {
     i32,
+    i64,
     f32,
 };
 
 pub const Buffer = union(DType) {
     i32: []i32,
+    i64: []i64,
     f32: []f32,
 };
 
@@ -35,10 +37,21 @@ pub const Tensor = struct {
         return tensor;
     }
 
+    pub fn fromI64(allocator: std.mem.Allocator, shape: []const usize, values: []const i64) !Tensor {
+        const owned_shape = try allocator.dupe(usize, shape);
+        errdefer allocator.free(owned_shape);
+        const owned_values = try allocator.dupe(i64, values);
+        errdefer allocator.free(owned_values);
+        const tensor = Tensor{ .allocator = allocator, .shape = owned_shape, .buffer = .{ .i64 = owned_values } };
+        if (tensor.elementCount() != values.len) return error.TensorElementCountMismatch;
+        return tensor;
+    }
+
     pub fn clone(self: Tensor, allocator: std.mem.Allocator) !Tensor {
         return switch (self.buffer) {
             .f32 => |values| try fromF32(allocator, self.shape, values),
             .i32 => |values| try fromI32(allocator, self.shape, values),
+            .i64 => |values| try fromI64(allocator, self.shape, values),
         };
     }
 
@@ -47,6 +60,7 @@ pub const Tensor = struct {
         switch (self.buffer) {
             .f32 => |values| self.allocator.free(values),
             .i32 => |values| self.allocator.free(values),
+            .i64 => |values| self.allocator.free(values),
         }
         self.* = undefined;
     }

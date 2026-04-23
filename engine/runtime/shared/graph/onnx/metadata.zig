@@ -135,6 +135,8 @@ pub const AttributeInfo = struct {
     allocator: std.mem.Allocator,
     name: []u8,
     kind: u32 = 0,
+    int_value: i64 = 0,
+    tensor: ?TensorLiteral = null,
     float_count: usize = 0,
     int_count: usize = 0,
     string_count: usize = 0,
@@ -143,6 +145,21 @@ pub const AttributeInfo = struct {
 
     fn deinit(self: *AttributeInfo) void {
         self.allocator.free(self.name);
+        if (self.tensor) |*tensor| tensor.deinit();
+        self.* = undefined;
+    }
+};
+
+pub const TensorLiteral = struct {
+    allocator: std.mem.Allocator,
+    elem_type: ElementType = .{},
+    dims: []Dimension = &.{},
+    int64_values: []i64 = &.{},
+
+    fn deinit(self: *TensorLiteral) void {
+        for (self.dims) |dim| dim.deinit(self.allocator);
+        self.allocator.free(self.dims);
+        self.allocator.free(self.int64_values);
         self.* = undefined;
     }
 };
@@ -497,7 +514,7 @@ fn parseAttribute(allocator: std.mem.Allocator, bytes: []const u8) !AttributeInf
             },
             3 => {
                 if (wire_type != 0) return error.InvalidOnnxAttribute;
-                _ = try reader.readVarint();
+                attribute.int_value = @intCast(try reader.readVarint());
                 attribute.int_count = 1;
             },
             4 => {
@@ -509,7 +526,11 @@ fn parseAttribute(allocator: std.mem.Allocator, bytes: []const u8) !AttributeInf
             5, 10 => {
                 if (wire_type != 2) return error.InvalidOnnxAttribute;
                 const len: usize = @intCast(try reader.readVarint());
-                _ = try reader.readBytes(len);
+                const tensor_bytes = try reader.readBytes(len);
+                if (field_number == 5) {
+                    if (attribute.tensor) |*existing| existing.deinit();
+                    attribute.tensor = try parseTensorLiteral(allocator, tensor_bytes);
+                }
                 attribute.tensor_count += 1;
             },
             6, 11 => {
@@ -555,6 +576,51 @@ fn parseAttribute(allocator: std.mem.Allocator, bytes: []const u8) !AttributeInf
     }
 
     return attribute;
+}
+
+fn parseTensorLiteral(allocator: std.mem.Allocator, bytes: []const u8) !TensorLiteral {
+    var reader = Reader{ .bytes = bytes };
+    var literal = TensorLiteral{ .allocator = allocator };
+    errdefer literal.deinit();
+    var dims = std.ArrayListUnmanaged(Dimension).empty;
+    errdefer {
+        for (dims.items) |dim| dim.deinit(allocator);
+        dims.deinit(allocator);
+    }
+    var int64_values = std.ArrayListUnmanaged(i64).empty;
+    errdefer int64_values.deinit(allocator);
+
+    while (!reader.eof()) {
+        const key = try reader.readVarint();
+        const field_number = key >> 3;
+        const wire_type: u3 = @intCast(key & 0x07);
+
+        switch (field_number) {
+            1 => {
+                if (wire_type != 0) return error.InvalidOnnxTensor;
+                try dims.append(allocator, .{ .value = @intCast(try reader.readVarint()) });
+            },
+            2 => {
+                if (wire_type != 0) return error.InvalidOnnxTensor;
+                literal.elem_type = .{ .raw = @intCast(try reader.readVarint()) };
+            },
+            7 => {
+                if (wire_type == 0) {
+                    try int64_values.append(allocator, @intCast(try reader.readVarint()));
+                } else if (wire_type == 2) {
+                    var packed_reader = Reader{ .bytes = try reader.readBytes(@intCast(try reader.readVarint())) };
+                    while (!packed_reader.eof()) {
+                        try int64_values.append(allocator, @intCast(try packed_reader.readVarint()));
+                    }
+                } else return error.InvalidOnnxTensor;
+            },
+            else => try reader.skip(wire_type),
+        }
+    }
+
+    literal.dims = try dims.toOwnedSlice(allocator);
+    literal.int64_values = try int64_values.toOwnedSlice(allocator);
+    return literal;
 }
 
 fn parseValueInfo(allocator: std.mem.Allocator, bytes: []const u8) !TensorInfo {

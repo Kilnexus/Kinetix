@@ -122,6 +122,22 @@ test "runtime executor runs simple graph" {
     try std.testing.expectEqualSlices(f32, &.{50}, result.outputs[0].tensor.buffer.f32);
 }
 
+test "runtime executor runs constant reshape graph" {
+    var graph = try onnx_metadata.parseModel(std.testing.allocator, try reshapeModelBytes(std.testing.allocator));
+    defer graph.deinit();
+
+    var input = try Tensor.fromF32(std.testing.allocator, &.{ 2, 2 }, &.{ 1, 2, 3, 4 });
+    defer input.deinit();
+
+    var result = try execute(std.testing.allocator, graph.graph, &.{
+        .{ .name = "x", .tensor = input },
+    });
+    defer result.deinit();
+
+    try std.testing.expectEqualSlices(usize, &.{ 1, 4 }, result.outputs[0].tensor.shape);
+    try std.testing.expectEqualSlices(f32, &.{ 1, 2, 3, 4 }, result.outputs[0].tensor.buffer.f32);
+}
+
 fn simpleModelBytes(allocator: std.mem.Allocator) ![]u8 {
     var graph = std.ArrayList(u8).init(allocator);
     defer graph.deinit();
@@ -130,6 +146,22 @@ fn simpleModelBytes(allocator: std.mem.Allocator) ![]u8 {
     try appendOwnedMessageField(&graph, 11, try valueInfoMessage(allocator, "w", 1, &.{ 2, 1 }));
     try appendOwnedMessageField(&graph, 12, try valueInfoMessage(allocator, "y", 1, &.{ 1, 1 }));
     try appendOwnedMessageField(&graph, 1, try nodeMessage(allocator, "matmul", "MatMul", &.{ "x", "w" }, &.{"y"}));
+
+    var model = std.ArrayList(u8).init(allocator);
+    errdefer model.deinit();
+    try appendVarintField(&model, 1, 8);
+    try appendMessageField(&model, 7, graph.items);
+    return try model.toOwnedSlice();
+}
+
+fn reshapeModelBytes(allocator: std.mem.Allocator) ![]u8 {
+    var graph = std.ArrayList(u8).init(allocator);
+    defer graph.deinit();
+    try appendStringField(&graph, 2, "reshape");
+    try appendOwnedMessageField(&graph, 11, try valueInfoMessage(allocator, "x", 1, &.{ 2, 2 }));
+    try appendOwnedMessageField(&graph, 12, try valueInfoMessage(allocator, "y", 1, &.{ 1, 4 }));
+    try appendOwnedMessageField(&graph, 1, try constantNodeMessage(allocator, "shape_const", "shape", &.{ 1, 4 }));
+    try appendOwnedMessageField(&graph, 1, try nodeMessage(allocator, "reshape", "Reshape", &.{ "x", "shape" }, &.{"y"}));
 
     var model = std.ArrayList(u8).init(allocator);
     errdefer model.deinit();
@@ -151,6 +183,39 @@ fn nodeMessage(
     for (outputs) |output| try appendStringField(&out, 2, output);
     try appendStringField(&out, 3, name);
     try appendStringField(&out, 4, op_type);
+    return try out.toOwnedSlice();
+}
+
+fn constantNodeMessage(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    output: []const u8,
+    values: []const i64,
+) ![]u8 {
+    var out = std.ArrayList(u8).init(allocator);
+    errdefer out.deinit();
+    try appendStringField(&out, 2, output);
+    try appendStringField(&out, 3, name);
+    try appendStringField(&out, 4, "Constant");
+    try appendOwnedMessageField(&out, 5, try constantValueAttribute(allocator, values));
+    return try out.toOwnedSlice();
+}
+
+fn constantValueAttribute(allocator: std.mem.Allocator, values: []const i64) ![]u8 {
+    var out = std.ArrayList(u8).init(allocator);
+    errdefer out.deinit();
+    try appendStringField(&out, 1, "value");
+    try appendOwnedMessageField(&out, 5, try int64TensorMessage(allocator, values));
+    try appendVarintField(&out, 20, 4);
+    return try out.toOwnedSlice();
+}
+
+fn int64TensorMessage(allocator: std.mem.Allocator, values: []const i64) ![]u8 {
+    var out = std.ArrayList(u8).init(allocator);
+    errdefer out.deinit();
+    try appendVarintField(&out, 1, @intCast(values.len));
+    try appendVarintField(&out, 2, 7);
+    for (values) |value| try appendVarintField(&out, 7, @intCast(value));
     return try out.toOwnedSlice();
 }
 

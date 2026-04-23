@@ -5,10 +5,12 @@ const tensor_mod = @import("tensor.zig");
 pub const Tensor = tensor_mod.Tensor;
 
 pub fn isSupported(op_type: []const u8) bool {
-    return std.mem.eql(u8, op_type, "Identity") or
+    return std.mem.eql(u8, op_type, "Constant") or
+        std.mem.eql(u8, op_type, "Identity") or
         std.mem.eql(u8, op_type, "Add") or
         std.mem.eql(u8, op_type, "Mul") or
         std.mem.eql(u8, op_type, "Relu") or
+        std.mem.eql(u8, op_type, "Reshape") or
         std.mem.eql(u8, op_type, "MatMul");
 }
 
@@ -17,12 +19,29 @@ pub fn execute(
     node: onnx_metadata.NodeInfo,
     inputs: []const *const Tensor,
 ) !Tensor {
+    if (std.mem.eql(u8, node.op_type, "Constant")) return try constant(allocator, node, inputs);
     if (std.mem.eql(u8, node.op_type, "Identity")) return try identity(allocator, inputs);
     if (std.mem.eql(u8, node.op_type, "Add")) return try elementwise(allocator, inputs, .add);
     if (std.mem.eql(u8, node.op_type, "Mul")) return try elementwise(allocator, inputs, .mul);
     if (std.mem.eql(u8, node.op_type, "Relu")) return try relu(allocator, inputs);
+    if (std.mem.eql(u8, node.op_type, "Reshape")) return try reshape(allocator, inputs);
     if (std.mem.eql(u8, node.op_type, "MatMul")) return try matmul(allocator, inputs);
     return error.UnsupportedOnnxOperator;
+}
+
+fn constant(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
+    if (inputs.len != 0) return error.InvalidOperatorArity;
+    for (node.attributes) |attribute| {
+        if (!std.mem.eql(u8, attribute.name, "value")) continue;
+        const literal = attribute.tensor orelse return error.UnsupportedConstantAttribute;
+        if (literal.elem_type.raw == 7) {
+            const shape = try dimsToShape(allocator, literal.dims);
+            defer allocator.free(shape);
+            return try Tensor.fromI64(allocator, shape, literal.int64_values);
+        }
+        return error.UnsupportedConstantTensorType;
+    }
+    return error.MissingConstantValue;
 }
 
 fn identity(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Tensor {
@@ -67,6 +86,40 @@ fn relu(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Tensor {
     };
 }
 
+fn reshape(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Tensor {
+    if (inputs.len != 2) return error.InvalidOperatorArity;
+    const input = inputs[0].*;
+    const shape_tensor = inputs[1].*;
+    if (shape_tensor.buffer != .i64) return error.UnsupportedTensorDType;
+    const new_shape = try allocator.alloc(usize, shape_tensor.buffer.i64.len);
+    defer allocator.free(new_shape);
+    var inferred_index: ?usize = null;
+    var known_product: usize = 1;
+    for (shape_tensor.buffer.i64, new_shape, 0..) |dim, *slot, index| {
+        if (dim == -1) {
+            if (inferred_index != null) return error.InvalidTensorShape;
+            inferred_index = index;
+            slot.* = 1;
+            continue;
+        }
+        if (dim < 0) return error.InvalidTensorShape;
+        slot.* = @intCast(dim);
+        known_product = try std.math.mul(usize, known_product, slot.*);
+    }
+    const element_count = input.elementCount();
+    if (inferred_index) |index| {
+        if (known_product == 0 or element_count % known_product != 0) return error.ShapeMismatch;
+        new_shape[index] = element_count / known_product;
+    } else if (known_product != element_count) {
+        return error.ShapeMismatch;
+    }
+    return switch (input.buffer) {
+        .f32 => |values| try Tensor.fromF32(allocator, new_shape, values),
+        .i32 => |values| try Tensor.fromI32(allocator, new_shape, values),
+        .i64 => |values| try Tensor.fromI64(allocator, new_shape, values),
+    };
+}
+
 fn matmul(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Tensor {
     if (inputs.len != 2) return error.InvalidOperatorArity;
     const lhs = inputs[0].*;
@@ -94,6 +147,18 @@ fn matmul(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Tensor {
         .shape = try allocator.dupe(usize, &.{ m, n }),
         .buffer = .{ .f32 = out },
     };
+}
+
+fn dimsToShape(allocator: std.mem.Allocator, dims: []const onnx_metadata.Dimension) ![]usize {
+    const out = try allocator.alloc(usize, dims.len);
+    errdefer allocator.free(out);
+    for (dims, out) |dim, *slot| {
+        slot.* = switch (dim) {
+            .value => |value| if (value < 0) return error.DynamicTensorShape else @intCast(value),
+            else => return error.DynamicTensorShape,
+        };
+    }
+    return out;
 }
 
 test "runtime ops execute f32 matmul and relu" {
