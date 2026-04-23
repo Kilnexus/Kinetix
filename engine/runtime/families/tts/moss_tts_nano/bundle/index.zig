@@ -16,6 +16,7 @@ pub const LoadedBundle = struct {
     codec: CodecConfig,
 
     pub fn deinit(self: *LoadedBundle) void {
+        self.manifest.deinit();
         self.paths.deinit();
         self.* = undefined;
     }
