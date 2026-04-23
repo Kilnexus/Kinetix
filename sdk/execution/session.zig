@@ -672,6 +672,8 @@ test "prepared execution resolves tts requests through the unified runtime" {
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"provider_key\":\"moss_tts_nano_tts\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"output_contract\":\"audio_path\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"input_text\":\"hello moss\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"normalized_text\":\"hello moss.\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"chunk_count\":1") != null);
 }
 
 test "ocr input inference maps pdf paths to document payloads" {

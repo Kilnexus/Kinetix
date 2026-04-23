@@ -556,6 +556,8 @@ test "runtime session routes moss tts nano bundles through the unified backend r
     };
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"provider_key\":\"moss_tts_nano_tts\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"output_contract\":\"audio_path\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"normalized_text\":\"hello moss.\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"chunk_count\":1") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"sample_rate\":48000") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"builtin_voice_count\":2") != null);
 }

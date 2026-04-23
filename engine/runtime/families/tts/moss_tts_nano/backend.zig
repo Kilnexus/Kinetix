@@ -3,6 +3,7 @@ const backend_mod = @import("../../../backend/backend.zig");
 const handle_mod = @import("../../../model/handle.zig");
 const normalized = @import("../../../model/resolver/normalized_model.zig");
 const bundle = @import("bundle/index.zig");
+const frontend = @import("frontend/index.zig");
 const types = @import("../../../types.zig");
 
 pub const backend = backend_mod.RuntimeBackend{
@@ -90,6 +91,9 @@ fn execute(
     }
 
     const state = stateFromHandle(handle) orelse return error.MissingProviderState;
+    var prepared_text = try frontend.text.prepare(allocator, request.input.asString() orelse return error.MissingInputPayload, .{});
+    defer prepared_text.deinit();
+
     const Receipt = struct {
         status: []const u8,
         provider_key: []const u8,
@@ -97,6 +101,11 @@ fn execute(
         model_id: []const u8,
         operation: []const u8,
         input_text: ?[]const u8,
+        normalized_text: []const u8,
+        text_chunks: []const []const u8,
+        chunk_estimated_tokens: []const usize,
+        chunk_count: usize,
+        uses_estimated_token_budget: bool,
         manifest_path: []const u8,
         tts_meta_path: []const u8,
         codec_meta_path: []const u8,
@@ -120,6 +129,11 @@ fn execute(
         .model_id = handle.normalized.descriptor.id,
         .operation = request.operation,
         .input_text = request.input.asString(),
+        .normalized_text = prepared_text.normalized,
+        .text_chunks = prepared_text.chunks,
+        .chunk_estimated_tokens = prepared_text.estimated_tokens,
+        .chunk_count = prepared_text.chunks.len,
+        .uses_estimated_token_budget = prepared_text.uses_estimated_token_budget,
         .manifest_path = state.manifest_path,
         .tts_meta_path = state.tts_meta_path,
         .codec_meta_path = state.codec_meta_path,
@@ -133,7 +147,7 @@ fn execute(
         .channels = state.channels,
         .num_quantizers = state.num_quantizers,
         .output_contract = "audio_path",
-        .message = "MOSS-TTS-Nano ONNX assets are now recognized by the unified runtime. Native zero-dependency TTS execution is not implemented yet, but this model family is no longer routed through generic fallback.",
+        .message = "MOSS-TTS-Nano ONNX assets and frontend text plan are now prepared by the unified runtime. Native zero-dependency acoustic and codec execution are not implemented yet.",
     };
 
     var out: std.Io.Writer.Allocating = .init(allocator);
