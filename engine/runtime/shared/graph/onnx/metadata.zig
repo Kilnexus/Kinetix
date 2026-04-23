@@ -135,6 +135,7 @@ pub const AttributeInfo = struct {
     allocator: std.mem.Allocator,
     name: []u8,
     kind: u32 = 0,
+    float_value: f32 = 0,
     int_value: i64 = 0,
     int_values: []i64 = &.{},
     tensor: ?TensorLiteral = null,
@@ -513,7 +514,8 @@ fn parseAttribute(allocator: std.mem.Allocator, bytes: []const u8) !AttributeInf
             },
             2 => {
                 if (wire_type != 5) return error.InvalidOnnxAttribute;
-                _ = try reader.readBytes(4);
+                const raw = try reader.readBytes(4);
+                attribute.float_value = @bitCast(std.mem.readInt(u32, raw[0..4], .little));
                 attribute.float_count = 1;
             },
             3 => {
