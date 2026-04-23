@@ -136,6 +136,7 @@ pub const AttributeInfo = struct {
     name: []u8,
     kind: u32 = 0,
     int_value: i64 = 0,
+    int_values: []i64 = &.{},
     tensor: ?TensorLiteral = null,
     float_count: usize = 0,
     int_count: usize = 0,
@@ -145,6 +146,7 @@ pub const AttributeInfo = struct {
 
     fn deinit(self: *AttributeInfo) void {
         self.allocator.free(self.name);
+        self.allocator.free(self.int_values);
         if (self.tensor) |*tensor| tensor.deinit();
         self.* = undefined;
     }
@@ -494,6 +496,8 @@ fn parseAttribute(allocator: std.mem.Allocator, bytes: []const u8) !AttributeInf
         .name = try allocator.dupe(u8, ""),
     };
     errdefer attribute.deinit();
+    var int_values = std.ArrayListUnmanaged(i64).empty;
+    errdefer int_values.deinit(allocator);
 
     while (!reader.eof()) {
         const key = try reader.readVarint();
@@ -553,11 +557,11 @@ fn parseAttribute(allocator: std.mem.Allocator, bytes: []const u8) !AttributeInf
                 if (wire_type == 2) {
                     var packed_reader = Reader{ .bytes = try reader.readBytes(@intCast(try reader.readVarint())) };
                     while (!packed_reader.eof()) {
-                        _ = try packed_reader.readVarint();
+                        try int_values.append(allocator, @intCast(try packed_reader.readVarint()));
                         attribute.int_count += 1;
                     }
                 } else if (wire_type == 0) {
-                    _ = try reader.readVarint();
+                    try int_values.append(allocator, @intCast(try reader.readVarint()));
                     attribute.int_count += 1;
                 } else return error.InvalidOnnxAttribute;
             },
@@ -575,6 +579,7 @@ fn parseAttribute(allocator: std.mem.Allocator, bytes: []const u8) !AttributeInf
         }
     }
 
+    attribute.int_values = try int_values.toOwnedSlice(allocator);
     return attribute;
 }
 

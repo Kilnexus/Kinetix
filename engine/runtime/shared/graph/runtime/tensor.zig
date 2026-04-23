@@ -70,7 +70,6 @@ pub const Tensor = struct {
     }
 
     pub fn elementCount(self: Tensor) usize {
-        if (self.shape.len == 0) return 0;
         var total: usize = 1;
         for (self.shape) |dim| total *= dim;
         return total;
