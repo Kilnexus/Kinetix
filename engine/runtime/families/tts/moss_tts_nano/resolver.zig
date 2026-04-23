@@ -1,5 +1,5 @@
 const std = @import("std");
-const bundle = @import("bundle/locator.zig");
+const bundle = @import("bundle/index.zig");
 const catalog_mod = @import("../../../catalog/catalog.zig");
 const normalized = @import("../../../model/resolver/normalized_model.zig");
 const report_mod = @import("../../../model/resolver/support_report.zig");
@@ -15,7 +15,7 @@ pub fn tryNormalize(
 ) !?normalized.NormalizedModel {
     _ = preferred_weights;
 
-    var resolved = try bundle.findBundlePaths(allocator, catalog.modelDir()) orelse return null;
+    var resolved = try bundle.paths.findPaths(allocator, catalog.modelDir()) orelse return null;
     defer resolved.deinit();
 
     const basename = std.fs.path.basename(catalog.modelDir());

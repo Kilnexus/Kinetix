@@ -2,7 +2,7 @@ const std = @import("std");
 const backend_mod = @import("../../../backend/backend.zig");
 const handle_mod = @import("../../../model/handle.zig");
 const normalized = @import("../../../model/resolver/normalized_model.zig");
-const bundle = @import("bundle/locator.zig");
+const bundle = @import("bundle/index.zig");
 const types = @import("../../../types.zig");
 
 pub const backend = backend_mod.RuntimeBackend{
@@ -12,19 +12,6 @@ pub const backend = backend_mod.RuntimeBackend{
     .execute_fn = execute,
 };
 
-const Manifest = struct {
-    builtin_voices: ?[]const std.json.Value = null,
-    generation_defaults: ?std.json.Value = null,
-};
-
-const CodecMeta = struct {
-    codec_config: struct {
-        sample_rate: usize = 0,
-        channels: usize = 0,
-        num_quantizers: usize = 0,
-    } = .{},
-};
-
 const State = struct {
     base: backend_mod.OpenState,
     manifest_path: []u8,
@@ -32,6 +19,10 @@ const State = struct {
     codec_meta_path: []u8,
     tokenizer_model_path: []u8,
     builtin_voice_count: usize = 0,
+    has_generation_defaults: bool = false,
+    has_model_files: bool = false,
+    has_tts_model_info: bool = false,
+    has_tts_session_options: bool = false,
     sample_rate: usize = 0,
     channels: usize = 0,
     num_quantizers: usize = 0,
@@ -50,11 +41,8 @@ fn open(
     allocator: std.mem.Allocator,
     model: *const normalized.NormalizedModel,
 ) !?*anyopaque {
-    var resolved = try bundle.findBundlePaths(allocator, model.artifacts.model_dir) orelse return error.ModelManifestNotFound;
-    defer resolved.deinit();
-
-    const manifest = try readJsonFile(allocator, Manifest, resolved.manifest_path);
-    const codec_meta = try readJsonFile(allocator, CodecMeta, resolved.codec_meta_path);
+    var loaded = try bundle.load(allocator, model.artifacts.model_dir) orelse return error.ModelManifestNotFound;
+    defer loaded.deinit();
 
     const state = try allocator.create(State);
     errdefer allocator.destroy(state);
@@ -63,14 +51,18 @@ fn open(
             .provider_key = .moss_tts_nano_tts,
             .model_dir = try allocator.dupe(u8, model.artifacts.model_dir),
         },
-        .manifest_path = try allocator.dupe(u8, resolved.manifest_path),
-        .tts_meta_path = try allocator.dupe(u8, resolved.tts_meta_path),
-        .codec_meta_path = try allocator.dupe(u8, resolved.codec_meta_path),
-        .tokenizer_model_path = try allocator.dupe(u8, resolved.tokenizer_model_path),
-        .builtin_voice_count = if (manifest.builtin_voices) |voices| voices.len else 0,
-        .sample_rate = codec_meta.codec_config.sample_rate,
-        .channels = codec_meta.codec_config.channels,
-        .num_quantizers = codec_meta.codec_config.num_quantizers,
+        .manifest_path = try allocator.dupe(u8, loaded.paths.manifest_path),
+        .tts_meta_path = try allocator.dupe(u8, loaded.paths.tts_meta_path),
+        .codec_meta_path = try allocator.dupe(u8, loaded.paths.codec_meta_path),
+        .tokenizer_model_path = try allocator.dupe(u8, loaded.paths.tokenizer_model_path),
+        .builtin_voice_count = loaded.manifest.builtin_voice_count,
+        .has_generation_defaults = loaded.manifest.has_generation_defaults,
+        .has_model_files = loaded.manifest.has_model_files,
+        .has_tts_model_info = loaded.tts.has_model_info,
+        .has_tts_session_options = loaded.tts.has_session_options,
+        .sample_rate = loaded.codec.sample_rate,
+        .channels = loaded.codec.channels,
+        .num_quantizers = loaded.codec.num_quantizers,
     };
     errdefer allocator.free(state.base.model_dir);
     errdefer allocator.free(state.manifest_path);
@@ -110,6 +102,10 @@ fn execute(
         codec_meta_path: []const u8,
         tokenizer_model_path: []const u8,
         builtin_voice_count: usize,
+        has_generation_defaults: bool,
+        has_model_files: bool,
+        has_tts_model_info: bool,
+        has_tts_session_options: bool,
         sample_rate: usize,
         channels: usize,
         num_quantizers: usize,
@@ -129,6 +125,10 @@ fn execute(
         .codec_meta_path = state.codec_meta_path,
         .tokenizer_model_path = state.tokenizer_model_path,
         .builtin_voice_count = state.builtin_voice_count,
+        .has_generation_defaults = state.has_generation_defaults,
+        .has_model_files = state.has_model_files,
+        .has_tts_model_info = state.has_tts_model_info,
+        .has_tts_session_options = state.has_tts_session_options,
         .sample_rate = state.sample_rate,
         .channels = state.channels,
         .num_quantizers = state.num_quantizers,
@@ -150,12 +150,4 @@ fn execute(
 fn stateFromHandle(handle: *const handle_mod.ModelHandle) ?*State {
     const raw = handle.provider_state orelse return null;
     return @ptrCast(@alignCast(raw));
-}
-
-fn readJsonFile(allocator: std.mem.Allocator, comptime T: type, path: []const u8) !T {
-    const bytes = try std.Io.Dir.cwd().readFileAlloc(std.Options.debug_io, path, allocator, .limited(8 * 1024 * 1024));
-    defer allocator.free(bytes);
-    return try std.json.parseFromSliceLeaky(T, allocator, bytes, .{
-        .ignore_unknown_fields = true,
-    });
 }

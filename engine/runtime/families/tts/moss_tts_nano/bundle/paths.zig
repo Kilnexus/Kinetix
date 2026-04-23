@@ -30,7 +30,7 @@ pub const BundlePaths = struct {
     }
 };
 
-pub fn findBundlePaths(allocator: std.mem.Allocator, model_dir: []const u8) !?BundlePaths {
+pub fn findPaths(allocator: std.mem.Allocator, model_dir: []const u8) !?BundlePaths {
     const manifest_path = try findFirstExistingPath(allocator, model_dir, &manifest_candidates) orelse return null;
     errdefer allocator.free(manifest_path);
 

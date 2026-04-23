@@ -8,5 +8,8 @@ pub const backend = @import("backend.zig").backend;
 pub const tryNormalize = @import("resolver.zig").tryNormalize;
 
 pub const bundle = struct {
-    pub const locator = @import("bundle/locator.zig");
+    pub const api = @import("bundle/index.zig");
+    pub const paths = @import("bundle/paths.zig");
+    pub const manifest = @import("bundle/manifest.zig");
+    pub const meta = @import("bundle/meta.zig");
 };
