@@ -17,6 +17,8 @@ pub const LoadedBundle = struct {
 
     pub fn deinit(self: *LoadedBundle) void {
         self.manifest.deinit();
+        self.tts.deinit();
+        self.codec.deinit();
         self.paths.deinit();
         self.* = undefined;
     }
