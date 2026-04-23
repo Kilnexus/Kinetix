@@ -24,6 +24,7 @@ const State = struct {
     manifest: bundle.ManifestSummary,
     tts: bundle.TtsSummary,
     codec: bundle.CodecConfig,
+    onnx_metadata: inference.planning.onnx_metadata.Summary = .{},
     tokenizer: ?tokenizer_mod.sentencepiece.Model = null,
 
     fn destroy(self: *State, allocator: std.mem.Allocator) void {
@@ -70,8 +71,16 @@ fn open(
         .manifest = moved_manifest,
         .tts = moved_tts,
         .codec = moved_codec,
+        .onnx_metadata = .{},
         .tokenizer = tokenizer_mod.sentencepiece.loadFromFile(allocator, loaded.paths.tokenizer_model_path) catch null,
     };
+    state.onnx_metadata = inference.planning.onnx_metadata.inspect(
+        allocator,
+        state.tts_meta_path,
+        state.codec_meta_path,
+        state.tts,
+        state.codec,
+    ) catch .{};
     moved_manifest = .{};
     moved_tts = .{};
     moved_codec = .{};
@@ -189,6 +198,12 @@ fn execute(
         codec_decode_step_output_count: usize,
         codec_streaming_transformer_offset_count: usize,
         codec_streaming_attention_cache_count: usize,
+        onnx_metadata_loaded_graph_count: usize,
+        onnx_metadata_total_initializer_count: usize,
+        onnx_metadata_external_initializer_count: usize,
+        onnx_metadata_tts_prefill_node_count: usize,
+        onnx_metadata_tts_decode_step_node_count: usize,
+        onnx_metadata_codec_decode_full_node_count: usize,
         output_contract: []const u8,
         message: []const u8,
     };
@@ -263,6 +278,12 @@ fn execute(
         .codec_decode_step_output_count = state.codec.onnx.decode_step_output_names.len,
         .codec_streaming_transformer_offset_count = state.codec.streaming_transformer_offset_count,
         .codec_streaming_attention_cache_count = state.codec.streaming_attention_cache_count,
+        .onnx_metadata_loaded_graph_count = state.onnx_metadata.loaded_graph_count,
+        .onnx_metadata_total_initializer_count = state.onnx_metadata.total_initializer_count,
+        .onnx_metadata_external_initializer_count = state.onnx_metadata.external_initializer_count,
+        .onnx_metadata_tts_prefill_node_count = state.onnx_metadata.tts_prefill_node_count,
+        .onnx_metadata_tts_decode_step_node_count = state.onnx_metadata.tts_decode_step_node_count,
+        .onnx_metadata_codec_decode_full_node_count = state.onnx_metadata.codec_decode_full_node_count,
         .output_contract = "audio_path",
         .message = "MOSS-TTS-Nano assets, tokenizer, and voice-clone prefill request rows are now prepared by the unified runtime. Native zero-dependency acoustic and codec graph execution are not implemented yet.",
     };
