@@ -9,6 +9,7 @@ const indexing = @import("ops/indexing.zig");
 const linear = @import("ops/linear.zig");
 const normalization = @import("ops/normalization.zig");
 const shape = @import("ops/shape.zig");
+const spatial = @import("ops/spatial.zig");
 
 pub const Tensor = tensor_mod.Tensor;
 
@@ -29,6 +30,7 @@ pub fn execute(
     if (std.mem.eql(u8, node.op_type, "Sigmoid")) return try activation.sigmoid(allocator, inputs);
     if (std.mem.eql(u8, node.op_type, "LeakyRelu")) return try activation.leakyRelu(allocator, node, inputs);
     if (std.mem.eql(u8, node.op_type, "Gelu")) return try activation.gelu(allocator, inputs);
+    if (std.mem.eql(u8, node.op_type, "SwiGLU")) return try activation.swiglu(allocator, inputs);
     if (std.mem.eql(u8, node.op_type, "Cast")) return try core.cast(allocator, node, inputs);
     if (std.mem.eql(u8, node.op_type, "MatMul")) return try linear.matmul(allocator, inputs);
     if (std.mem.eql(u8, node.op_type, "Gemm")) return try linear.gemm(allocator, node, inputs);
@@ -43,6 +45,8 @@ pub fn execute(
     if (std.mem.eql(u8, node.op_type, "Softmax")) return try normalization.softmax(allocator, node, inputs);
     if (std.mem.eql(u8, node.op_type, "LayerNormalization")) return try normalization.layerNormalization(allocator, node, inputs);
     if (std.mem.eql(u8, node.op_type, "RMSNormalization")) return try normalization.rmsNormalization(allocator, node, inputs);
+    if (std.mem.eql(u8, node.op_type, "Conv")) return try spatial.conv(allocator, node, inputs);
+    if (std.mem.eql(u8, node.op_type, "MaxPool")) return try spatial.maxPool(allocator, node, inputs);
     return error.UnsupportedOnnxOperator;
 }
 
@@ -214,6 +218,47 @@ test "runtime ops execute collected activation and rms normalization adapters" {
     try std.testing.expectApproxEqAbs(@as(f32, 2.2627418), rms_out.buffer.f32[1], 0.00001);
     try std.testing.expectApproxEqAbs(@as(f32, 0.84852814), rms_out.buffer.f32[2], 0.00001);
     try std.testing.expectApproxEqAbs(@as(f32, 2.2627418), rms_out.buffer.f32[3], 0.00001);
+}
+
+test "runtime ops execute collected swiglu and spatial adapters" {
+    var gate = try Tensor.fromF32(std.testing.allocator, &.{3}, &.{ 0, 1, -1 });
+    defer gate.deinit();
+    var up = try Tensor.fromF32(std.testing.allocator, &.{3}, &.{ 1, 2, 3 });
+    defer up.deinit();
+    const swiglu_node = testNode("SwiGLU", &.{});
+    var swiglu_out = try execute(std.testing.allocator, swiglu_node, &.{ &gate, &up });
+    defer swiglu_out.deinit();
+    try std.testing.expectApproxEqAbs(@as(f32, 0), swiglu_out.buffer.f32[0], 0.00001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.4621172), swiglu_out.buffer.f32[1], 0.00001);
+    try std.testing.expectApproxEqAbs(@as(f32, -0.8068243), swiglu_out.buffer.f32[2], 0.00001);
+
+    var pool_input = try Tensor.fromF32(std.testing.allocator, &.{ 1, 1, 2, 2 }, &.{ 1, 9, 3, 4 });
+    defer pool_input.deinit();
+    var pool_kernel_values = [_]i64{ 2, 2 };
+    var pool_stride_values = [_]i64{ 2, 2 };
+    var pool_attrs = [_]onnx_metadata.AttributeInfo{
+        testIntsAttribute("kernel_shape", pool_kernel_values[0..]),
+        testIntsAttribute("strides", pool_stride_values[0..]),
+    };
+    const pool_node = testNode("MaxPool", pool_attrs[0..]);
+    var pool_out = try execute(std.testing.allocator, pool_node, &.{&pool_input});
+    defer pool_out.deinit();
+    try std.testing.expectEqualSlices(usize, &.{ 1, 1, 1, 1 }, pool_out.shape);
+    try std.testing.expectEqualSlices(f32, &.{9}, pool_out.buffer.f32);
+
+    var conv_input = try Tensor.fromF32(std.testing.allocator, &.{ 1, 2, 1, 1 }, &.{ 2, 3 });
+    defer conv_input.deinit();
+    var conv_weights = try Tensor.fromF32(std.testing.allocator, &.{ 1, 2, 1, 1 }, &.{ 4, 5 });
+    defer conv_weights.deinit();
+    var conv_bias = try Tensor.fromF32(std.testing.allocator, &.{1}, &.{1});
+    defer conv_bias.deinit();
+    var conv_stride_values = [_]i64{ 1, 1 };
+    var conv_attrs = [_]onnx_metadata.AttributeInfo{testIntsAttribute("strides", conv_stride_values[0..])};
+    const conv_node = testNode("Conv", conv_attrs[0..]);
+    var conv_out = try execute(std.testing.allocator, conv_node, &.{ &conv_input, &conv_weights, &conv_bias });
+    defer conv_out.deinit();
+    try std.testing.expectEqualSlices(usize, &.{ 1, 1, 1, 1 }, conv_out.shape);
+    try std.testing.expectEqualSlices(f32, &.{24}, conv_out.buffer.f32);
 }
 
 fn testNode(op_type: []const u8, attributes: []onnx_metadata.AttributeInfo) onnx_metadata.NodeInfo {

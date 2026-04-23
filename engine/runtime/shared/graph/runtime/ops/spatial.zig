@@ -1,0 +1,158 @@
+const std = @import("std");
+const onnx_metadata = @import("../../onnx/metadata.zig");
+const common = @import("common.zig");
+
+const Tensor = common.Tensor;
+
+pub fn conv(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
+    if (inputs.len < 2 or inputs.len > 3) return error.InvalidOperatorArity;
+    const x = inputs[0].*;
+    const w = inputs[1].*;
+    if (x.buffer != .f32 or w.buffer != .f32) return error.UnsupportedTensorDType;
+    if (x.shape.len != 4 or w.shape.len != 4) return error.UnsupportedTensorRank;
+    const n = x.shape[0];
+    const in_channels = x.shape[1];
+    const in_h = x.shape[2];
+    const in_w = x.shape[3];
+    const out_channels = w.shape[0];
+    const kernel_channels = w.shape[1];
+    const kernel_h = w.shape[2];
+    const kernel_w = w.shape[3];
+    const group: usize = @intCast(common.attributeInt(node, "group") orelse 1);
+    if (group == 0 or in_channels % group != 0 or out_channels % group != 0) return error.InvalidGroups;
+    if (kernel_channels != in_channels / group) return error.ShapeMismatch;
+    const strides = try pairAttribute(allocator, node, "strides", 1);
+    const dilations = try pairAttribute(allocator, node, "dilations", 1);
+    const pads = try padsAttribute(allocator, node);
+    if (dilations.h != 1 or dilations.w != 1) return error.UnsupportedOperatorAttribute;
+    const out_h = try convOutputDim(in_h, kernel_h, pads.top, pads.bottom, strides.h);
+    const out_w = try convOutputDim(in_w, kernel_w, pads.left, pads.right, strides.w);
+    const out = try allocator.alloc(f32, n * out_channels * out_h * out_w);
+    errdefer allocator.free(out);
+    const bias = if (inputs.len == 3) inputs[2].* else null;
+    if (bias) |bias_tensor| {
+        if (bias_tensor.buffer != .f32 or bias_tensor.elementCount() != out_channels) return error.ShapeMismatch;
+    }
+
+    const out_channel_per_group = out_channels / group;
+    const in_channel_per_group = in_channels / group;
+    for (0..n) |batch| {
+        for (0..out_channels) |oc| {
+            const group_index = oc / out_channel_per_group;
+            for (0..out_h) |oy| {
+                for (0..out_w) |ox| {
+                    var sum: f32 = if (bias) |bias_tensor| bias_tensor.buffer.f32[oc] else 0;
+                    for (0..in_channel_per_group) |ic_local| {
+                        const ic = group_index * in_channel_per_group + ic_local;
+                        for (0..kernel_h) |ky| {
+                            const in_y = @as(isize, @intCast(oy * strides.h + ky)) - @as(isize, @intCast(pads.top));
+                            if (in_y < 0 or in_y >= @as(isize, @intCast(in_h))) continue;
+                            for (0..kernel_w) |kx| {
+                                const in_x = @as(isize, @intCast(ox * strides.w + kx)) - @as(isize, @intCast(pads.left));
+                                if (in_x < 0 or in_x >= @as(isize, @intCast(in_w))) continue;
+                                const x_index = ((batch * in_channels + ic) * in_h + @as(usize, @intCast(in_y))) * in_w + @as(usize, @intCast(in_x));
+                                const w_index = ((oc * kernel_channels + ic_local) * kernel_h + ky) * kernel_w + kx;
+                                sum += x.buffer.f32[x_index] * w.buffer.f32[w_index];
+                            }
+                        }
+                    }
+                    out[((batch * out_channels + oc) * out_h + oy) * out_w + ox] = sum;
+                }
+            }
+        }
+    }
+    return .{
+        .allocator = allocator,
+        .shape = try allocator.dupe(usize, &.{ n, out_channels, out_h, out_w }),
+        .buffer = .{ .f32 = out },
+    };
+}
+
+pub fn maxPool(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
+    if (inputs.len != 1) return error.InvalidOperatorArity;
+    const input = inputs[0].*;
+    if (input.buffer != .f32) return error.UnsupportedTensorDType;
+    if (input.shape.len != 4) return error.UnsupportedTensorRank;
+    const kernel = try requiredPairAttribute(allocator, node, "kernel_shape");
+    const strides = try pairAttribute(allocator, node, "strides", 1);
+    const pads = try padsAttribute(allocator, node);
+    const out_h = try convOutputDim(input.shape[2], kernel.h, pads.top, pads.bottom, strides.h);
+    const out_w = try convOutputDim(input.shape[3], kernel.w, pads.left, pads.right, strides.w);
+    const out = try allocator.alloc(f32, input.shape[0] * input.shape[1] * out_h * out_w);
+    errdefer allocator.free(out);
+
+    for (0..input.shape[0]) |batch| {
+        for (0..input.shape[1]) |channel| {
+            for (0..out_h) |oy| {
+                for (0..out_w) |ox| {
+                    var max_value = -std.math.inf(f32);
+                    for (0..kernel.h) |ky| {
+                        const in_y = @as(isize, @intCast(oy * strides.h + ky)) - @as(isize, @intCast(pads.top));
+                        if (in_y < 0 or in_y >= @as(isize, @intCast(input.shape[2]))) continue;
+                        for (0..kernel.w) |kx| {
+                            const in_x = @as(isize, @intCast(ox * strides.w + kx)) - @as(isize, @intCast(pads.left));
+                            if (in_x < 0 or in_x >= @as(isize, @intCast(input.shape[3]))) continue;
+                            const index = ((batch * input.shape[1] + channel) * input.shape[2] + @as(usize, @intCast(in_y))) * input.shape[3] + @as(usize, @intCast(in_x));
+                            max_value = @max(max_value, input.buffer.f32[index]);
+                        }
+                    }
+                    out[((batch * input.shape[1] + channel) * out_h + oy) * out_w + ox] = max_value;
+                }
+            }
+        }
+    }
+    return .{
+        .allocator = allocator,
+        .shape = try allocator.dupe(usize, &.{ input.shape[0], input.shape[1], out_h, out_w }),
+        .buffer = .{ .f32 = out },
+    };
+}
+
+const Pair = struct {
+    h: usize,
+    w: usize,
+};
+
+const Pads = struct {
+    top: usize,
+    left: usize,
+    bottom: usize,
+    right: usize,
+};
+
+fn convOutputDim(input: usize, kernel: usize, pad_begin: usize, pad_end: usize, stride: usize) !usize {
+    if (kernel == 0 or stride == 0) return error.InvalidOperatorAttribute;
+    const padded = input + pad_begin + pad_end;
+    if (padded < kernel) return error.InvalidOutputShape;
+    return ((padded - kernel) / stride) + 1;
+}
+
+fn pairAttribute(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, name: []const u8, default: usize) !Pair {
+    const values = try common.attributeIntsOwned(allocator, node, name);
+    defer allocator.free(values);
+    if (values.len == 0) return .{ .h = default, .w = default };
+    if (values.len != 2 or values[0] <= 0 or values[1] <= 0) return error.InvalidOperatorAttribute;
+    return .{ .h = @intCast(values[0]), .w = @intCast(values[1]) };
+}
+
+fn requiredPairAttribute(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, name: []const u8) !Pair {
+    const values = try common.attributeIntsOwned(allocator, node, name);
+    defer allocator.free(values);
+    if (values.len != 2 or values[0] <= 0 or values[1] <= 0) return error.MissingOperatorAttribute;
+    return .{ .h = @intCast(values[0]), .w = @intCast(values[1]) };
+}
+
+fn padsAttribute(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo) !Pads {
+    const values = try common.attributeIntsOwned(allocator, node, "pads");
+    defer allocator.free(values);
+    if (values.len == 0) return .{ .top = 0, .left = 0, .bottom = 0, .right = 0 };
+    if (values.len == 2) {
+        if (values[0] < 0 or values[1] < 0) return error.InvalidOperatorAttribute;
+        return .{ .top = @intCast(values[0]), .left = @intCast(values[1]), .bottom = @intCast(values[0]), .right = @intCast(values[1]) };
+    }
+    if (values.len == 4) {
+        for (values) |value| if (value < 0) return error.InvalidOperatorAttribute;
+        return .{ .top = @intCast(values[0]), .left = @intCast(values[1]), .bottom = @intCast(values[2]), .right = @intCast(values[3]) };
+    }
+    return error.InvalidOperatorAttribute;
+}

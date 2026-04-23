@@ -53,8 +53,30 @@ pub fn gelu(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Tensor
     };
 }
 
+pub fn swiglu(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Tensor {
+    if (inputs.len != 2) return error.InvalidOperatorArity;
+    const gate = inputs[0].*;
+    const up = inputs[1].*;
+    if (gate.buffer != .f32 or up.buffer != .f32) return error.UnsupportedTensorDType;
+    if (!gate.sameShape(up)) return error.ShapeMismatch;
+    const out = try allocator.alloc(f32, gate.buffer.f32.len);
+    errdefer allocator.free(out);
+    for (gate.buffer.f32, up.buffer.f32, out) |gate_value, up_value, *slot| {
+        slot.* = siluValue(gate_value) * up_value;
+    }
+    return .{
+        .allocator = allocator,
+        .shape = try allocator.dupe(usize, gate.shape),
+        .buffer = .{ .f32 = out },
+    };
+}
+
 fn geluValue(x: f32) f32 {
     const c = @sqrt(2.0 / std.math.pi);
     const inner = c * (x + 0.044715 * x * x * x);
     return 0.5 * x * (1.0 + std.math.tanh(inner));
+}
+
+fn siluValue(x: f32) f32 {
+    return x / (1.0 + @exp(-x));
 }
