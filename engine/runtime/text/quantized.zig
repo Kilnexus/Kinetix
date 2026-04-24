@@ -1,5 +1,5 @@
 const file_impl = @import("quantized/file.zig");
-const kernels = @import("quantized/kernels.zig");
+const kernels = @import("shared_ops").kernels.quantized;
 const quantized_store = @import("quantized/store.zig");
 const types = @import("quantized/types.zig");
 

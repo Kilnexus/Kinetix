@@ -1,7 +1,9 @@
 const std = @import("std");
-const kernel_registry = @import("shared_ops").kernels.registry;
-const tensor_store = @import("../storage/store.zig");
-const codec = @import("codec.zig");
+const kernel_registry = @import("../registry/index.zig");
+pub const codec = @import("codec.zig");
+
+pub const handwritten_hidden_width: usize = 1024;
+pub const handwritten_intermediate_width: usize = 3072;
 
 pub fn encodeQ8Row(output: []u8, values: []const f32) void {
     codec.encodeQ8Row(output, values);
@@ -90,8 +92,8 @@ pub fn decodeQ4Row(bytes: []const u8, row_offset: u64, output: []f32) void {
 
 pub fn dotQ6Row(bytes: []const u8, row_offset: u64, input: []const f32) f32 {
     return switch (kernel_registry.resolve(.{ .gemv_row = .{ .op = .q6_row, .cols = input.len } }).shape) {
-        .qwen3_hidden_1024 => dotQ6RowFixed(tensor_store.handwritten_hidden_width, bytes, row_offset, input),
-        .qwen3_intermediate_3072 => dotQ6RowFixed(tensor_store.handwritten_intermediate_width, bytes, row_offset, input),
+        .qwen3_hidden_1024 => dotQ6RowFixed(handwritten_hidden_width, bytes, row_offset, input),
+        .qwen3_intermediate_3072 => dotQ6RowFixed(handwritten_intermediate_width, bytes, row_offset, input),
         else => dotQ6RowGeneric(bytes, row_offset, input),
     };
 }
@@ -198,11 +200,11 @@ pub fn matmulQ6Rows(output: []f32, bytes: []const u8, row_bytes: usize, input: [
 
     switch (kernel_registry.resolve(.{ .gemv_row = .{ .op = .q6_row, .cols = input.len } }).shape) {
         .qwen3_hidden_1024 => {
-            matmulQ6RowsFixedBlocks(tensor_store.handwritten_hidden_width, output, bytes, row_bytes, input);
+            matmulQ6RowsFixedBlocks(handwritten_hidden_width, output, bytes, row_bytes, input);
             return;
         },
         .qwen3_intermediate_3072 => {
-            matmulQ6RowsFixedBlocks(tensor_store.handwritten_intermediate_width, output, bytes, row_bytes, input);
+            matmulQ6RowsFixedBlocks(handwritten_intermediate_width, output, bytes, row_bytes, input);
             return;
         },
         else => {},
@@ -346,15 +348,10 @@ fn readPackedBits(buffer: []const u8, bit_index: usize, bit_width: u8) u8 {
     return @intCast(result);
 }
 
-fn dotF32Row(bytes: []const u8, row_offset: u64, input: []const f32) f32 {
-    const start = @as(usize, @intCast(row_offset));
-    return tensor_store.dotF32Row(bytes[start .. start + input.len * 4], input);
-}
-
 pub fn dotQ8Row(bytes: []const u8, row_offset: u64, input: []const f32) f32 {
     return switch (kernel_registry.resolve(.{ .gemv_row = .{ .op = .q8_row, .cols = input.len } }).shape) {
-        .qwen3_hidden_1024 => dotQ8RowFixed(tensor_store.handwritten_hidden_width, bytes, row_offset, input),
-        .qwen3_intermediate_3072 => dotQ8RowFixed(tensor_store.handwritten_intermediate_width, bytes, row_offset, input),
+        .qwen3_hidden_1024 => dotQ8RowFixed(handwritten_hidden_width, bytes, row_offset, input),
+        .qwen3_intermediate_3072 => dotQ8RowFixed(handwritten_intermediate_width, bytes, row_offset, input),
         else => dotQ8RowGeneric(bytes, row_offset, input),
     };
 }
@@ -410,11 +407,11 @@ pub fn matmulQ8Rows(output: []f32, bytes: []const u8, row_bytes: usize, input: [
 
     switch (kernel_registry.resolve(.{ .gemv_row = .{ .op = .q8_row, .cols = input.len } }).shape) {
         .qwen3_hidden_1024 => {
-            matmulQ8RowsFixedBlocks(tensor_store.handwritten_hidden_width, output, bytes, row_bytes, input);
+            matmulQ8RowsFixedBlocks(handwritten_hidden_width, output, bytes, row_bytes, input);
             return;
         },
         .qwen3_intermediate_3072 => {
-            matmulQ8RowsFixedBlocks(tensor_store.handwritten_intermediate_width, output, bytes, row_bytes, input);
+            matmulQ8RowsFixedBlocks(handwritten_intermediate_width, output, bytes, row_bytes, input);
             return;
         },
         else => {},
@@ -487,8 +484,8 @@ fn matmulQ8RowsFixedBlocks(
 
 pub fn dotQ4Row(bytes: []const u8, row_offset: u64, input: []const f32) f32 {
     return switch (kernel_registry.resolve(.{ .gemv_row = .{ .op = .q4_row, .cols = input.len } }).shape) {
-        .qwen3_hidden_1024 => dotQ4RowFixed(tensor_store.handwritten_hidden_width, bytes, row_offset, input),
-        .qwen3_intermediate_3072 => dotQ4RowFixed(tensor_store.handwritten_intermediate_width, bytes, row_offset, input),
+        .qwen3_hidden_1024 => dotQ4RowFixed(handwritten_hidden_width, bytes, row_offset, input),
+        .qwen3_intermediate_3072 => dotQ4RowFixed(handwritten_intermediate_width, bytes, row_offset, input),
         else => dotQ4RowGeneric(bytes, row_offset, input),
     };
 }
@@ -618,7 +615,7 @@ fn loadQ6Vector8(bytes: []const u8, start: usize) @Vector(8, f32) {
 test "wide quantized handwritten kernels match generic path" {
     const testing = std.testing;
 
-    inline for (.{ tensor_store.handwritten_hidden_width, tensor_store.handwritten_intermediate_width }) |cols| {
+    inline for (.{ handwritten_hidden_width, handwritten_intermediate_width }) |cols| {
         const values = try testing.allocator.alloc(f32, cols);
         defer testing.allocator.free(values);
         const input = try testing.allocator.alloc(f32, cols);
@@ -648,7 +645,7 @@ test "wide quantized handwritten kernels match generic path" {
 test "wide q6 matmul rows match row-dot path" {
     const testing = std.testing;
 
-    inline for (.{ tensor_store.handwritten_hidden_width, tensor_store.handwritten_intermediate_width }) |cols| {
+    inline for (.{ handwritten_hidden_width, handwritten_intermediate_width }) |cols| {
         const rows: usize = 5;
         const row_bytes = 4 + (try std.math.divCeil(usize, cols * 6, 8));
         const matrix = try testing.allocator.alloc(u8, rows * row_bytes);
@@ -685,7 +682,7 @@ test "wide q6 matmul rows match row-dot path" {
 test "wide q8 matmul rows match row-dot path" {
     const testing = std.testing;
 
-    inline for (.{ tensor_store.handwritten_hidden_width, tensor_store.handwritten_intermediate_width }) |cols| {
+    inline for (.{ handwritten_hidden_width, handwritten_intermediate_width }) |cols| {
         const rows: usize = 5;
         const row_bytes = 4 + cols;
         const matrix = try testing.allocator.alloc(u8, rows * row_bytes);

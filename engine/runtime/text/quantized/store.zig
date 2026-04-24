@@ -1,6 +1,6 @@
 const std = @import("std");
 const file_impl = @import("file.zig");
-const kernels = @import("kernels.zig");
+const kernels = @import("shared_ops").kernels.quantized;
 const types = @import("types.zig");
 const parallel_rows = @import("../../../core/threading/parallel_rows.zig");
 const tensor_store = @import("../storage/store.zig");
@@ -266,7 +266,7 @@ fn shouldParallelize(rows: usize, cols: usize, thread_count: usize, has_parallel
 test "quantized store matmulVecByName matches q8 rows for hot width" {
     const testing = std.testing;
     const rows: usize = 3;
-    const cols = tensor_store.handwritten_hidden_width;
+    const cols = kernels.handwritten_hidden_width;
     const row_bytes = 4 + cols;
     const payload_len = rows * row_bytes;
     const header = try std.fmt.allocPrint(
@@ -327,7 +327,7 @@ test "quantized store matmulVecByName matches q8 rows for hot width" {
 test "quantized store matmulVecByName matches q6 rows for hot width" {
     const testing = std.testing;
     const rows: usize = 3;
-    const cols = tensor_store.handwritten_hidden_width;
+    const cols = kernels.handwritten_hidden_width;
     const row_bytes = 4 + (try std.math.divCeil(usize, cols * 6, 8));
     const payload_len = rows * row_bytes;
     const header = try std.fmt.allocPrint(

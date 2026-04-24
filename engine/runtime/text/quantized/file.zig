@@ -1,7 +1,7 @@
 const std = @import("std");
 const safetensors = @import("../safetensors.zig");
 const tensor_store = @import("../storage/store.zig");
-const codec = @import("codec.zig");
+const codec = @import("shared_ops").kernels.quantized.codec;
 const types = @import("types.zig");
 
 const io = std.Options.debug_io;
