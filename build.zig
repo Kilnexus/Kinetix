@@ -125,6 +125,7 @@ fn addRuntimeImports(
         .target = target,
         .optimize = optimize,
     });
+    shared_ops.addImport("tensor", tensor);
     const engine_vision_inspect = b.createModule(.{
         .root_source_file = b.path("engine/runtime/vision/analysis/inspect.zig"),
         .target = target,
