@@ -159,6 +159,7 @@ fn addRuntimeImports(
         .target = target,
         .optimize = optimize,
     });
+    shared_ops.addImport("engine_env", env);
     const stopwatch = b.createModule(.{
         .root_source_file = b.path("engine/core/stopwatch.zig"),
         .target = target,

@@ -72,7 +72,7 @@ pub const entries = [_]Entry{
     .{ .name = "MaxPool2d", .domain = .vision_nn, .status = .native_kernel, .module = "shared/ops/kernels/pooling/index.zig" },
     .{ .name = "MatMul", .domain = .vision_nn, .status = .native_kernel, .module = "shared/ops/kernels/linalg/index.zig" },
     .{ .name = "SoftmaxRows", .domain = .vision_nn, .status = .native_kernel, .module = "shared/ops/kernels/linalg/index.zig" },
-    .{ .name = "Conv2d", .domain = .vision_nn, .status = .native_kernel, .module = "vision/nn/ops/conv.zig" },
+    .{ .name = "Conv2d", .domain = .vision_nn, .status = .native_kernel, .module = "shared/ops/kernels/conv/entry.zig" },
     .{ .name = "Conv2dGeneral", .domain = .vision_nn, .status = .native_kernel, .module = "shared/ops/kernels/conv/general.zig" },
     .{ .name = "Conv2d3x3Pad1", .domain = .vision_nn, .status = .native_kernel, .module = "shared/ops/kernels/conv/kernel_3x3.zig" },
     .{ .name = "Conv2dPointwise", .domain = .vision_nn, .status = .native_kernel, .module = "shared/ops/kernels/conv/pointwise.zig" },
