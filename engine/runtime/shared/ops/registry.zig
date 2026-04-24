@@ -88,9 +88,9 @@ pub const entries = [_]Entry{
     .{ .name = "GELU", .domain = .text_core, .status = .native_kernel, .module = "shared/ops/kernels/activation/index.zig" },
     .{ .name = "SwiGLU", .domain = .text_core, .status = .native_kernel, .module = "shared/ops/kernels/activation/index.zig" },
 
-    .{ .name = "SoftmaxInPlace", .domain = .text_attention, .status = .native_kernel, .module = "text/attention/basic.zig" },
-    .{ .name = "ScaledDotProductAttentionSingleQuery", .domain = .text_attention, .status = .native_kernel, .module = "text/attention/basic.zig" },
-    .{ .name = "ScaledDotProductAttentionSingleQueryBf16Cache", .domain = .text_attention, .status = .native_kernel, .module = "text/attention/basic.zig" },
+    .{ .name = "SoftmaxInPlace", .domain = .text_attention, .status = .native_kernel, .module = "shared/ops/kernels/attention/basic.zig" },
+    .{ .name = "ScaledDotProductAttentionSingleQuery", .domain = .text_attention, .status = .native_kernel, .module = "shared/ops/kernels/attention/basic.zig" },
+    .{ .name = "ScaledDotProductAttentionSingleQueryBf16Cache", .domain = .text_attention, .status = .native_kernel, .module = "shared/ops/kernels/attention/basic.zig" },
     .{ .name = "RoPE", .domain = .text_attention, .status = .native_kernel, .module = "text/attention/rope.zig" },
     .{ .name = "ScaledDotProductAttentionSingleQueryQ8Cache", .domain = .text_attention, .status = .native_kernel, .module = "text/attention/q8_cache.zig" },
     .{ .name = "ScaledDotProductAttentionSingleQueryQ8CacheHeadMajor", .domain = .text_attention, .status = .native_kernel, .module = "text/attention/q8_cache.zig" },

@@ -1,7 +1,7 @@
 const std = @import("std");
 const onnx_metadata = @import("../onnx/metadata.zig");
-const ops = @import("ops.zig");
 const tensor_mod = @import("tensor.zig");
+const graph_ops = @import("shared_ops").graph;
 
 pub const Tensor = tensor_mod.Tensor;
 
@@ -76,7 +76,7 @@ pub fn execute(
             slot.* = table.get(name) orelse return error.TensorNotFound;
         }
 
-        var output = try ops.execute(allocator, node, input_ptrs);
+        var output = try graph_ops.execute(allocator, node, input_ptrs);
         errdefer output.deinit();
         try table.putOwned(node.outputs[0], output);
     }

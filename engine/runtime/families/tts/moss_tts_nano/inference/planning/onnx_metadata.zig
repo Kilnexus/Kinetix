@@ -1,6 +1,7 @@
 const std = @import("std");
 const bundle = @import("../../bundle/index.zig");
 const shared_graph = @import("shared_graph");
+const shared_ops = @import("shared_ops");
 
 const io = std.Options.debug_io;
 
@@ -86,7 +87,7 @@ fn addInitializers(summary: *Summary, metadata: *const shared_graph.onnx.metadat
 
 fn addOperatorSupport(summary: *Summary, metadata: *const shared_graph.onnx.metadata.ModelMetadata, stage: []const u8) void {
     for (metadata.graph.nodes) |node| {
-        if (shared_graph.runtime.ops.isSupported(node.op_type)) {
+        if (shared_ops.graph.isSupported(node.op_type)) {
             summary.supported_node_count += 1;
         } else {
             summary.unsupported_node_count += 1;
