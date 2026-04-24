@@ -35,7 +35,7 @@ pub const families = struct {
     pub const generic = @import("families/generic/family.zig");
 };
 pub const shared = struct {
-    pub const ops = @import("shared/ops/index.zig");
+    pub const ops = @import("shared_ops");
     pub const text = @import("shared/text/runtime.zig");
     pub const vision = @import("shared/vision/runtime.zig");
     pub const ocr = @import("shared/ocr/runtime.zig");

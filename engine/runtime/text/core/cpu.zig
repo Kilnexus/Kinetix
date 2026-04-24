@@ -1,21 +1,16 @@
 const std = @import("std");
+const kernels = @import("shared_ops").kernels;
 
 pub fn dot(lhs: []const f32, rhs: []const f32) !f32 {
-    if (lhs.len != rhs.len) return error.SizeMismatch;
-
-    var sum: f32 = 0.0;
-    for (lhs, rhs) |a, b| {
-        sum += a * b;
-    }
-    return sum;
+    return kernels.linalg.dot(lhs, rhs) catch |err| switch (err) {
+        error.ShapeMismatch => return error.SizeMismatch,
+    };
 }
 
 pub fn axpyInPlace(output: []f32, alpha: f32, input: []const f32) !void {
-    if (output.len != input.len) return error.SizeMismatch;
-
-    for (output, input) |*out, value| {
-        out.* += alpha * value;
-    }
+    return kernels.linalg.axpyInPlace(output, alpha, input) catch |err| switch (err) {
+        error.ShapeMismatch => return error.SizeMismatch,
+    };
 }
 
 pub fn matmulVec(
@@ -25,14 +20,9 @@ pub fn matmulVec(
     rows: usize,
     cols: usize,
 ) !void {
-    if (output.len != rows) return error.SizeMismatch;
-    if (input.len != cols) return error.SizeMismatch;
-    if (weights_row_major.len != rows * cols) return error.SizeMismatch;
-
-    for (0..rows) |row| {
-        const start = row * cols;
-        output[row] = try dot(weights_row_major[start .. start + cols], input);
-    }
+    return kernels.linalg.matmulVec(output, weights_row_major, input, rows, cols) catch |err| switch (err) {
+        error.ShapeMismatch => return error.SizeMismatch,
+    };
 }
 
 pub fn rmsNorm(
@@ -41,10 +31,9 @@ pub fn rmsNorm(
     weight: []const f32,
     eps: f32,
 ) !void {
-    if (output.len != input.len or input.len != weight.len) return error.SizeMismatch;
-
-    const inv_rms = computeInvRms(input, eps);
-    applyRmsNormScaled(output, input, weight, inv_rms);
+    return kernels.normalization.rmsNorm(output, input, weight, eps) catch |err| switch (err) {
+        error.ShapeMismatch => return error.SizeMismatch,
+    };
 }
 
 pub fn layerNorm(
@@ -54,24 +43,9 @@ pub fn layerNorm(
     bias: []const f32,
     eps: f32,
 ) !void {
-    if (output.len != input.len or input.len != weight.len or weight.len != bias.len) return error.SizeMismatch;
-    if (input.len == 0) return error.SizeMismatch;
-
-    var mean: f32 = 0.0;
-    for (input) |value| mean += value;
-    mean /= @as(f32, @floatFromInt(input.len));
-
-    var variance: f32 = 0.0;
-    for (input) |value| {
-        const centered = value - mean;
-        variance += centered * centered;
-    }
-    variance /= @as(f32, @floatFromInt(input.len));
-
-    const inv_std = 1.0 / @sqrt(variance + eps);
-    for (output, input, weight, bias) |*out, x, w, b| {
-        out.* = ((x - mean) * inv_std) * w + b;
-    }
+    return kernels.normalization.layerNorm(output, input, weight, bias, eps) catch |err| switch (err) {
+        error.ShapeMismatch => return error.SizeMismatch,
+    };
 }
 
 pub fn rmsNormRepeated(
@@ -82,58 +56,9 @@ pub fn rmsNormRepeated(
     weight: []const f32,
     eps: f32,
 ) !void {
-    if (weight.len != slice_len) return error.SizeMismatch;
-    if (input.len != repeat_count * slice_len) return error.SizeMismatch;
-    if (output.len != input.len) return error.SizeMismatch;
-
-    for (0..repeat_count) |idx| {
-        const start = idx * slice_len;
-        try rmsNorm(
-            output[start .. start + slice_len],
-            input[start .. start + slice_len],
-            weight,
-            eps,
-        );
-    }
-}
-
-fn computeInvRms(input: []const f32, eps: f32) f32 {
-    var sum_vec0: @Vector(16, f32) = @splat(0.0);
-    var sum_vec1: @Vector(16, f32) = @splat(0.0);
-    var index: usize = 0;
-    while (index + 32 <= input.len) : (index += 32) {
-        const v0: @Vector(16, f32) = input[index..][0..16].*;
-        const v1: @Vector(16, f32) = input[index + 16 ..][0..16].*;
-        sum_vec0 += v0 * v0;
-        sum_vec1 += v1 * v1;
-    }
-
-    var mean_square = @reduce(.Add, sum_vec0 + sum_vec1);
-
-    while (index + 16 <= input.len) : (index += 16) {
-        const v: @Vector(16, f32) = input[index..][0..16].*;
-        mean_square += @reduce(.Add, v * v);
-    }
-    while (index < input.len) : (index += 1) {
-        mean_square += input[index] * input[index];
-    }
-
-    mean_square /= @as(f32, @floatFromInt(input.len));
-    return 1.0 / @sqrt(mean_square + eps);
-}
-
-fn applyRmsNormScaled(output: []f32, input: []const f32, weight: []const f32, inv_rms: f32) void {
-    const inv_rms_vec: @Vector(16, f32) = @splat(inv_rms);
-
-    var index: usize = 0;
-    while (index + 16 <= output.len) : (index += 16) {
-        const in_vec: @Vector(16, f32) = input[index..][0..16].*;
-        const weight_vec: @Vector(16, f32) = weight[index..][0..16].*;
-        output[index..][0..16].* = in_vec * weight_vec * inv_rms_vec;
-    }
-    while (index < output.len) : (index += 1) {
-        output[index] = input[index] * inv_rms * weight[index];
-    }
+    return kernels.normalization.rmsNormRepeated(output, input, repeat_count, slice_len, weight, eps) catch |err| switch (err) {
+        error.ShapeMismatch => return error.SizeMismatch,
+    };
 }
 
 fn rmsNormScalarReference(
@@ -155,34 +80,19 @@ fn rmsNormScalarReference(
 }
 
 pub fn silu(x: f32) f32 {
-    return x / (1.0 + std.math.exp(-x));
+    return kernels.activation.siluValue(x);
 }
 
 pub fn gelu(x: f32) f32 {
-    const c = @sqrt(2.0 / std.math.pi);
-    const inner = c * (x + 0.044715 * x * x * x);
-    return 0.5 * x * (1.0 + std.math.tanh(inner));
+    return kernels.activation.geluValue(x);
 }
 
 pub fn geluInPlace(values: []f32) void {
-    for (values) |*value| {
-        value.* = gelu(value.*);
-    }
+    kernels.activation.geluInPlace(values);
 }
 
 pub fn swiglu(output: []f32, gate: []const f32, up: []const f32) !void {
-    if (output.len != gate.len or gate.len != up.len) return error.SizeMismatch;
-
-    var index: usize = 0;
-    while (index + 16 <= output.len) : (index += 16) {
-        const gate_vec: @Vector(16, f32) = gate[index..][0..16].*;
-        const up_vec: @Vector(16, f32) = up[index..][0..16].*;
-        const silu_vec = gate_vec / (@as(@Vector(16, f32), @splat(1.0)) + @exp(-gate_vec));
-        output[index..][0..16].* = silu_vec * up_vec;
-    }
-    while (index < output.len) : (index += 1) {
-        output[index] = silu(gate[index]) * up[index];
-    }
+    return kernels.activation.swiglu(output, gate, up);
 }
 
 fn swigluScalarReference(output: []f32, gate: []const f32, up: []const f32) void {

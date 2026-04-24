@@ -41,6 +41,8 @@ pub fn build(b: *std.Build) void {
 
 const RuntimeImports = struct {
     engine_root: *std.Build.Module,
+    shared_graph: *std.Build.Module,
+    shared_ops: *std.Build.Module,
     sdk_execution: *std.Build.Module,
     kinetix_sdk: *std.Build.Module,
     pixio: *std.Build.Module,
@@ -84,6 +86,18 @@ fn addRuntimeImports(
         .target = target,
         .optimize = optimize,
     });
+    const shared_graph = b.createModule(.{
+        .root_source_file = b.path("engine/runtime/shared/graph/index.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const shared_ops = b.createModule(.{
+        .root_source_file = b.path("engine/runtime/shared/ops/index.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    shared_graph.addImport("shared_ops", shared_ops);
+    shared_ops.addImport("shared_graph", shared_graph);
     const sdk_execution = b.createModule(.{
         .root_source_file = b.path("sdk/execution/session.zig"),
         .target = target,
@@ -129,6 +143,7 @@ fn addRuntimeImports(
         .target = target,
         .optimize = optimize,
     });
+    ops.addImport("shared_ops", shared_ops);
     ops.addImport("tensor", tensor);
     engine_vision_base.addImport("ops", ops);
 
@@ -179,6 +194,8 @@ fn addRuntimeImports(
     vision_preprocess.addImport("runtime", runtime);
 
     engine_root.addImport("graph", graph);
+    engine_root.addImport("shared_graph", shared_graph);
+    engine_root.addImport("shared_ops", shared_ops);
     engine_root.addImport("engine_vision_inspect", engine_vision_inspect);
     engine_root.addImport("engine_vision_base", engine_vision_base);
     engine_root.addImport("engine_vision_reuse_allocator", engine_vision_reuse_allocator);
@@ -192,6 +209,8 @@ fn addRuntimeImports(
 
     return .{
         .engine_root = engine_root,
+        .shared_graph = shared_graph,
+        .shared_ops = shared_ops,
         .sdk_execution = sdk_execution,
         .kinetix_sdk = kinetix_sdk,
         .pixio = pixio,
@@ -232,6 +251,8 @@ fn resolvePixioModule(
 
 fn addImportsToRoot(root: *std.Build.Module, imports: RuntimeImports) void {
     root.addImport("engine_root", imports.engine_root);
+    root.addImport("shared_graph", imports.shared_graph);
+    root.addImport("shared_ops", imports.shared_ops);
     root.addImport("sdk_execution", imports.sdk_execution);
     root.addImport("kinetix_sdk", imports.kinetix_sdk);
     root.addImport("Pixio", imports.pixio);

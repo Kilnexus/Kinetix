@@ -1,4 +1,5 @@
 const types = @import("types.zig");
+const kernels = @import("shared_ops").kernels;
 
 pub const Tensor = types.Tensor;
 pub const OpError = types.OpError;
@@ -6,17 +7,11 @@ const lane_count = 8;
 const F32xN = @Vector(lane_count, f32);
 
 pub fn siluInPlace(tensor: *Tensor) void {
-    for (tensor.data) |*value| {
-        const x = value.*;
-        value.* = x / (1.0 + @exp(-x));
-    }
+    kernels.activation.siluInPlace(tensor.data);
 }
 
 pub fn sigmoidInPlace(tensor: *Tensor) void {
-    for (tensor.data) |*value| {
-        const x = value.*;
-        value.* = 1.0 / (1.0 + @exp(-x));
-    }
+    kernels.activation.sigmoidInPlace(tensor.data);
 }
 
 pub fn add(output: *Tensor, lhs: *const Tensor, rhs: *const Tensor) OpError!void {

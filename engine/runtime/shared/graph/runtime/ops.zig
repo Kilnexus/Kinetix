@@ -1,15 +1,16 @@
 const std = @import("std");
 const onnx_metadata = @import("../onnx/metadata.zig");
 const tensor_mod = @import("tensor.zig");
-const op_registry = @import("../../ops/index.zig").registry;
+const shared_ops = @import("shared_ops");
+const op_registry = shared_ops.registry;
 
-const activation = @import("ops/activation.zig");
-const core = @import("ops/core.zig");
-const indexing = @import("ops/indexing.zig");
-const linear = @import("ops/linear.zig");
-const normalization = @import("ops/normalization.zig");
-const shape = @import("ops/shape.zig");
-const spatial = @import("ops/spatial.zig");
+const activation = shared_ops.graph.activation;
+const core = shared_ops.graph.core;
+const indexing = shared_ops.graph.indexing;
+const linear = shared_ops.graph.linear;
+const normalization = shared_ops.graph.normalization;
+const shape = shared_ops.graph.shape;
+const spatial = shared_ops.graph.spatial;
 
 pub const Tensor = tensor_mod.Tensor;
 

@@ -1,6 +1,6 @@
 const std = @import("std");
 const bundle = @import("../../bundle/index.zig");
-const shared_graph = @import("../../../../../shared/graph/index.zig");
+const shared_graph = @import("shared_graph");
 
 const io = std.Options.debug_io;
 

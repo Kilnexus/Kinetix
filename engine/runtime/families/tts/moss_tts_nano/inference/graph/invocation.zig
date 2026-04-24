@@ -1,5 +1,5 @@
 const std = @import("std");
-const shared_graph = @import("../../../../../shared/graph/index.zig");
+const shared_graph = @import("shared_graph");
 const bundle = @import("../../bundle/index.zig");
 const request = @import("../request.zig");
 

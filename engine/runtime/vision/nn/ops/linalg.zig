@@ -1,5 +1,6 @@
 const std = @import("std");
 const types = @import("types.zig");
+const kernels = @import("shared_ops").kernels;
 
 pub const OpError = types.OpError;
 
@@ -11,38 +12,15 @@ pub fn matmul(
     shared: usize,
     cols: usize,
 ) OpError!void {
-    if (lhs.len != rows * shared or rhs.len != shared * cols or out.len != rows * cols) {
-        return OpError.ShapeMismatch;
-    }
-
-    for (0..rows) |r| {
-        for (0..cols) |c| {
-            var acc: f32 = 0.0;
-            for (0..shared) |k| {
-                acc += lhs[r * shared + k] * rhs[k * cols + c];
-            }
-            out[r * cols + c] = acc;
-        }
-    }
+    kernels.linalg.matmul(lhs, rhs, out, rows, shared, cols) catch |err| switch (err) {
+        error.ShapeMismatch => return OpError.ShapeMismatch,
+    };
 }
 
 pub fn softmaxRows(data: []f32, rows: usize, cols: usize) OpError!void {
-    if (data.len != rows * cols) return OpError.ShapeMismatch;
-
-    for (0..rows) |r| {
-        const row = data[r * cols .. (r + 1) * cols];
-        var max_value = row[0];
-        for (row[1..]) |value| {
-            if (value > max_value) max_value = value;
-        }
-
-        var sum: f32 = 0.0;
-        for (row) |*value| {
-            value.* = @exp(value.* - max_value);
-            sum += value.*;
-        }
-        for (row) |*value| value.* /= sum;
-    }
+    kernels.linalg.softmaxRows(data, rows, cols) catch |err| switch (err) {
+        error.ShapeMismatch => return OpError.ShapeMismatch,
+    };
 }
 
 test "softmax row sums to one" {
