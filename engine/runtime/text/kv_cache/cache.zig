@@ -1,5 +1,5 @@
 const std = @import("std");
-const bfloat16 = @import("../tensor/bfloat16.zig");
+const bfloat16 = @import("shared_ops").kernels.common.bfloat16;
 const quantize = @import("quantize.zig");
 const types = @import("../kv_cache_types.zig");
 

@@ -9,7 +9,6 @@ pub const optimized_decoder = @import("optimized_decoder/runtime.zig");
 pub const generate_options = @import("generate_options.zig");
 pub const kv_cache = @import("kv_cache.zig");
 pub const kv_cache_types = @import("kv_cache_types.zig");
-pub const kernel_registry = @import("kernel_registry/registry.zig");
 pub const quantized = @import("quantized.zig");
 pub const sampler = @import("sampler.zig");
 pub const safetensors = @import("safetensors.zig");

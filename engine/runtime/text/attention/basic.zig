@@ -1,10 +1,16 @@
 const std = @import("std");
-const bfloat16 = @import("../tensor/bfloat16.zig");
 const shared_basic = @import("shared_ops").kernels.attention.basic;
 
 pub const softmaxInPlace = shared_basic.softmaxInPlace;
 pub const scaledDotProductAttentionSingleQuery = shared_basic.scaledDotProductAttentionSingleQuery;
 pub const scaledDotProductAttentionSingleQueryBf16Cache = shared_basic.scaledDotProductAttentionSingleQueryBf16Cache;
+
+inline fn bf16FromF32(value: f32) u16 {
+    const raw: u32 = @bitCast(value);
+    const lsb = (raw >> 16) & 1;
+    const rounding_bias: u32 = 0x7fff + lsb;
+    return @truncate((raw + rounding_bias) >> 16);
+}
 
 test "softmax normalizes values" {
     const testing = std.testing;
@@ -132,12 +138,12 @@ test "single-query attention supports bf16 kv cache" {
 
     const query = [_]f32{ 1.0, 0.0 };
     const key_cache = [_]u16{
-        bfloat16.fromF32(1.0), bfloat16.fromF32(0.0),
-        bfloat16.fromF32(0.0), bfloat16.fromF32(1.0),
+        bf16FromF32(1.0), bf16FromF32(0.0),
+        bf16FromF32(0.0), bf16FromF32(1.0),
     };
     const value_cache = [_]u16{
-        bfloat16.fromF32(10.0), bfloat16.fromF32(1.0),
-        bfloat16.fromF32(20.0), bfloat16.fromF32(2.0),
+        bf16FromF32(10.0), bf16FromF32(1.0),
+        bf16FromF32(20.0), bf16FromF32(2.0),
     };
     var output = [_]f32{ 0.0, 0.0 };
     var scores = [_]f32{ 0.0, 0.0 };

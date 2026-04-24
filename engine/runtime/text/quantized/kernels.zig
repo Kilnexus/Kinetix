@@ -1,5 +1,5 @@
 const std = @import("std");
-const kernel_registry = @import("../kernel_registry/registry.zig");
+const kernel_registry = @import("shared_ops").kernels.registry;
 const tensor_store = @import("../storage/store.zig");
 const codec = @import("codec.zig");
 
