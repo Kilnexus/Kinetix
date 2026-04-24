@@ -1,5 +1,4 @@
 const types = @import("ops/types.zig");
-const layout = @import("ops/layout.zig");
 const conv = @import("ops/conv.zig");
 const kernels = @import("shared_ops").kernels;
 
@@ -7,12 +6,84 @@ pub const Tensor = types.Tensor;
 pub const OpError = types.OpError;
 pub const Conv2DOptions = types.Conv2DOptions;
 
-pub const upsampleNearest = layout.upsampleNearest;
-pub const concatChannels = layout.concatChannels;
-pub const copyChannelRange = layout.copyChannelRange;
-pub const copyTensorBlock = layout.copyTensorBlock;
 pub const conv2d = conv.conv2d;
 pub const conv2dPointwiseConcat = conv.conv2dPointwiseConcat;
+
+fn mapLayoutError(err: anyerror) OpError {
+    return switch (err) {
+        error.ShapeMismatch => OpError.ShapeMismatch,
+        error.InvalidOutputShape => OpError.InvalidOutputShape,
+        else => OpError.ShapeMismatch,
+    };
+}
+
+pub fn upsampleNearest(
+    input: *const Tensor,
+    output: *Tensor,
+    scale_h: usize,
+    scale_w: usize,
+) OpError!void {
+    return kernels.layout.upsampleNearestNchw(
+        input.data,
+        input.shape,
+        output.data,
+        output.shape,
+        scale_h,
+        scale_w,
+    ) catch |err| return mapLayoutError(err);
+}
+
+pub fn concatChannels(inputs: []const *const Tensor, output: *Tensor) OpError!void {
+    var views_buffer: [16]kernels.layout.TensorView = undefined;
+    if (inputs.len > views_buffer.len) return concatChannelsHeap(inputs, output);
+
+    const views = views_buffer[0..inputs.len];
+    for (inputs, views) |input, *view| {
+        view.* = .{ .data = input.data, .shape = input.shape };
+    }
+    return kernels.layout.concatChannelsNchw(views, output.data, output.shape) catch |err| return mapLayoutError(err);
+}
+
+fn concatChannelsHeap(inputs: []const *const Tensor, output: *Tensor) OpError!void {
+    const views = output.allocator.alloc(kernels.layout.TensorView, inputs.len) catch return OpError.ShapeMismatch;
+    defer output.allocator.free(views);
+    for (inputs, views) |input, *view| {
+        view.* = .{ .data = input.data, .shape = input.shape };
+    }
+    return kernels.layout.concatChannelsNchw(views, output.data, output.shape) catch |err| return mapLayoutError(err);
+}
+
+pub fn copyChannelRange(
+    input: *const Tensor,
+    input_channel_start: usize,
+    channel_count: usize,
+    output: *Tensor,
+    output_channel_start: usize,
+) OpError!void {
+    return kernels.layout.copyChannelRangeNchw(
+        input.data,
+        input.shape,
+        input_channel_start,
+        channel_count,
+        output.data,
+        output.shape,
+        output_channel_start,
+    ) catch |err| return mapLayoutError(err);
+}
+
+pub fn copyTensorBlock(
+    input: *const Tensor,
+    output: *Tensor,
+    output_channel_start: usize,
+) OpError!void {
+    return kernels.layout.copyTensorBlockNchw(
+        input.data,
+        input.shape,
+        output.data,
+        output.shape,
+        output_channel_start,
+    ) catch |err| return mapLayoutError(err);
+}
 
 pub fn siluInPlace(tensor: *Tensor) void {
     kernels.activation.siluInPlace(tensor.data);
@@ -79,6 +150,5 @@ pub fn softmaxRows(data: []f32, rows: usize, cols: usize) OpError!void {
 }
 
 test {
-    _ = @import("ops/layout.zig");
     _ = @import("ops/conv.zig");
 }

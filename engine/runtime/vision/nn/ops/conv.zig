@@ -227,7 +227,11 @@ test "pointwise concat fast path matches materialized concat" {
     var materialized = try Tensor.init(testing.allocator, 1, 5, 2, 2);
     defer materialized.deinit();
     const inputs = [_]*const Tensor{ &lhs, &rhs };
-    try @import("layout.zig").concatChannels(&inputs, &materialized);
+    var views = [_]shared_kernels.layout.TensorView{
+        .{ .data = lhs.data, .shape = lhs.shape },
+        .{ .data = rhs.data, .shape = rhs.shape },
+    };
+    try shared_kernels.layout.concatChannelsNchw(&views, materialized.data, materialized.shape);
 
     var expected = try Tensor.init(testing.allocator, 1, 4, 2, 2);
     defer expected.deinit();
@@ -268,7 +272,12 @@ test "pointwise concat fast path matches materialized concat with three inputs" 
     var materialized = try Tensor.init(testing.allocator, 1, 9, 3, 3);
     defer materialized.deinit();
     const inputs = [_]*const Tensor{ &a, &b, &c };
-    try @import("layout.zig").concatChannels(&inputs, &materialized);
+    var views = [_]shared_kernels.layout.TensorView{
+        .{ .data = a.data, .shape = a.shape },
+        .{ .data = b.data, .shape = b.shape },
+        .{ .data = c.data, .shape = c.shape },
+    };
+    try shared_kernels.layout.concatChannelsNchw(&views, materialized.data, materialized.shape);
 
     var expected = try Tensor.init(testing.allocator, 1, 5, 3, 3);
     defer expected.deinit();
