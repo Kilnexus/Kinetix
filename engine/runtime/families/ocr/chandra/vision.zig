@@ -2,7 +2,7 @@ const std = @import("std");
 const imaging = @import("Pixio");
 const preprocess = @import("preprocess.zig");
 const attention = @import("../../../text/attention/attention.zig");
-const cpu = @import("../../../text/core/cpu.zig");
+const kernels = @import("shared_ops").kernels;
 
 pub const PatchEmbeddingWeights = struct {
     data: []const f32,
@@ -307,7 +307,7 @@ pub fn applyVisualMerger(
         const input_row = grouped.data[token_index * grouped.merged_dim ..][0..grouped.merged_dim];
         const hidden_row = hidden[token_index * weights.fc1.out_features ..][0..weights.fc1.out_features];
         applyLinear(hidden_row, input_row, weights.fc1);
-        cpu.geluInPlace(hidden_row);
+        kernels.activation.geluInPlace(hidden_row);
 
         const output_row = output.data[token_index * weights.fc2.out_features ..][0..weights.fc2.out_features];
         applyLinear(output_row, hidden_row, weights.fc2);
@@ -344,9 +344,9 @@ pub fn applyVisionBlockMlp(
         const src = input.data[token_index * input.embedding_dim ..][0..input.embedding_dim];
         const dst = output.data[token_index * input.embedding_dim ..][0..input.embedding_dim];
 
-        try cpu.layerNorm(normed, src, weights.norm.weight, weights.norm.bias, eps);
+        try kernels.normalization.layerNorm(normed, src, weights.norm.weight, weights.norm.bias, eps);
         applyLinear(hidden, normed, weights.fc1);
-        cpu.geluInPlace(hidden);
+        kernels.activation.geluInPlace(hidden);
         applyLinear(dst, hidden, weights.fc2);
 
         for (dst, src) |*out, residual| {
@@ -392,7 +392,7 @@ pub fn applyVisionBlockAttention(
     for (0..input.token_count) |token_index| {
         const src = input.data[token_index * token_dim ..][0..token_dim];
         const dst = qkv_buffer[token_index * qkv_dim ..][0..qkv_dim];
-        try cpu.layerNorm(normed, src, weights.norm.weight, weights.norm.bias, eps);
+        try kernels.normalization.layerNorm(normed, src, weights.norm.weight, weights.norm.bias, eps);
         applyLinear(dst, normed, weights.qkv);
     }
 
@@ -403,14 +403,14 @@ pub fn applyVisionBlockAttention(
             const q_slice = qSlice(qkv_buffer, query_index, token_dim, head_index, head_dim);
             for (0..input.token_count) |key_index| {
                 const k_slice = kSlice(qkv_buffer, key_index, token_dim, head_index, head_dim);
-                scores[key_index] = (try cpu.dot(q_slice, k_slice)) / @sqrt(@as(f32, @floatFromInt(head_dim)));
+                scores[key_index] = (try kernels.linalg.dot(q_slice, k_slice)) / @sqrt(@as(f32, @floatFromInt(head_dim)));
             }
             try attention.softmaxInPlace(scores);
 
             const out_head = attended[head_index * head_dim ..][0..head_dim];
             for (0..input.token_count) |value_index| {
                 const v_slice = vSlice(qkv_buffer, value_index, token_dim, head_index, head_dim);
-                try cpu.axpyInPlace(out_head, scores[value_index], v_slice);
+                try kernels.linalg.axpyInPlace(out_head, scores[value_index], v_slice);
             }
         }
 

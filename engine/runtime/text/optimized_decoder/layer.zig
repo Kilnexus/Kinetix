@@ -1,5 +1,5 @@
 const std = @import("std");
-const cpu = @import("../core/cpu.zig");
+const kernels = @import("shared_ops").kernels;
 const decoder_family = @import("../decoder_family.zig");
 const generic_block = @import("../block_layout.zig");
 const gqa_attention = @import("../gqa_attention.zig");
@@ -108,18 +108,18 @@ pub const LayerWeights = struct {
         hidden_in: []const f32,
         hidden_out: []f32,
     ) !void {
-        try cpu.rmsNorm(workspace.normed, hidden_in, self.input_ln_weight, self.spec.rms_norm_eps);
+        try kernels.normalization.rmsNorm(workspace.normed, hidden_in, self.input_ln_weight, self.spec.rms_norm_eps);
 
         try backend.matmulVec(workspace.q_proj, self.q_proj_tensor, workspace.normed, thread_count, parallel_pool, workspace.io_scratch);
         try backend.matmulVec(workspace.k_proj, self.k_proj_tensor, workspace.normed, thread_count, parallel_pool, workspace.io_scratch);
         try backend.matmulVec(workspace.v_proj, self.v_proj_tensor, workspace.normed, thread_count, parallel_pool, workspace.io_scratch);
 
         if (self.q_norm_weight) |weight| {
-            try cpu.rmsNormRepeated(workspace.q_proj, workspace.q_proj, self.spec.num_attention_heads, self.spec.head_dim, weight, self.spec.rms_norm_eps);
+            try kernels.normalization.rmsNormRepeated(workspace.q_proj, workspace.q_proj, self.spec.num_attention_heads, self.spec.head_dim, weight, self.spec.rms_norm_eps);
         }
 
         if (self.k_norm_weight) |weight| {
-            try cpu.rmsNormRepeated(workspace.k_proj, workspace.k_proj, self.spec.num_key_value_heads, self.spec.head_dim, weight, self.spec.rms_norm_eps);
+            try kernels.normalization.rmsNormRepeated(workspace.k_proj, workspace.k_proj, self.spec.num_key_value_heads, self.spec.head_dim, weight, self.spec.rms_norm_eps);
         }
 
         try gqa_attention.applyRoPEToProjectedHeadsWithPositionInPlace(
@@ -192,10 +192,10 @@ pub const LayerWeights = struct {
             out.* = residual + attn_value;
         }
 
-        try cpu.rmsNorm(workspace.normed, workspace.post_attn, self.post_ln_weight, self.spec.rms_norm_eps);
+        try kernels.normalization.rmsNorm(workspace.normed, workspace.post_attn, self.post_ln_weight, self.spec.rms_norm_eps);
         try backend.matmulVec(workspace.gate, self.gate_proj_tensor, workspace.normed, thread_count, parallel_pool, workspace.io_scratch);
         try backend.matmulVec(workspace.up, self.up_proj_tensor, workspace.normed, thread_count, parallel_pool, workspace.io_scratch);
-        try cpu.swiglu(workspace.gate, workspace.gate, workspace.up);
+        try kernels.activation.swiglu(workspace.gate, workspace.gate, workspace.up);
         try backend.matmulVec(workspace.mlp_out, self.down_proj_tensor, workspace.gate, thread_count, parallel_pool, workspace.io_scratch);
 
         for (hidden_out, workspace.post_attn, workspace.mlp_out) |*out, residual, mlp_value| {

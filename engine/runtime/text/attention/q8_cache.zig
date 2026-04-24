@@ -1,8 +1,0 @@
-const shared_q8 = @import("shared_ops").kernels.attention.q8;
-
-pub const q8_cache_group_size = shared_q8.q8_cache_group_size;
-pub const scaledDotProductAttentionSingleQueryQ8Cache = shared_q8.scaledDotProductAttentionSingleQueryQ8Cache;
-pub const scaledDotProductAttentionSingleQueryQ8CacheHeadMajor = shared_q8.scaledDotProductAttentionSingleQueryQ8CacheHeadMajor;
-pub const scaledDotProductAttentionSingleQueryQ8CachePagedHeadMajor = shared_q8.scaledDotProductAttentionSingleQueryQ8CachePagedHeadMajor;
-pub const dotQ8GroupedSlice = shared_q8.dotQ8GroupedSlice;
-pub const axpyQ8GroupedSliceInPlace = shared_q8.axpyQ8GroupedSliceInPlace;

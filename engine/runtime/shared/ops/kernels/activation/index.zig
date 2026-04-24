@@ -22,6 +22,29 @@ pub fn sigmoidInPlace(values: []f32) void {
     for (values) |*value| value.* = sigmoidValue(value.*);
 }
 
+pub fn add(output: []f32, lhs: []const f32, rhs: []const f32) !void {
+    if (output.len != lhs.len or lhs.len != rhs.len) return error.SizeMismatch;
+    for (output, lhs, rhs) |*out, left, right| out.* = left + right;
+}
+
+pub fn addInPlace(output: []f32, rhs: []const f32) !void {
+    if (output.len != rhs.len) return error.SizeMismatch;
+    addInPlaceUnchecked(output, rhs);
+}
+
+pub fn addInPlaceUnchecked(output: []f32, rhs: []const f32) void {
+    const lane_count = 8;
+    var index: usize = 0;
+    while (index + lane_count <= output.len) : (index += lane_count) {
+        const lhs_vec: @Vector(lane_count, f32) = output[index..][0..lane_count].*;
+        const rhs_vec: @Vector(lane_count, f32) = rhs[index..][0..lane_count].*;
+        output[index..][0..lane_count].* = lhs_vec + rhs_vec;
+    }
+    while (index < output.len) : (index += 1) {
+        output[index] += rhs[index];
+    }
+}
+
 pub fn geluInPlace(values: []f32) void {
     for (values) |*value| value.* = geluValue(value.*);
 }
@@ -60,4 +83,16 @@ test "kernel activation swiglu applies silu gate then multiplies up branch" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), output[0], 1e-6);
     try std.testing.expectApproxEqAbs(@as(f32, 1.4621172), output[1], 1e-6);
     try std.testing.expectApproxEqAbs(@as(f32, -0.8068243), output[2], 1e-6);
+}
+
+test "kernel activation add supports checked and unchecked paths" {
+    const lhs = [_]f32{ 1.0, 2.0, 3.0 };
+    const rhs = [_]f32{ 4.0, 5.0, 6.0 };
+    var output = [_]f32{ 0.0, 0.0, 0.0 };
+
+    try add(&output, &lhs, &rhs);
+    try std.testing.expectEqualSlices(f32, &[_]f32{ 5.0, 7.0, 9.0 }, &output);
+
+    addInPlaceUnchecked(&output, &rhs);
+    try std.testing.expectEqualSlices(f32, &[_]f32{ 9.0, 12.0, 15.0 }, &output);
 }

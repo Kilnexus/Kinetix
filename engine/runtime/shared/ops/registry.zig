@@ -64,7 +64,7 @@ pub const entries = [_]Entry{
 
     .{ .name = "SiLU", .domain = .vision_nn, .status = .native_kernel, .module = "shared/ops/kernels/activation/index.zig" },
     .{ .name = "Sigmoid", .domain = .vision_nn, .status = .native_kernel, .module = "shared/ops/kernels/activation/index.zig" },
-    .{ .name = "Add", .domain = .vision_nn, .status = .native_kernel, .module = "vision/nn/ops/activation.zig" },
+    .{ .name = "Add", .domain = .vision_nn, .status = .native_kernel, .module = "shared/ops/kernels/activation/index.zig" },
     .{ .name = "UpsampleNearest", .domain = .vision_nn, .status = .native_kernel, .module = "vision/nn/ops/layout.zig" },
     .{ .name = "ConcatChannels", .domain = .vision_nn, .status = .native_kernel, .module = "vision/nn/ops/layout.zig" },
     .{ .name = "CopyChannelRange", .domain = .vision_nn, .status = .native_kernel, .module = "vision/nn/ops/layout.zig" },

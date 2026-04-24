@@ -1,5 +1,5 @@
 const std = @import("std");
-const cpu = @import("../core/cpu.zig");
+const kernels = @import("shared_ops").kernels;
 const decoder_family = @import("../decoder_family.zig");
 const decoder_types = @import("../decoder_types.zig");
 const generic_block = @import("../block_layout.zig");
@@ -203,7 +203,7 @@ pub const Runtime = struct {
             std.mem.swap([]f32, &hidden_in, &hidden_out);
         }
 
-        try cpu.rmsNorm(
+        try kernels.normalization.rmsNorm(
             workspace.normed,
             hidden_in,
             self.final_norm_weight,
