@@ -99,11 +99,11 @@ pub const entries = [_]Entry{
     .{ .name = "AxpyQ8GroupedSliceInPlace", .domain = .text_attention, .status = .native_kernel, .module = "shared/ops/kernels/attention/q8/index.zig" },
 
     .{ .name = "ApplyRoPEToProjectedHeads", .domain = .text_gqa, .status = .native_kernel, .module = "text/gqa_attention/forward.zig" },
-    .{ .name = "ForwardProjectedSingleToken", .domain = .text_gqa, .status = .native_kernel, .module = "text/gqa_attention/forward.zig" },
-    .{ .name = "ForwardProjectedSingleTokenBf16Cache", .domain = .text_gqa, .status = .native_kernel, .module = "text/gqa_attention/forward.zig" },
-    .{ .name = "ForwardProjectedSingleTokenQ8Cache", .domain = .text_gqa, .status = .native_kernel, .module = "text/gqa_attention/forward.zig" },
-    .{ .name = "ForwardProjectedSingleTokenQ8CacheHeadMajor", .domain = .text_gqa, .status = .native_kernel, .module = "text/gqa_attention/forward.zig" },
-    .{ .name = "ForwardProjectedSingleTokenQ8CachePagedHeadMajor", .domain = .text_gqa, .status = .native_kernel, .module = "text/gqa_attention/forward.zig" },
+    .{ .name = "ForwardProjectedSingleToken", .domain = .text_gqa, .status = .native_kernel, .module = "shared/ops/kernels/attention/gqa/index.zig" },
+    .{ .name = "ForwardProjectedSingleTokenBf16Cache", .domain = .text_gqa, .status = .native_kernel, .module = "shared/ops/kernels/attention/gqa/index.zig" },
+    .{ .name = "ForwardProjectedSingleTokenQ8Cache", .domain = .text_gqa, .status = .native_kernel, .module = "shared/ops/kernels/attention/gqa/index.zig" },
+    .{ .name = "ForwardProjectedSingleTokenQ8CacheHeadMajor", .domain = .text_gqa, .status = .native_kernel, .module = "shared/ops/kernels/attention/gqa/index.zig" },
+    .{ .name = "ForwardProjectedSingleTokenQ8CachePagedHeadMajor", .domain = .text_gqa, .status = .native_kernel, .module = "shared/ops/kernels/attention/gqa/index.zig" },
 
     .{ .name = "EncodeQ8Row", .domain = .text_quantized, .status = .native_kernel, .module = "shared/ops/kernels/quantized/index.zig" },
     .{ .name = "EncodeQ6Row", .domain = .text_quantized, .status = .native_kernel, .module = "shared/ops/kernels/quantized/index.zig" },
