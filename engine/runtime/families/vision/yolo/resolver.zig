@@ -38,7 +38,7 @@ pub fn tryNormalize(
     const support = try report_mod.RuntimeSupportReport.init(
         allocator,
         .degraded,
-        &.{.graph_runtime_adapter_required},
+        &.{.graph_runtime_backend_required},
         &.{.graph_schema_accepted},
     );
     errdefer {

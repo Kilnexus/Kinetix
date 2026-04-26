@@ -1,13 +1,31 @@
 const types = @import("ops/types.zig");
-const conv = @import("ops/conv.zig");
 const kernels = @import("shared_ops").kernels;
+const shared_conv = kernels.conv.entry;
 
 pub const Tensor = types.Tensor;
 pub const OpError = types.OpError;
 pub const Conv2DOptions = types.Conv2DOptions;
 
-pub const conv2d = conv.conv2d;
-pub const conv2dPointwiseConcat = conv.conv2dPointwiseConcat;
+fn toSharedOptions(options: Conv2DOptions) shared_conv.Conv2DOptions {
+    return .{
+        .stride_h = options.stride_h,
+        .stride_w = options.stride_w,
+        .pad_h = options.pad_h,
+        .pad_w = options.pad_w,
+        .groups = options.groups,
+        .apply_silu = options.apply_silu,
+    };
+}
+
+fn mapSharedError(err: anyerror) OpError {
+    return switch (err) {
+        error.ShapeMismatch => OpError.ShapeMismatch,
+        error.InvalidOutputShape => OpError.InvalidOutputShape,
+        error.InvalidGroups => OpError.InvalidGroups,
+        error.InvalidTensorRank => OpError.InvalidTensorRank,
+        else => OpError.ShapeMismatch,
+    };
+}
 
 fn mapLayoutError(err: anyerror) OpError {
     return switch (err) {
@@ -85,6 +103,26 @@ pub fn copyTensorBlock(
     ) catch |err| return mapLayoutError(err);
 }
 
+pub fn conv2d(
+    input: *const Tensor,
+    weights: *const Tensor,
+    bias: ?[]const f32,
+    output: *Tensor,
+    options: Conv2DOptions,
+) OpError!void {
+    return shared_conv.conv2d(input, weights, bias, output, toSharedOptions(options)) catch |err| return mapSharedError(err);
+}
+
+pub fn conv2dPointwiseConcat(
+    inputs: []const *const Tensor,
+    weights: *const Tensor,
+    bias: ?[]const f32,
+    output: *Tensor,
+    apply_silu: bool,
+) OpError!void {
+    return shared_conv.conv2dPointwiseConcat(inputs, weights, bias, output, apply_silu) catch |err| return mapSharedError(err);
+}
+
 pub fn siluInPlace(tensor: *Tensor) void {
     kernels.activation.siluInPlace(tensor.data);
 }
@@ -147,8 +185,4 @@ pub fn matmul(
 
 pub fn softmaxRows(data: []f32, rows: usize, cols: usize) OpError!void {
     kernels.linalg.softmaxRows(data, rows, cols) catch return OpError.ShapeMismatch;
-}
-
-test {
-    _ = @import("ops/conv.zig");
 }

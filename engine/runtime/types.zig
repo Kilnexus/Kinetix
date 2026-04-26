@@ -141,7 +141,7 @@ pub const RuntimeSupportStatus = enum {
 };
 
 pub const RuntimeSupportWarning = enum {
-    graph_runtime_adapter_required,
+    graph_runtime_backend_required,
     native_batch_unavailable,
     document_input_partial,
     tts_runtime_pending,

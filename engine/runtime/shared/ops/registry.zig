@@ -12,7 +12,7 @@ pub const Domain = enum {
 pub const Status = enum {
     graph_executable,
     native_kernel,
-    adapter_required,
+    backend_required,
 };
 
 pub const Entry = struct {
@@ -32,7 +32,7 @@ pub const Summary = struct {
     text_quantized: usize = 0,
     graph_executable: usize = 0,
     native_kernel: usize = 0,
-    adapter_required: usize = 0,
+    backend_required: usize = 0,
 };
 
 pub const entries = [_]Entry{
@@ -91,14 +91,14 @@ pub const entries = [_]Entry{
     .{ .name = "SoftmaxInPlace", .domain = .text_attention, .status = .native_kernel, .module = "shared/ops/kernels/attention/basic.zig" },
     .{ .name = "ScaledDotProductAttentionSingleQuery", .domain = .text_attention, .status = .native_kernel, .module = "shared/ops/kernels/attention/basic.zig" },
     .{ .name = "ScaledDotProductAttentionSingleQueryBf16Cache", .domain = .text_attention, .status = .native_kernel, .module = "shared/ops/kernels/attention/basic.zig" },
-    .{ .name = "RoPE", .domain = .text_attention, .status = .native_kernel, .module = "text/attention/rope.zig" },
+    .{ .name = "RoPE", .domain = .text_attention, .status = .native_kernel, .module = "shared/ops/kernels/attention/rope/index.zig" },
     .{ .name = "ScaledDotProductAttentionSingleQueryQ8Cache", .domain = .text_attention, .status = .native_kernel, .module = "shared/ops/kernels/attention/q8/index.zig" },
     .{ .name = "ScaledDotProductAttentionSingleQueryQ8CacheHeadMajor", .domain = .text_attention, .status = .native_kernel, .module = "shared/ops/kernels/attention/q8/index.zig" },
     .{ .name = "ScaledDotProductAttentionSingleQueryQ8CachePagedHeadMajor", .domain = .text_attention, .status = .native_kernel, .module = "shared/ops/kernels/attention/q8/index.zig" },
     .{ .name = "DotQ8GroupedSlice", .domain = .text_attention, .status = .native_kernel, .module = "shared/ops/kernels/attention/q8/index.zig" },
     .{ .name = "AxpyQ8GroupedSliceInPlace", .domain = .text_attention, .status = .native_kernel, .module = "shared/ops/kernels/attention/q8/index.zig" },
 
-    .{ .name = "ApplyRoPEToProjectedHeads", .domain = .text_gqa, .status = .native_kernel, .module = "text/gqa_attention/forward.zig" },
+    .{ .name = "ApplyRoPEToProjectedHeads", .domain = .text_gqa, .status = .native_kernel, .module = "shared/ops/kernels/attention/rope/projected.zig" },
     .{ .name = "ForwardProjectedSingleToken", .domain = .text_gqa, .status = .native_kernel, .module = "shared/ops/kernels/attention/gqa/index.zig" },
     .{ .name = "ForwardProjectedSingleTokenBf16Cache", .domain = .text_gqa, .status = .native_kernel, .module = "shared/ops/kernels/attention/gqa/index.zig" },
     .{ .name = "ForwardProjectedSingleTokenQ8Cache", .domain = .text_gqa, .status = .native_kernel, .module = "shared/ops/kernels/attention/gqa/index.zig" },
@@ -117,7 +117,6 @@ pub const entries = [_]Entry{
     .{ .name = "MatMulQ8Rows", .domain = .text_quantized, .status = .native_kernel, .module = "shared/ops/kernels/quantized/index.zig" },
     .{ .name = "MatMulQ6Rows", .domain = .text_quantized, .status = .native_kernel, .module = "shared/ops/kernels/quantized/index.zig" },
     .{ .name = "MatMulQ4Rows", .domain = .text_quantized, .status = .native_kernel, .module = "shared/ops/kernels/quantized/index.zig" },
-
 };
 
 pub fn all() []const Entry {
@@ -177,7 +176,7 @@ pub fn summarize() Summary {
         switch (entry.status) {
             .graph_executable => summary.graph_executable += 1,
             .native_kernel => summary.native_kernel += 1,
-            .adapter_required => summary.adapter_required += 1,
+            .backend_required => summary.backend_required += 1,
         }
     }
     return summary;
@@ -198,5 +197,5 @@ test "unified ops registry includes graph executable and native kernels" {
     try std.testing.expect(countByStatus(.native_kernel) >= 45);
     const summary = summarize();
     try std.testing.expectEqual(entries.len, summary.total);
-    try std.testing.expectEqual(@as(usize, 0), summary.adapter_required);
+    try std.testing.expectEqual(@as(usize, 0), summary.backend_required);
 }

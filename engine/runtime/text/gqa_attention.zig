@@ -1,12 +1,56 @@
-const forward = @import("gqa_attention/forward.zig");
+const decoder_types = @import("decoder_types.zig");
 const spec = @import("gqa_attention/spec.zig");
-const shared_gqa = @import("shared_ops").kernels.attention.gqa;
+const shared_attention = @import("shared_ops").kernels.attention;
+const shared_gqa = shared_attention.gqa;
+const shared_rope = shared_attention.rope;
 
 pub const AttentionSpec = spec.AttentionSpec;
 
-pub const applyRoPEToProjectedHeadsInPlace = forward.applyRoPEToProjectedHeadsInPlace;
-pub const applyRoPEToProjectedHeadsWithTableInPlace = forward.applyRoPEToProjectedHeadsWithTableInPlace;
-pub const applyRoPEToProjectedHeadsWithPositionInPlace = forward.applyRoPEToProjectedHeadsWithPositionInPlace;
+pub fn applyRoPEToProjectedHeadsInPlace(
+    value: AttentionSpec,
+    projected_query: []f32,
+    projected_key: []f32,
+    position: usize,
+) !void {
+    return shared_rope.applyRoPEToProjectedHeadsInPlace(
+        toSharedRoPESpec(value),
+        projected_query,
+        projected_key,
+        position,
+    );
+}
+
+pub fn applyRoPEToProjectedHeadsWithTableInPlace(
+    value: AttentionSpec,
+    projected_query: []f32,
+    projected_key: []f32,
+    table: *const shared_rope.RoPETable,
+    position: usize,
+) !void {
+    return shared_rope.applyRoPEToProjectedHeadsWithTableInPlace(
+        toSharedRoPESpec(value),
+        projected_query,
+        projected_key,
+        table,
+        position,
+    );
+}
+
+pub fn applyRoPEToProjectedHeadsWithPositionInPlace(
+    value: AttentionSpec,
+    projected_query: []f32,
+    projected_key: []f32,
+    table: *const shared_rope.RoPETable,
+    position: decoder_types.TokenPosition,
+) !void {
+    return shared_rope.applyRoPEToProjectedHeadsWithPositionInPlace(
+        toSharedRoPESpec(value),
+        projected_query,
+        projected_key,
+        table,
+        toSharedPosition(position),
+    );
+}
 
 fn toSharedSpec(value: AttentionSpec) shared_gqa.AttentionSpec {
     return .{
@@ -14,6 +58,32 @@ fn toSharedSpec(value: AttentionSpec) shared_gqa.AttentionSpec {
         .num_attention_heads = value.num_attention_heads,
         .num_key_value_heads = value.num_key_value_heads,
         .head_dim = value.head_dim,
+    };
+}
+
+fn toSharedRoPESpec(value: AttentionSpec) shared_rope.ProjectedHeadsSpec {
+    return .{
+        .hidden_size = value.hidden_size,
+        .num_attention_heads = value.num_attention_heads,
+        .num_key_value_heads = value.num_key_value_heads,
+        .head_dim = value.head_dim,
+        .rope_theta = value.rope_theta,
+        .rope_position_mode = toSharedPositionMode(value.rope_position_mode),
+        .mrope_sections = value.mrope_sections,
+    };
+}
+
+fn toSharedPosition(position: decoder_types.TokenPosition) shared_rope.Position {
+    return switch (position.mode) {
+        .scalar => shared_rope.Position.scalarPosition(position.scalar),
+        .mrope => shared_rope.Position.mropePosition(position.axes),
+    };
+}
+
+fn toSharedPositionMode(mode: decoder_types.RopePositionMode) shared_rope.PositionMode {
+    return switch (mode) {
+        .scalar => .scalar,
+        .mrope => .mrope,
     };
 }
 
