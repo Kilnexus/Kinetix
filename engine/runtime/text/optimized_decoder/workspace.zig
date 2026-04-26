@@ -1,5 +1,5 @@
 const std = @import("std");
-const attention = @import("../attention/attention.zig");
+const rope = @import("shared_ops").kernels.attention.rope;
 const decoder_family = @import("../decoder_family.zig");
 
 pub const Workspace = struct {
@@ -19,7 +19,7 @@ pub const Workspace = struct {
     mlp_out: []f32,
     logits: []f32,
     io_scratch: []u8,
-    rope_table: attention.RoPETable,
+    rope_table: rope.RoPETable,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -28,7 +28,7 @@ pub const Workspace = struct {
         io_scratch_bytes: usize,
     ) !Workspace {
         const kv_width = cfg.num_key_value_heads * cfg.head_dim;
-        var rope_table = try attention.RoPETable.init(
+        var rope_table = try rope.RoPETable.init(
             allocator,
             max_seq_len,
             cfg.head_dim,

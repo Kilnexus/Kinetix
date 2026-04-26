@@ -1,4 +1,5 @@
 const std = @import("std");
+const shared_rope = @import("shared_ops").kernels.attention.rope;
 
 pub const Architecture = enum {
     qwen3,
@@ -12,38 +13,8 @@ pub const Architecture = enum {
     }
 };
 
-pub const RopePositionMode = enum {
-    scalar,
-    mrope,
-
-    pub fn name(self: RopePositionMode) []const u8 {
-        return switch (self) {
-            .scalar => "scalar",
-            .mrope => "mrope",
-        };
-    }
-};
-
-pub const TokenPosition = struct {
-    mode: RopePositionMode = .scalar,
-    scalar: usize = 0,
-    axes: [4]usize = .{ 0, 0, 0, 0 },
-
-    pub fn scalarPosition(position: usize) TokenPosition {
-        return .{
-            .mode = .scalar,
-            .scalar = position,
-        };
-    }
-
-    pub fn mropePosition(axes: [4]usize) TokenPosition {
-        return .{
-            .mode = .mrope,
-            .scalar = axes[3],
-            .axes = axes,
-        };
-    }
-};
+pub const RopePositionMode = shared_rope.PositionMode;
+pub const TokenPosition = shared_rope.Position;
 
 pub const DecoderConfig = struct {
     architecture: Architecture,

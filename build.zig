@@ -140,7 +140,7 @@ fn addRuntimeImports(
     engine_vision_base.addImport("graph", graph);
     engine_vision_base.addImport("tensor", tensor);
     const ops = b.createModule(.{
-        .root_source_file = b.path("engine/runtime/vision/nn/ops.zig"),
+        .root_source_file = b.path("engine/runtime/shared/ops/kernels/vision/index.zig"),
         .target = target,
         .optimize = optimize,
     });

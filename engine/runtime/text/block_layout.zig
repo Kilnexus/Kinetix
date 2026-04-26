@@ -1,6 +1,6 @@
 const std = @import("std");
-const gqa_attention = @import("gqa_attention.zig");
 const decoder_types = @import("decoder_types.zig");
+const shared_attention = @import("shared_ops").kernels.attention;
 const weights_layout = @import("weights_layout.zig");
 
 pub const LayerTensorNameFn = *const fn (std.mem.Allocator, usize, weights_layout.LayerTensorKind) anyerror![]u8;
@@ -39,7 +39,16 @@ pub const Spec = struct {
         if (self.num_attention_heads % self.num_key_value_heads != 0) return error.InvalidGrouping;
     }
 
-    pub fn attentionSpec(self: Spec) gqa_attention.AttentionSpec {
+    pub fn attentionSpec(self: Spec) shared_attention.gqa.AttentionSpec {
+        return .{
+            .hidden_size = self.num_attention_heads * self.head_dim,
+            .num_attention_heads = self.num_attention_heads,
+            .num_key_value_heads = self.num_key_value_heads,
+            .head_dim = self.head_dim,
+        };
+    }
+
+    pub fn ropeSpec(self: Spec) shared_attention.rope.ProjectedHeadsSpec {
         return .{
             .hidden_size = self.num_attention_heads * self.head_dim,
             .num_attention_heads = self.num_attention_heads,
@@ -69,4 +78,5 @@ test "decoder block spec validates dimensions" {
     };
     try spec.validate();
     try testing.expectEqual(@as(usize, 1024), spec.attentionSpec().hidden_size);
+    try testing.expectEqual(@as(usize, 1024), spec.ropeSpec().hidden_size);
 }

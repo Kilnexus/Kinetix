@@ -2,7 +2,6 @@ const std = @import("std");
 const kernels = @import("shared_ops").kernels;
 const decoder_family = @import("../decoder_family.zig");
 const generic_block = @import("../block_layout.zig");
-const gqa_attention = @import("../gqa_attention.zig");
 const kv_cache_cache = @import("../kv_cache/cache.zig");
 const optimized_decoder_support = @import("support.zig");
 const tensor_backend = @import("../backend/backend.zig");
@@ -122,8 +121,8 @@ pub const LayerWeights = struct {
             try kernels.normalization.rmsNormRepeated(workspace.k_proj, workspace.k_proj, self.spec.num_key_value_heads, self.spec.head_dim, weight, self.spec.rms_norm_eps);
         }
 
-        try gqa_attention.applyRoPEToProjectedHeadsWithPositionInPlace(
-            self.spec.attentionSpec(),
+        try kernels.attention.rope.applyRoPEToProjectedHeadsWithPositionInPlace(
+            self.spec.ropeSpec(),
             workspace.q_proj,
             workspace.k_proj,
             &workspace.rope_table,
@@ -133,7 +132,7 @@ pub const LayerWeights = struct {
 
         switch (cache.scheme) {
             .auto => unreachable,
-            .bf16 => try gqa_attention.forwardProjectedSingleTokenBf16Cache(
+            .bf16 => try kernels.attention.gqa.forwardProjectedSingleTokenBf16Cache(
                 self.spec.attentionSpec(),
                 workspace.attn_flat,
                 workspace.q_proj,
@@ -143,7 +142,7 @@ pub const LayerWeights = struct {
                 workspace.scores[0..cache.len],
             ),
             .q8 => switch (cache.q8_layout) {
-                .token_major => try gqa_attention.forwardProjectedSingleTokenQ8Cache(
+                .token_major => try kernels.attention.gqa.forwardProjectedSingleTokenQ8Cache(
                     self.spec.attentionSpec(),
                     workspace.attn_flat,
                     workspace.q_proj,
@@ -154,7 +153,7 @@ pub const LayerWeights = struct {
                     cache.len,
                     workspace.scores[0..cache.len],
                 ),
-                .head_major => try gqa_attention.forwardProjectedSingleTokenQ8CacheHeadMajor(
+                .head_major => try kernels.attention.gqa.forwardProjectedSingleTokenQ8CacheHeadMajor(
                     self.spec.attentionSpec(),
                     workspace.attn_flat,
                     workspace.q_proj,
@@ -167,7 +166,7 @@ pub const LayerWeights = struct {
                     cache.len,
                     workspace.scores[0..cache.len],
                 ),
-                .paged_head_major => try gqa_attention.forwardProjectedSingleTokenQ8CachePagedHeadMajor(
+                .paged_head_major => try kernels.attention.gqa.forwardProjectedSingleTokenQ8CachePagedHeadMajor(
                     self.spec.attentionSpec(),
                     workspace.attn_flat,
                     workspace.q_proj,

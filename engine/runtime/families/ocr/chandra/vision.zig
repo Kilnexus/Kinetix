@@ -1,7 +1,6 @@
 const std = @import("std");
 const imaging = @import("Pixio");
 const preprocess = @import("preprocess.zig");
-const attention = @import("../../../text/attention/attention.zig");
 const kernels = @import("shared_ops").kernels;
 
 pub const PatchEmbeddingWeights = struct {
@@ -405,7 +404,7 @@ pub fn applyVisionBlockAttention(
                 const k_slice = kSlice(qkv_buffer, key_index, token_dim, head_index, head_dim);
                 scores[key_index] = (try kernels.linalg.dot(q_slice, k_slice)) / @sqrt(@as(f32, @floatFromInt(head_dim)));
             }
-            try attention.softmaxInPlace(scores);
+            try kernels.attention.basic.softmaxInPlace(scores);
 
             const out_head = attended[head_index * head_dim ..][0..head_dim];
             for (0..input.token_count) |value_index| {

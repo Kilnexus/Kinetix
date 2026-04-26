@@ -1,4 +1,5 @@
 const std = @import("std");
+const common = @import("common.zig");
 const kernel_registry = @import("../registry/index.zig");
 pub const codec = @import("codec.zig");
 
@@ -62,7 +63,7 @@ pub fn decodeQ6Row(bytes: []const u8, row_offset: u64, output: []f32) void {
     }
     while (out_index < output.len) : (out_index += 1) {
         const bit_index = out_index * 6;
-        const encoded = readPackedBits(payload, bit_index, 6);
+        const encoded = common.readPackedBits(payload, bit_index, 6);
         const q: i32 = @as(i32, encoded) - 32;
         output[out_index] = @as(f32, @floatFromInt(q)) * scale;
     }
@@ -153,7 +154,7 @@ fn dotQ6RowGeneric(bytes: []const u8, row_offset: u64, input: []const f32) f32 {
     }
     while (index < input.len) : (index += 1) {
         const bit_index = index * 6;
-        const encoded = readPackedBits(payload, bit_index, 6);
+        const encoded = common.readPackedBits(payload, bit_index, 6);
         const q: i32 = @as(i32, encoded) - 32;
         sum += @as(f32, @floatFromInt(q)) * input[index];
     }
@@ -178,10 +179,10 @@ fn dotQ6RowFixed(comptime cols: usize, bytes: []const u8, row_offset: u64, input
         index += 32;
         payload_index += 24;
     }) {
-        const q0 = loadQ6Vector8(payload, payload_index);
-        const q1 = loadQ6Vector8(payload, payload_index + 6);
-        const q2 = loadQ6Vector8(payload, payload_index + 12);
-        const q3 = loadQ6Vector8(payload, payload_index + 18);
+        const q0 = common.loadQ6Vector8(payload, payload_index);
+        const q1 = common.loadQ6Vector8(payload, payload_index + 6);
+        const q2 = common.loadQ6Vector8(payload, payload_index + 12);
+        const q3 = common.loadQ6Vector8(payload, payload_index + 18);
         const rhs0: @Vector(8, f32) = input[index..][0..8].*;
         const rhs1: @Vector(8, f32) = input[index + 8 ..][0..8].*;
         const rhs2: @Vector(8, f32) = input[index + 16 ..][0..8].*;
@@ -258,14 +259,14 @@ fn matmulQ6RowsFixedBlocks(
             const rhs0: @Vector(8, f32) = input[index..][0..8].*;
             const rhs1: @Vector(8, f32) = input[index + 8 ..][0..8].*;
 
-            row0_acc0 += loadQ6Vector8(row0_payload, payload_index) * rhs0;
-            row0_acc1 += loadQ6Vector8(row0_payload, payload_index + 6) * rhs1;
-            row1_acc0 += loadQ6Vector8(row1_payload, payload_index) * rhs0;
-            row1_acc1 += loadQ6Vector8(row1_payload, payload_index + 6) * rhs1;
-            row2_acc0 += loadQ6Vector8(row2_payload, payload_index) * rhs0;
-            row2_acc1 += loadQ6Vector8(row2_payload, payload_index + 6) * rhs1;
-            row3_acc0 += loadQ6Vector8(row3_payload, payload_index) * rhs0;
-            row3_acc1 += loadQ6Vector8(row3_payload, payload_index + 6) * rhs1;
+            row0_acc0 += common.loadQ6Vector8(row0_payload, payload_index) * rhs0;
+            row0_acc1 += common.loadQ6Vector8(row0_payload, payload_index + 6) * rhs1;
+            row1_acc0 += common.loadQ6Vector8(row1_payload, payload_index) * rhs0;
+            row1_acc1 += common.loadQ6Vector8(row1_payload, payload_index + 6) * rhs1;
+            row2_acc0 += common.loadQ6Vector8(row2_payload, payload_index) * rhs0;
+            row2_acc1 += common.loadQ6Vector8(row2_payload, payload_index + 6) * rhs1;
+            row3_acc0 += common.loadQ6Vector8(row3_payload, payload_index) * rhs0;
+            row3_acc1 += common.loadQ6Vector8(row3_payload, payload_index + 6) * rhs1;
         }
 
         output[row_idx] = @reduce(.Add, row0_acc0 + row0_acc1) * row0_scale;
@@ -295,10 +296,10 @@ fn matmulQ6RowsFixedBlocks(
             const rhs0: @Vector(8, f32) = input[index..][0..8].*;
             const rhs1: @Vector(8, f32) = input[index + 8 ..][0..8].*;
 
-            row0_acc0 += loadQ6Vector8(row0_payload, payload_index) * rhs0;
-            row0_acc1 += loadQ6Vector8(row0_payload, payload_index + 6) * rhs1;
-            row1_acc0 += loadQ6Vector8(row1_payload, payload_index) * rhs0;
-            row1_acc1 += loadQ6Vector8(row1_payload, payload_index + 6) * rhs1;
+            row0_acc0 += common.loadQ6Vector8(row0_payload, payload_index) * rhs0;
+            row0_acc1 += common.loadQ6Vector8(row0_payload, payload_index + 6) * rhs1;
+            row1_acc0 += common.loadQ6Vector8(row1_payload, payload_index) * rhs0;
+            row1_acc1 += common.loadQ6Vector8(row1_payload, payload_index + 6) * rhs1;
         }
 
         output[row_idx] = @reduce(.Add, row0_acc0 + row0_acc1) * row0_scale;
@@ -308,44 +309,6 @@ fn matmulQ6RowsFixedBlocks(
     if (row_idx < output.len) {
         output[row_idx] = dotQ6RowFixed(cols, bytes, @as(u64, row_idx * row_bytes), input);
     }
-}
-
-fn writePackedBits(buffer: []u8, bit_index: usize, bit_width: u8, value: u8) void {
-    var remaining = bit_width;
-    var source: u16 = value;
-    var dst_bit_index = bit_index;
-    while (remaining > 0) {
-        const byte_index = dst_bit_index / 8;
-        const bit_offset: u3 = @intCast(dst_bit_index % 8);
-        const available: u8 = 8 - @as(u8, bit_offset);
-        const chunk_bits: u8 = @min(remaining, available);
-        const mask: u16 = (@as(u16, 1) << @intCast(chunk_bits)) - 1;
-        const chunk: u8 = @intCast(source & mask);
-        buffer[byte_index] |= chunk << bit_offset;
-        source >>= @intCast(chunk_bits);
-        dst_bit_index += chunk_bits;
-        remaining -= chunk_bits;
-    }
-}
-
-fn readPackedBits(buffer: []const u8, bit_index: usize, bit_width: u8) u8 {
-    var remaining = bit_width;
-    var src_bit_index = bit_index;
-    var result: u16 = 0;
-    var result_shift: u8 = 0;
-    while (remaining > 0) {
-        const byte_index = src_bit_index / 8;
-        const bit_offset: u3 = @intCast(src_bit_index % 8);
-        const available: u8 = 8 - @as(u8, bit_offset);
-        const chunk_bits: u8 = @min(remaining, available);
-        const mask: u8 = (@as(u8, 1) << @intCast(chunk_bits)) - 1;
-        const chunk = (buffer[byte_index] >> bit_offset) & mask;
-        result |= @as(u16, chunk) << @intCast(result_shift);
-        src_bit_index += chunk_bits;
-        result_shift += chunk_bits;
-        remaining -= chunk_bits;
-    }
-    return @intCast(result);
 }
 
 pub fn dotQ8Row(bytes: []const u8, row_offset: u64, input: []const f32) f32 {
@@ -391,8 +354,8 @@ fn dotQ8RowFixed(comptime cols: usize, bytes: []const u8, row_offset: u64, input
     var acc1: @Vector(16, f32) = @splat(0.0);
     var index: usize = 0;
     while (index < cols) : (index += 32) {
-        const q0 = loadQ8Vector16(payload, index);
-        const q1 = loadQ8Vector16(payload, index + 16);
+        const q0 = common.loadQ8Vector16(payload, index);
+        const q1 = common.loadQ8Vector16(payload, index + 16);
         const rhs0: @Vector(16, f32) = input[index..][0..16].*;
         const rhs1: @Vector(16, f32) = input[index + 16 ..][0..16].*;
         acc0 += q0 * rhs0;
@@ -461,14 +424,14 @@ fn matmulQ8RowsFixedBlocks(
             const rhs0: @Vector(16, f32) = input[index..][0..16].*;
             const rhs1: @Vector(16, f32) = input[index + 16 ..][0..16].*;
 
-            row0_acc0 += loadQ8Vector16(row0_payload, index) * rhs0;
-            row0_acc1 += loadQ8Vector16(row0_payload, index + 16) * rhs1;
-            row1_acc0 += loadQ8Vector16(row1_payload, index) * rhs0;
-            row1_acc1 += loadQ8Vector16(row1_payload, index + 16) * rhs1;
-            row2_acc0 += loadQ8Vector16(row2_payload, index) * rhs0;
-            row2_acc1 += loadQ8Vector16(row2_payload, index + 16) * rhs1;
-            row3_acc0 += loadQ8Vector16(row3_payload, index) * rhs0;
-            row3_acc1 += loadQ8Vector16(row3_payload, index + 16) * rhs1;
+            row0_acc0 += common.loadQ8Vector16(row0_payload, index) * rhs0;
+            row0_acc1 += common.loadQ8Vector16(row0_payload, index + 16) * rhs1;
+            row1_acc0 += common.loadQ8Vector16(row1_payload, index) * rhs0;
+            row1_acc1 += common.loadQ8Vector16(row1_payload, index + 16) * rhs1;
+            row2_acc0 += common.loadQ8Vector16(row2_payload, index) * rhs0;
+            row2_acc1 += common.loadQ8Vector16(row2_payload, index + 16) * rhs1;
+            row3_acc0 += common.loadQ8Vector16(row3_payload, index) * rhs0;
+            row3_acc1 += common.loadQ8Vector16(row3_payload, index + 16) * rhs1;
         }
 
         output[row_idx] = @reduce(.Add, row0_acc0 + row0_acc1) * row0_scale;
@@ -581,35 +544,6 @@ fn dotQ4RowFixed(comptime cols: usize, bytes: []const u8, row_offset: u64, input
         sum += @reduce(.Add, low * low_rhs) + @reduce(.Add, high * high_rhs);
     }
     return sum * scale;
-}
-
-fn loadQ8Vector16(bytes: []const u8, start: usize) @Vector(16, f32) {
-    var values: [16]f32 = undefined;
-    inline for (0..16) |lane| {
-        const q: i8 = @bitCast(bytes[start + lane]);
-        values[lane] = @floatFromInt(q);
-    }
-    return values;
-}
-
-fn loadQ6Vector8(bytes: []const u8, start: usize) @Vector(8, f32) {
-    const packed24_a = @as(u32, bytes[start]) |
-        (@as(u32, bytes[start + 1]) << 8) |
-        (@as(u32, bytes[start + 2]) << 16);
-    const packed24_b = @as(u32, bytes[start + 3]) |
-        (@as(u32, bytes[start + 4]) << 8) |
-        (@as(u32, bytes[start + 5]) << 16);
-
-    var values: [8]f32 = undefined;
-    inline for (0..4) |lane| {
-        const encoded: u8 = @intCast((packed24_a >> (lane * 6)) & 0x3F);
-        values[lane] = @floatFromInt(@as(i32, encoded) - 32);
-    }
-    inline for (0..4) |lane| {
-        const encoded: u8 = @intCast((packed24_b >> (lane * 6)) & 0x3F);
-        values[4 + lane] = @floatFromInt(@as(i32, encoded) - 32);
-    }
-    return values;
 }
 
 test "wide quantized handwritten kernels match generic path" {
