@@ -76,8 +76,10 @@ pub const RuntimeCapabilitySet = struct {
 
     pub fn supportsOperation(self: RuntimeCapabilitySet, operation: []const u8, operation_id: types.RuntimeOperation) bool {
         if (self.supported_operation_ids.len != 0) {
+            _ = operation_id;
+            const resolved_operation = types.RuntimeOperation.parse(operation) orelse return false;
             for (self.supported_operation_ids) |supported| {
-                if (supported == operation_id) return true;
+                if (supported == resolved_operation) return true;
             }
             return false;
         }
@@ -141,4 +143,15 @@ fn pickTokenizerPath(
 
 fn freeOptional(allocator: std.mem.Allocator, value: ?[]u8) void {
     if (value) |owned| allocator.free(owned);
+}
+
+test "runtime capabilities prefer ABI operation ids over display strings" {
+    const capabilities = RuntimeCapabilitySet{
+        .supported_operations = &.{"legacy-generate"},
+        .supported_operation_ids = &.{.generate},
+    };
+
+    try std.testing.expect(capabilities.supportsOperation("generate", .infer));
+    try std.testing.expect(!capabilities.supportsOperation("legacy-generate", .generate));
+    try std.testing.expect(!capabilities.supportsOperation("unknown", .infer));
 }

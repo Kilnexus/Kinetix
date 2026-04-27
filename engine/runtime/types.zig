@@ -24,11 +24,11 @@ pub const Descriptor = struct {
 
     pub fn supportsOperation(self: Descriptor, operation: []const u8) bool {
         if (self.supported_operations.len == 0 and self.supported_operation_ids.len == 0) return true;
-        for (self.supported_operations) |supported| {
-            if (std.mem.eql(u8, supported, operation)) return true;
+        if (self.supported_operation_ids.len != 0) {
+            const operation_id = RuntimeOperation.parse(operation) orelse return false;
+            return self.supportsRuntimeOperation(operation_id);
         }
-        if (RuntimeOperation.parse(operation)) |operation_id| return self.supportsRuntimeOperation(operation_id);
-        return false;
+        return self.supportsOperationNameFallback(operation);
     }
 
     pub fn supportsRuntimeOperation(self: Descriptor, operation: RuntimeOperation) bool {
@@ -318,4 +318,17 @@ pub fn inputKind(payload: InputPayload) InputKind {
         .audio_path => .audio_path,
         .video_path => .video_path,
     };
+}
+
+test "descriptor treats operation strings as ABI names when ids are present" {
+    const descriptor = Descriptor{
+        .id = "test",
+        .modality = .text,
+        .supported_operations = &.{"legacy-generate"},
+        .supported_operation_ids = &.{.generate},
+    };
+
+    try std.testing.expect(descriptor.supportsOperation("generate"));
+    try std.testing.expect(!descriptor.supportsOperation("legacy-generate"));
+    try std.testing.expect(!descriptor.supportsOperation("unknown"));
 }

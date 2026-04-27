@@ -14,7 +14,7 @@ pub const Planner = struct {
 
         const requests = try self.allocator.alloc(types.RuntimeRequest, 1);
         errdefer self.allocator.free(requests);
-        requests[0] = request;
+        requests[0] = normalizeRequest(request);
 
         const indices = try self.allocator.alloc(usize, 1);
         errdefer self.allocator.free(indices);
@@ -25,8 +25,8 @@ pub const Planner = struct {
         batches[0] = .{
             .allocator = self.allocator,
             .request_indices = indices,
-            .operation = request.operation,
-            .operation_id = request.resolvedOperationId(),
+            .operation = requests[0].operation,
+            .operation_id = requests[0].operation_id,
             .execution = request.execution,
             .allows_batching = handle.normalized.capabilities.supports_batch and request.allows_batching,
         };
@@ -55,8 +55,10 @@ pub const Planner = struct {
 
         const requests = try self.allocator.alloc(types.RuntimeRequest, request.items.len);
         errdefer self.allocator.free(requests);
-        @memcpy(requests, request.items);
-        const batches = try buildBatches(self.allocator, handle, request.items);
+        for (request.items, requests) |item, *normalized| {
+            normalized.* = normalizeRequest(item);
+        }
+        const batches = try buildBatches(self.allocator, handle, requests);
 
         return .{
             .allocator = self.allocator,
@@ -74,6 +76,13 @@ fn validateRequest(handle: *const handle_mod.ModelHandle, request: types.Runtime
     if (!handle.normalized.capabilities.supportsOperation(request.operation, request.resolvedOperationId())) return error.OperationNotSupported;
     if (!handle.normalized.capabilities.acceptsInput(types.inputKind(request.input))) return error.InvalidInputPayload;
     if (request.execution == .stream and !handle.normalized.capabilities.supports_stream) return error.StreamingNotSupported;
+}
+
+fn normalizeRequest(request: types.RuntimeRequest) types.RuntimeRequest {
+    var normalized = request;
+    normalized.operation_id = request.resolvedOperationId();
+    normalized.operation = normalized.operation_id.name();
+    return normalized;
 }
 
 fn choosePath(handle: *const handle_mod.ModelHandle, request: types.RuntimeRequest) types.ExecutionPath {
@@ -119,7 +128,6 @@ fn buildBatches(
                 if (builder.input_tag != payload_tag) continue;
                 if (builder.generation_max_tokens != item.generation.max_tokens) continue;
                 if (builder.native_execution != item.generation.native_execution) continue;
-                if (!std.mem.eql(u8, builder.operation, item.operation)) continue;
                 if (builder.operation_id != item.resolvedOperationId()) continue;
                 try builder.indices.append(allocator, index);
                 break;
