@@ -36,6 +36,23 @@ pub fn tanh(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Tensor
     };
 }
 
+pub fn hardSwish(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Tensor {
+    if (inputs.len != 1) return error.InvalidOperatorArity;
+    const input = inputs[0].*;
+    if (input.buffer != .f32) return error.UnsupportedTensorDType;
+    const out = try allocator.alloc(f32, input.buffer.f32.len);
+    errdefer allocator.free(out);
+    for (input.buffer.f32, out) |value, *slot| {
+        const gate = @min(@max(value + 3.0, 0.0), 6.0) / 6.0;
+        slot.* = value * gate;
+    }
+    return .{
+        .allocator = allocator,
+        .shape = try allocator.dupe(usize, input.shape),
+        .buffer = .{ .f32 = out },
+    };
+}
+
 pub fn leakyRelu(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
     if (inputs.len != 1) return error.InvalidOperatorArity;
     const input = inputs[0].*;

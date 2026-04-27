@@ -3,6 +3,7 @@ const backend_mod = @import("../../../backend/backend.zig");
 const handle_mod = @import("../../../model/handle.zig");
 const normalized = @import("../../../model/resolver/normalized_model.zig");
 const types = @import("../../../types.zig");
+const inference = @import("inference/index.zig");
 const resolver = @import("resolver.zig");
 
 pub const backend = backend_mod.RuntimeBackend{
@@ -15,6 +16,7 @@ pub const backend = backend_mod.RuntimeBackend{
 const State = struct {
     base: backend_mod.OpenState,
     layout: resolver.Layout,
+    onnx_metadata: inference.planning.onnx_metadata.Summary = .{},
 
     fn destroy(self: *State, allocator: std.mem.Allocator) void {
         allocator.free(self.base.model_dir);
@@ -34,6 +36,7 @@ fn open(
             .model_dir = try allocator.dupe(u8, model.artifacts.model_dir),
         },
         .layout = resolver.inspectLayout(model.artifacts.model_dir),
+        .onnx_metadata = inference.planning.onnx_metadata.inspect(allocator, model.artifacts.model_dir) catch inference.planning.onnx_metadata.Summary{},
     };
     return state;
 }
@@ -57,6 +60,10 @@ fn execute(
 
     const state = stateFromHandle(handle);
     const layout = if (state) |loaded| loaded.layout else resolver.inspectLayout(handle.normalized.artifacts.model_dir);
+    const onnx_metadata = if (state) |loaded|
+        loaded.onnx_metadata
+    else
+        inference.planning.onnx_metadata.inspect(allocator, handle.normalized.artifacts.model_dir) catch inference.planning.onnx_metadata.Summary{};
 
     const Receipt = struct {
         status: []const u8,
@@ -76,6 +83,16 @@ fn execute(
         det_model_count: usize,
         rec_model_count: usize,
         cls_model_count: usize,
+        onnx_metadata_loaded_graph_count: usize,
+        onnx_metadata_det_graph_count: usize,
+        onnx_metadata_rec_graph_count: usize,
+        onnx_metadata_cls_graph_count: usize,
+        onnx_metadata_total_node_count: usize,
+        onnx_metadata_total_initializer_count: usize,
+        onnx_metadata_external_initializer_count: usize,
+        onnx_metadata_supported_node_count: usize,
+        onnx_metadata_unsupported_node_count: usize,
+        onnx_metadata_unsupported_ops: []const inference.planning.onnx_metadata.UnsupportedOpEntry,
         message: []const u8,
     };
 
@@ -97,6 +114,16 @@ fn execute(
         .det_model_count = layout.det_model_count,
         .rec_model_count = layout.rec_model_count,
         .cls_model_count = layout.cls_model_count,
+        .onnx_metadata_loaded_graph_count = onnx_metadata.loaded_graph_count,
+        .onnx_metadata_det_graph_count = onnx_metadata.det_graph_count,
+        .onnx_metadata_rec_graph_count = onnx_metadata.rec_graph_count,
+        .onnx_metadata_cls_graph_count = onnx_metadata.cls_graph_count,
+        .onnx_metadata_total_node_count = onnx_metadata.total_node_count,
+        .onnx_metadata_total_initializer_count = onnx_metadata.total_initializer_count,
+        .onnx_metadata_external_initializer_count = onnx_metadata.external_initializer_count,
+        .onnx_metadata_supported_node_count = onnx_metadata.supported_node_count,
+        .onnx_metadata_unsupported_node_count = onnx_metadata.unsupported_node_count,
+        .onnx_metadata_unsupported_ops = onnx_metadata.unsupported_ops[0..onnx_metadata.unsupported_op_entry_count],
         .message = "PaddleOCR is routed through the unified runtime. Native zero-dependency PP-OCRv5 detection, recognition, classification, and postprocess execution will be enabled by expanding shared graph ops and Paddle/ONNX model loading.",
     };
 

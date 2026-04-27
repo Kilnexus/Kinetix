@@ -47,6 +47,24 @@ pub fn shapeOp(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Ten
     return try Tensor.fromI64(allocator, &.{input.shape.len}, values);
 }
 
+pub fn flatten(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
+    if (inputs.len != 1) return error.InvalidOperatorArity;
+    const input = inputs[0].*;
+    const axis = try normalizeFlattenAxis(common.attributeInt(node, "axis") orelse 1, input.shape.len);
+    const out_shape = [_]usize{
+        common.elementCountFromShape(input.shape[0..axis]),
+        common.elementCountFromShape(input.shape[axis..]),
+    };
+    return try common.cloneWithShape(allocator, input, &out_shape);
+}
+
+fn normalizeFlattenAxis(axis: i64, rank: usize) !usize {
+    const signed_rank: i64 = @intCast(rank);
+    const normalized = if (axis < 0) axis + signed_rank else axis;
+    if (normalized < 0 or normalized > signed_rank) return error.InvalidOperatorAttribute;
+    return @intCast(normalized);
+}
+
 pub fn unsqueeze(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
     if (inputs.len != 1 and inputs.len != 2) return error.InvalidOperatorArity;
     const input = inputs[0].*;

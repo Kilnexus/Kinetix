@@ -63,6 +63,54 @@ pub fn slice(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs:
     };
 }
 
+pub fn argMax(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
+    if (inputs.len != 1) return error.InvalidOperatorArity;
+    const input = inputs[0].*;
+    if (input.buffer != .f32) return error.UnsupportedTensorDType;
+    if (input.shape.len == 0) return error.UnsupportedTensorRank;
+    const axis = try common.normalizeAxis(common.attributeInt(node, "axis") orelse 0, input.shape.len);
+    const keepdims = (common.attributeInt(node, "keepdims") orelse 1) != 0;
+    const select_last_index = (common.attributeInt(node, "select_last_index") orelse 0) != 0;
+
+    var out_shape_list = std.ArrayListUnmanaged(usize).empty;
+    defer out_shape_list.deinit(allocator);
+    for (input.shape, 0..) |dim, index| {
+        if (index == axis) {
+            if (keepdims) try out_shape_list.append(allocator, 1);
+        } else {
+            try out_shape_list.append(allocator, dim);
+        }
+    }
+    if (out_shape_list.items.len == 0) try out_shape_list.append(allocator, 1);
+
+    const axis_dim = input.shape[axis];
+    const inner = common.elementCountFromShape(input.shape[axis + 1 ..]);
+    const outer = common.elementCountFromShape(input.shape[0..axis]);
+    const out = try allocator.alloc(i64, common.elementCountFromShape(out_shape_list.items));
+    errdefer allocator.free(out);
+    var write_index: usize = 0;
+    for (0..outer) |outer_index| {
+        for (0..inner) |inner_index| {
+            var best_index: usize = 0;
+            var best_value = input.buffer.f32[outer_index * axis_dim * inner + inner_index];
+            for (1..axis_dim) |axis_index| {
+                const value = input.buffer.f32[outer_index * axis_dim * inner + axis_index * inner + inner_index];
+                if (value > best_value or (select_last_index and value == best_value)) {
+                    best_value = value;
+                    best_index = axis_index;
+                }
+            }
+            out[write_index] = @intCast(best_index);
+            write_index += 1;
+        }
+    }
+    return .{
+        .allocator = allocator,
+        .shape = try allocator.dupe(usize, out_shape_list.items),
+        .buffer = .{ .i64 = out },
+    };
+}
+
 fn gatherValues(
     comptime T: type,
     allocator: std.mem.Allocator,

@@ -35,6 +35,7 @@ pub fn execute(
     if (std.mem.eql(u8, entry.name, "Relu")) return try core.relu(allocator, inputs);
     if (std.mem.eql(u8, entry.name, "Sigmoid")) return try activation.sigmoid(allocator, inputs);
     if (std.mem.eql(u8, entry.name, "Tanh")) return try activation.tanh(allocator, inputs);
+    if (std.mem.eql(u8, entry.name, "HardSwish")) return try activation.hardSwish(allocator, inputs);
     if (std.mem.eql(u8, entry.name, "LeakyRelu")) return try activation.leakyRelu(allocator, node, inputs);
     if (std.mem.eql(u8, entry.name, "Gelu")) return try activation.gelu(allocator, inputs);
     if (std.mem.eql(u8, entry.name, "SwiGLU")) return try activation.swiglu(allocator, inputs);
@@ -42,14 +43,18 @@ pub fn execute(
     if (std.mem.eql(u8, entry.name, "MatMul")) return try linear.matmul(allocator, inputs);
     if (std.mem.eql(u8, entry.name, "Gemm")) return try linear.gemm(allocator, node, inputs);
     if (std.mem.eql(u8, entry.name, "Reshape")) return try shape.reshape(allocator, inputs);
+    if (std.mem.eql(u8, entry.name, "Flatten")) return try shape.flatten(allocator, node, inputs);
     if (std.mem.eql(u8, entry.name, "Shape")) return try shape.shapeOp(allocator, inputs);
     if (std.mem.eql(u8, entry.name, "Unsqueeze")) return try shape.unsqueeze(allocator, node, inputs);
     if (std.mem.eql(u8, entry.name, "Squeeze")) return try shape.squeeze(allocator, node, inputs);
     if (std.mem.eql(u8, entry.name, "Concat")) return try shape.concat(allocator, node, inputs);
     if (std.mem.eql(u8, entry.name, "Transpose")) return try shape.transpose(allocator, node, inputs);
     if (std.mem.eql(u8, entry.name, "Gather")) return try indexing.gather(allocator, node, inputs);
+    if (std.mem.eql(u8, entry.name, "ArgMax")) return try indexing.argMax(allocator, node, inputs);
     if (std.mem.eql(u8, entry.name, "Slice")) return try indexing.slice(allocator, node, inputs);
     if (std.mem.eql(u8, entry.name, "Softmax")) return try normalization.softmax(allocator, node, inputs);
+    if (std.mem.eql(u8, entry.name, "ReduceMean")) return try normalization.reduceMean(allocator, node, inputs);
+    if (std.mem.eql(u8, entry.name, "BatchNormalization")) return try normalization.batchNormalization(allocator, node, inputs);
     if (std.mem.eql(u8, entry.name, "LayerNormalization")) return try normalization.layerNormalization(allocator, node, inputs);
     if (std.mem.eql(u8, entry.name, "RMSNormalization")) return try normalization.rmsNormalization(allocator, node, inputs);
     if (std.mem.eql(u8, entry.name, "Conv")) return try spatial.conv(allocator, node, inputs);
@@ -81,6 +86,47 @@ test "graph dispatcher executes registry-backed tanh op" {
     var output = try execute(std.testing.allocator, testNode("Tanh"), &inputs);
     defer output.deinit();
     try std.testing.expectEqual(@as(f32, 0), output.buffer.f32[0]);
+}
+
+test "graph dispatcher executes paddleocr common ops" {
+    var input = try Tensor.fromF32(std.testing.allocator, &.{ 1, 2, 2 }, &.{ 1, 3, 2, 4 });
+    defer input.deinit();
+    const single_input = [_]*const Tensor{&input};
+
+    var flat = try execute(std.testing.allocator, testNode("Flatten"), &single_input);
+    defer flat.deinit();
+    try std.testing.expectEqualSlices(usize, &.{ 1, 4 }, flat.shape);
+
+    var argmax = try execute(std.testing.allocator, testNode("ArgMax"), &single_input);
+    defer argmax.deinit();
+    try std.testing.expectEqualSlices(i64, &.{ 0, 0, 0, 0 }, argmax.buffer.i64);
+
+    var reduced = try execute(std.testing.allocator, testNode("ReduceMean"), &single_input);
+    defer reduced.deinit();
+    try std.testing.expectEqualSlices(usize, &.{ 1, 1, 1 }, reduced.shape);
+    try std.testing.expectEqual(@as(f32, 2.5), reduced.buffer.f32[0]);
+
+    var hswish = try execute(std.testing.allocator, testNode("HardSwish"), &single_input);
+    defer hswish.deinit();
+    try std.testing.expect(hswish.buffer.f32[0] > 0);
+}
+
+test "graph dispatcher executes batch normalization" {
+    var input = try Tensor.fromF32(std.testing.allocator, &.{ 1, 2, 1, 1 }, &.{ 2, 4 });
+    defer input.deinit();
+    var scale = try Tensor.fromF32(std.testing.allocator, &.{2}, &.{ 1, 1 });
+    defer scale.deinit();
+    var bias = try Tensor.fromF32(std.testing.allocator, &.{2}, &.{ 0, 0 });
+    defer bias.deinit();
+    var mean = try Tensor.fromF32(std.testing.allocator, &.{2}, &.{ 1, 2 });
+    defer mean.deinit();
+    var variance = try Tensor.fromF32(std.testing.allocator, &.{2}, &.{ 1, 4 });
+    defer variance.deinit();
+    const inputs = [_]*const Tensor{ &input, &scale, &bias, &mean, &variance };
+
+    var output = try execute(std.testing.allocator, testNode("BatchNormalization"), &inputs);
+    defer output.deinit();
+    try std.testing.expect(output.buffer.f32[0] > 0.99 and output.buffer.f32[0] < 1.01);
 }
 
 fn testNode(op_type: []const u8) shared_graph.onnx.metadata.NodeInfo {
