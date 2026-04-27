@@ -68,6 +68,76 @@ pub fn conv(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: 
     };
 }
 
+pub fn convTranspose(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
+    if (inputs.len < 2 or inputs.len > 3) return error.InvalidOperatorArity;
+    const x = inputs[0].*;
+    const w = inputs[1].*;
+    if (x.buffer != .f32 or w.buffer != .f32) return error.UnsupportedTensorDType;
+    if (x.shape.len != 4 or w.shape.len != 4) return error.UnsupportedTensorRank;
+    const n = x.shape[0];
+    const in_channels = x.shape[1];
+    const in_h = x.shape[2];
+    const in_w = x.shape[3];
+    const weight_in_channels = w.shape[0];
+    const out_channels_per_group = w.shape[1];
+    const kernel_h = w.shape[2];
+    const kernel_w = w.shape[3];
+    const group: usize = @intCast(common.attributeInt(node, "group") orelse 1);
+    if (group == 0 or in_channels % group != 0 or weight_in_channels != in_channels) return error.InvalidGroups;
+    const out_channels = out_channels_per_group * group;
+    const strides = try pairAttribute(allocator, node, "strides", 1);
+    const dilations = try pairAttribute(allocator, node, "dilations", 1);
+    const pads = try padsAttribute(allocator, node);
+    if (dilations.h != 1 or dilations.w != 1) return error.UnsupportedOperatorAttribute;
+    const out_h = try convTransposeOutputDim(in_h, kernel_h, pads.top, pads.bottom, strides.h);
+    const out_w = try convTransposeOutputDim(in_w, kernel_w, pads.left, pads.right, strides.w);
+    const out = try allocator.alloc(f32, n * out_channels * out_h * out_w);
+    errdefer allocator.free(out);
+    @memset(out, 0);
+    const bias = if (inputs.len == 3) inputs[2].* else null;
+    if (bias) |bias_tensor| {
+        if (bias_tensor.buffer != .f32 or bias_tensor.elementCount() != out_channels) return error.ShapeMismatch;
+        for (0..n) |batch| {
+            for (0..out_channels) |oc| {
+                for (0..out_h) |y| {
+                    for (0..out_w) |x_out| out[((batch * out_channels + oc) * out_h + y) * out_w + x_out] = bias_tensor.buffer.f32[oc];
+                }
+            }
+        }
+    }
+
+    const in_channel_per_group = in_channels / group;
+    for (0..n) |batch| {
+        for (0..in_channels) |ic| {
+            const group_index = ic / in_channel_per_group;
+            for (0..in_h) |iy| {
+                for (0..in_w) |ix| {
+                    const input_value = x.buffer.f32[((batch * in_channels + ic) * in_h + iy) * in_w + ix];
+                    for (0..out_channels_per_group) |oc_local| {
+                        const oc = group_index * out_channels_per_group + oc_local;
+                        for (0..kernel_h) |ky| {
+                            const out_y_signed = @as(isize, @intCast(iy * strides.h + ky)) - @as(isize, @intCast(pads.top));
+                            if (out_y_signed < 0 or out_y_signed >= @as(isize, @intCast(out_h))) continue;
+                            for (0..kernel_w) |kx| {
+                                const out_x_signed = @as(isize, @intCast(ix * strides.w + kx)) - @as(isize, @intCast(pads.left));
+                                if (out_x_signed < 0 or out_x_signed >= @as(isize, @intCast(out_w))) continue;
+                                const weight_index = ((ic * out_channels_per_group + oc_local) * kernel_h + ky) * kernel_w + kx;
+                                const out_index = ((batch * out_channels + oc) * out_h + @as(usize, @intCast(out_y_signed))) * out_w + @as(usize, @intCast(out_x_signed));
+                                out[out_index] += input_value * w.buffer.f32[weight_index];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return .{
+        .allocator = allocator,
+        .shape = try allocator.dupe(usize, &.{ n, out_channels, out_h, out_w }),
+        .buffer = .{ .f32 = out },
+    };
+}
+
 pub fn maxPool(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
     if (inputs.len != 1) return error.InvalidOperatorArity;
     const input = inputs[0].*;
@@ -189,6 +259,36 @@ pub fn globalAveragePool(allocator: std.mem.Allocator, inputs: []const *const Te
     };
 }
 
+pub fn globalMaxPool(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Tensor {
+    if (inputs.len != 1) return error.InvalidOperatorArity;
+    const input = inputs[0].*;
+    if (input.buffer != .f32) return error.UnsupportedTensorDType;
+    if (input.shape.len != 4) return error.UnsupportedTensorRank;
+    const h = input.shape[2];
+    const w = input.shape[3];
+    if (h == 0 or w == 0) return error.InvalidOperatorAttribute;
+
+    const out = try allocator.alloc(f32, input.shape[0] * input.shape[1]);
+    errdefer allocator.free(out);
+    for (0..input.shape[0]) |batch| {
+        for (0..input.shape[1]) |channel| {
+            var max_value = -std.math.inf(f32);
+            for (0..h) |y| {
+                for (0..w) |x| {
+                    const index = ((batch * input.shape[1] + channel) * h + y) * w + x;
+                    max_value = @max(max_value, input.buffer.f32[index]);
+                }
+            }
+            out[batch * input.shape[1] + channel] = max_value;
+        }
+    }
+    return .{
+        .allocator = allocator,
+        .shape = try allocator.dupe(usize, &.{ input.shape[0], input.shape[1], 1, 1 }),
+        .buffer = .{ .f32 = out },
+    };
+}
+
 const Pair = struct {
     h: usize,
     w: usize,
@@ -206,6 +306,13 @@ fn convOutputDim(input: usize, kernel: usize, pad_begin: usize, pad_end: usize, 
     const padded = input + pad_begin + pad_end;
     if (padded < kernel) return error.InvalidOutputShape;
     return ((padded - kernel) / stride) + 1;
+}
+
+fn convTransposeOutputDim(input: usize, kernel: usize, pad_begin: usize, pad_end: usize, stride: usize) !usize {
+    if (kernel == 0 or stride == 0) return error.InvalidOperatorAttribute;
+    const expanded = (input - 1) * stride + kernel;
+    if (expanded < pad_begin + pad_end) return error.InvalidOutputShape;
+    return expanded - pad_begin - pad_end;
 }
 
 fn pairAttribute(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, name: []const u8, default: usize) !Pair {

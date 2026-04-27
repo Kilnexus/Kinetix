@@ -117,9 +117,11 @@ fn executeSingle(
     if (std.mem.eql(u8, name, "LayerNormalization")) return try normalization.layerNormalization(allocator, node, inputs);
     if (std.mem.eql(u8, name, "RMSNormalization")) return try normalization.rmsNormalization(allocator, node, inputs);
     if (std.mem.eql(u8, name, "Conv")) return try spatial.conv(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "ConvTranspose")) return try spatial.convTranspose(allocator, node, inputs);
     if (std.mem.eql(u8, name, "MaxPool")) return try spatial.maxPool(allocator, node, inputs);
     if (std.mem.eql(u8, name, "AveragePool")) return try spatial.averagePool(allocator, node, inputs);
     if (std.mem.eql(u8, name, "GlobalAveragePool")) return try spatial.globalAveragePool(allocator, inputs);
+    if (std.mem.eql(u8, name, "GlobalMaxPool")) return try spatial.globalMaxPool(allocator, inputs);
     return error.UnsupportedOnnxOperator;
 }
 
@@ -335,6 +337,23 @@ test "graph dispatcher executes average pooling ops" {
     defer global.deinit();
     try std.testing.expectEqualSlices(usize, &.{ 1, 1, 1, 1 }, global.shape);
     try std.testing.expectEqualSlices(f32, &.{2.5}, global.buffer.f32);
+
+    var global_max = try execute(std.testing.allocator, testNode("GlobalMaxPool"), &inputs);
+    defer global_max.deinit();
+    try std.testing.expectEqualSlices(usize, &.{ 1, 1, 1, 1 }, global_max.shape);
+    try std.testing.expectEqualSlices(f32, &.{4}, global_max.buffer.f32);
+}
+
+test "graph dispatcher executes conv transpose" {
+    var input = try Tensor.fromF32(std.testing.allocator, &.{ 1, 1, 2, 2 }, &.{ 1, 2, 3, 4 });
+    defer input.deinit();
+    var weights = try Tensor.fromF32(std.testing.allocator, &.{ 1, 1, 2, 2 }, &.{ 1, 1, 1, 1 });
+    defer weights.deinit();
+
+    var output = try execute(std.testing.allocator, testNode("ConvTranspose"), &.{ &input, &weights });
+    defer output.deinit();
+    try std.testing.expectEqualSlices(usize, &.{ 1, 1, 3, 3 }, output.shape);
+    try std.testing.expectEqualSlices(f32, &.{ 1, 3, 2, 4, 10, 6, 3, 7, 4 }, output.buffer.f32);
 }
 
 fn testNode(op_type: []const u8) shared_graph.onnx.metadata.NodeInfo {

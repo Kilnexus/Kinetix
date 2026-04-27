@@ -90,9 +90,11 @@ pub const entries = [_]Entry{
     .{ .name = "LayerNormalization", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/normalization/index.zig" },
     .{ .name = "RMSNormalization", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/normalization/index.zig" },
     .{ .name = "Conv", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/spatial/index.zig" },
+    .{ .name = "ConvTranspose", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/spatial/index.zig" },
     .{ .name = "MaxPool", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/spatial/index.zig" },
     .{ .name = "AveragePool", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/spatial/index.zig" },
     .{ .name = "GlobalAveragePool", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/spatial/index.zig" },
+    .{ .name = "GlobalMaxPool", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/spatial/index.zig" },
 
     .{ .name = "SiLU", .domain = .vision_nn, .status = .native_kernel, .module = "shared/ops/kernels/activation/index.zig" },
     .{ .name = "Sigmoid", .domain = .vision_nn, .status = .native_kernel, .module = "shared/ops/kernels/activation/index.zig" },
@@ -283,9 +285,11 @@ test "unified ops registry includes graph executable and native kernels" {
     try std.testing.expect(isGraphExecutableOnnx("Expand"));
     try std.testing.expect(isGraphExecutableOnnx("Split"));
     try std.testing.expect(isGraphExecutableOnnx("Conv"));
+    try std.testing.expect(isGraphExecutableOnnx("ConvTranspose"));
     try std.testing.expect(isGraphExecutableOnnx("MaxPool"));
     try std.testing.expect(isGraphExecutableOnnx("AveragePool"));
     try std.testing.expect(isGraphExecutableOnnx("GlobalAveragePool"));
+    try std.testing.expect(isGraphExecutableOnnx("GlobalMaxPool"));
     try std.testing.expect(isGraphExecutableOnnx("Clip"));
     try std.testing.expect(isGraphExecutableOnnx("Equal"));
     try std.testing.expect(isGraphExecutableOnnx("Range"));
