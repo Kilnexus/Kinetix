@@ -110,6 +110,37 @@ test "support normalizes chandra huggingface directories into a runtime model" {
     try std.testing.expectEqual(types.RuntimeSupportStatus.supported, model.support.status);
 }
 
+test "support normalizes paddleocr inference directories into a runtime model" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makeDir("det");
+    try tmp.dir.makeDir("rec");
+    var det_dir = try tmp.dir.openDir("det", .{});
+    defer det_dir.close();
+    var rec_dir = try tmp.dir.openDir("rec", .{});
+    defer rec_dir.close();
+
+    try writeTmpFile(det_dir, "inference.pdmodel", "det model");
+    try writeTmpFile(det_dir, "inference.pdiparams", "det params");
+    try writeTmpFile(rec_dir, "inference.pdmodel", "rec model");
+    try writeTmpFile(rec_dir, "inference.pdiparams", "rec params");
+    try writeTmpFile(tmp.dir, "inference.yml", "Global:\n  model_name: PP-OCRv5\n");
+    try writeTmpFile(tmp.dir, "ppocr_keys_v1.txt", "text\n");
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+
+    var model = try normalizeModel(std.testing.allocator, root_path, .auto);
+    defer model.deinit();
+
+    try std.testing.expectEqual(types.ProviderKey.paddleocr_ocr, model.provider_key);
+    try std.testing.expectEqual(types.Modality.ocr, model.descriptor.modality);
+    try std.testing.expectEqualStrings("paddleocr", model.descriptor.family);
+    try std.testing.expectEqual(types.RuntimeSupportStatus.degraded, model.support.status);
+    try std.testing.expect(model.capabilities.supportsOperation("display-only", .ocr));
+}
+
 test "support normalizes moss tts nano onnx bundle directories into a runtime model" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

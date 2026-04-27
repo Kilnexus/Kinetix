@@ -562,6 +562,61 @@ test "runtime session routes moss tts nano bundles through the unified backend r
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"builtin_voice_count\":2") != null);
 }
 
+test "runtime session routes paddleocr bundles through the unified backend registry" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makeDir("det");
+    try tmp.dir.makeDir("rec");
+    var det_dir = try tmp.dir.openDir("det", .{});
+    defer det_dir.close();
+    var rec_dir = try tmp.dir.openDir("rec", .{});
+    defer rec_dir.close();
+
+    try writeTmpFile(det_dir, "inference.pdmodel", "det model");
+    try writeTmpFile(det_dir, "inference.pdiparams", "det params");
+    try writeTmpFile(rec_dir, "inference.pdmodel", "rec model");
+    try writeTmpFile(rec_dir, "inference.pdiparams", "rec params");
+    try writeTmpFile(tmp.dir, "inference.yml", "Global:\n  model_name: PP-OCRv5\n");
+    try writeTmpFile(tmp.dir, "ppocr_keys_v1.txt", "text\n");
+    try writeSyntheticPng(tmp.dir, "input.png", 2, 2);
+
+    const root_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root_path);
+    const image_path = try tmp.dir.realpathAlloc(std.testing.allocator, "input.png");
+    defer std.testing.allocator.free(image_path);
+
+    var session = RuntimeSession.init(std.testing.allocator);
+    defer session.deinit();
+
+    var handle = try session.openModel(.{ .model_dir = root_path });
+    defer handle.deinit();
+
+    try std.testing.expectEqual(types.ProviderKey.paddleocr_ocr, handle.runtime_backend.provider_key);
+    try std.testing.expectEqual(types.Modality.ocr, handle.normalized.descriptor.modality);
+
+    var plan = try session.plan(&handle, .{
+        .operation = "infer-ocr",
+        .operation_id = .ocr,
+        .input = .{ .image_path = image_path },
+    });
+    defer plan.deinit();
+
+    var result = try session.execute(&handle, &plan);
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(types.ExecutionNote.ocr_model_ready, result.note);
+    const payload = switch (result.output) {
+        .json => |value| value,
+        else => return error.ExpectedJsonOutput,
+    };
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"provider_key\":\"paddleocr_ocr\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"status\":\"paddleocr_runtime_ready\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"det_model_count\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"rec_model_count\":1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"has_rec_dict\":true") != null);
+}
+
 test "runtime session routes bert models through the unified backend registry" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

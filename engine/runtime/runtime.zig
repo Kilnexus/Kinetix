@@ -28,6 +28,7 @@ pub const families = struct {
     };
     pub const ocr = struct {
         pub const chandra = @import("families/ocr/chandra/family.zig");
+        pub const paddleocr = @import("families/ocr/paddleocr/family.zig");
         pub const swiftocr = @import("families/ocr/swiftocr/family.zig");
     };
     pub const tts = struct {

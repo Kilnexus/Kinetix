@@ -109,6 +109,7 @@ pub const ProviderKey = enum {
     yolo_vision,
     swiftocr_ocr,
     chandra_ocr,
+    paddleocr_ocr,
     moss_tts_nano_tts,
     generic,
 
@@ -119,6 +120,7 @@ pub const ProviderKey = enum {
             .yolo_vision => "yolo_vision",
             .swiftocr_ocr => "swiftocr_ocr",
             .chandra_ocr => "chandra_ocr",
+            .paddleocr_ocr => "paddleocr_ocr",
             .moss_tts_nano_tts => "moss_tts_nano_tts",
             .generic => "generic",
         };

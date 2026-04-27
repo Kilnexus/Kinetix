@@ -31,4 +31,5 @@ test "executor delegates provider selection to backend registry" {
     try std.testing.expect(backend_registry.findByKey(.yolo_vision) != null);
     try std.testing.expect(backend_registry.findByKey(.swiftocr_ocr) != null);
     try std.testing.expect(backend_registry.findByKey(.chandra_ocr) != null);
+    try std.testing.expect(backend_registry.findByKey(.paddleocr_ocr) != null);
 }

@@ -64,6 +64,7 @@ test "runtime backend registry resolves builtin backends" {
     try @import("std").testing.expect(findByKey(.qwen3_text) != null);
     try @import("std").testing.expect(findByKey(.bert_text) != null);
     try @import("std").testing.expect(findByKey(.chandra_ocr) != null);
+    try @import("std").testing.expect(findByKey(.paddleocr_ocr) != null);
     try @import("std").testing.expect(findByKey(.moss_tts_nano_tts) != null);
     try @import("std").testing.expect(findByKey(.generic) != null);
 }

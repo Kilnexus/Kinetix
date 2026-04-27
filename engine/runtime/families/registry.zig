@@ -9,6 +9,7 @@ const qwen3 = @import("text/qwen3/family.zig");
 const yolo = @import("vision/yolo/family.zig");
 const swiftocr = @import("ocr/swiftocr/family.zig");
 const chandra = @import("ocr/chandra/family.zig");
+const paddleocr = @import("ocr/paddleocr/family.zig");
 const moss_tts_nano = @import("tts/moss_tts_nano/family.zig");
 const generic = @import("generic/family.zig");
 
@@ -57,6 +58,11 @@ const builtin_families = [_]FamilyEntry{
         .try_normalize = chandra.tryNormalize,
     },
     .{
+        .descriptor = .{ .key = paddleocr.key, .modality = paddleocr.modality, .family = paddleocr.family_name },
+        .backend = &paddleocr.backend,
+        .try_normalize = paddleocr.tryNormalize,
+    },
+    .{
         .descriptor = .{ .key = moss_tts_nano.key, .modality = moss_tts_nano.modality, .family = moss_tts_nano.family_name },
         .backend = &moss_tts_nano.backend,
         .try_normalize = moss_tts_nano.tryNormalize,
@@ -80,8 +86,10 @@ pub fn findBuiltinByKey(key: types.ProviderKey) ?FamilyEntry {
 }
 
 test "family registry exposes builtin family entries" {
-    try std.testing.expectEqual(@as(usize, 7), builtinFamilies().len);
+    try std.testing.expectEqual(@as(usize, 8), builtinFamilies().len);
     const qwen = findBuiltinByKey(.qwen3_text) orelse return error.ExpectedFamily;
     try std.testing.expectEqualStrings("qwen3", qwen.descriptor.family);
     try std.testing.expect(qwen.backend.provider_key == .qwen3_text);
+    const paddle = findBuiltinByKey(.paddleocr_ocr) orelse return error.ExpectedFamily;
+    try std.testing.expectEqualStrings("paddleocr", paddle.descriptor.family);
 }
