@@ -199,6 +199,27 @@ pub fn expand(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Tens
     };
 }
 
+pub fn tile(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Tensor {
+    if (inputs.len != 2) return error.InvalidOperatorArity;
+    const input = inputs[0].*;
+    const repeats = try common.indicesToOwnedI64(allocator, inputs[1].*);
+    defer allocator.free(repeats);
+    if (repeats.len != input.shape.len) return error.ShapeMismatch;
+
+    const out_shape = try allocator.alloc(usize, input.shape.len);
+    defer allocator.free(out_shape);
+    for (input.shape, repeats, out_shape) |dim, repeat, *slot| {
+        if (repeat <= 0) return error.InvalidTensorShape;
+        slot.* = dim * @as(usize, @intCast(repeat));
+    }
+
+    return switch (input.buffer) {
+        .f32 => |values| Tensor{ .allocator = allocator, .shape = try allocator.dupe(usize, out_shape), .buffer = .{ .f32 = try tileValues(f32, allocator, values, input.shape, out_shape) } },
+        .i32 => |values| Tensor{ .allocator = allocator, .shape = try allocator.dupe(usize, out_shape), .buffer = .{ .i32 = try tileValues(i32, allocator, values, input.shape, out_shape) } },
+        .i64 => |values| Tensor{ .allocator = allocator, .shape = try allocator.dupe(usize, out_shape), .buffer = .{ .i64 = try tileValues(i64, allocator, values, input.shape, out_shape) } },
+    };
+}
+
 pub fn split(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
     const index = common.attributeInt(node, "kinetix_output_index") orelse 0;
     return try splitOutput(allocator, node, inputs, @intCast(index));
@@ -394,6 +415,31 @@ fn expandValues(
                 return error.ShapeMismatch;
             }
         }
+        slot.* = values[common.coordsToLinear(input_coords, input_strides)];
+    }
+    return out;
+}
+
+fn tileValues(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    values: []const T,
+    input_shape: []const usize,
+    out_shape: []const usize,
+) ![]T {
+    const out = try allocator.alloc(T, common.elementCountFromShape(out_shape));
+    errdefer allocator.free(out);
+    const input_strides = try common.stridesOwned(allocator, input_shape);
+    defer allocator.free(input_strides);
+    const out_strides = try common.stridesOwned(allocator, out_shape);
+    defer allocator.free(out_strides);
+    const out_coords = try allocator.alloc(usize, out_shape.len);
+    defer allocator.free(out_coords);
+    const input_coords = try allocator.alloc(usize, input_shape.len);
+    defer allocator.free(input_coords);
+    for (out, 0..) |*slot, linear| {
+        common.linearToCoords(linear, out_shape, out_strides, out_coords);
+        for (out_coords, input_coords, input_shape) |coord, *input_coord, dim| input_coord.* = coord % dim;
         slot.* = values[common.coordsToLinear(input_coords, input_strides)];
     }
     return out;

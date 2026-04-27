@@ -129,6 +129,7 @@ pub fn executePipeline(
     } else {
         for (result.detection_boxes) |box| {
             const rect = scaledCropRect(box, source.width, source.height, result.detection_map_width, result.detection_map_height) catch continue;
+            const source_box = boxFromCropRect(rect, box.score);
             var crop = imaging.cropImageRect(allocator, &source, rect) catch continue;
             defer crop.deinit();
             if (result.cls_model_path) |cls_path| {
@@ -137,15 +138,15 @@ pub fn executePipeline(
                 if (orientation == .rotate_180) {
                     result.cls_rotate_180_count += 1;
                     var rotated = rotateImage180(allocator, &crop) catch {
-                        try recognizeImage(allocator, rec_path, &crop, dictionary.tokens, box, &lines, &text, &result);
+                        try recognizeImage(allocator, rec_path, &crop, dictionary.tokens, source_box, &lines, &text, &result);
                         continue;
                     };
                     defer rotated.deinit();
-                    try recognizeImage(allocator, rec_path, &rotated, dictionary.tokens, box, &lines, &text, &result);
+                    try recognizeImage(allocator, rec_path, &rotated, dictionary.tokens, source_box, &lines, &text, &result);
                     continue;
                 }
             }
-            try recognizeImage(allocator, rec_path, &crop, dictionary.tokens, box, &lines, &text, &result);
+            try recognizeImage(allocator, rec_path, &crop, dictionary.tokens, source_box, &lines, &text, &result);
         }
     }
 
@@ -184,12 +185,17 @@ pub fn executeLoadedImageModel(
     options: preprocess.Options,
 ) !ImageModelResult {
     const input_info = firstRuntimeInput(model.graph) orelse return error.MissingOnnxGraphInput;
-    const input_shape = try preprocess.shapeFromModelInput(allocator, input_info.dims);
+    const stage = stageFromPath(model_path);
+    const input_shape = try preprocess.shapeFromModelInputForImage(allocator, input_info.dims, .{
+        .stage = shapeStage(stage),
+        .image_width = image.width,
+        .image_height = image.height,
+    });
     errdefer allocator.free(input_shape);
     const input_name = try allocator.dupe(u8, input_info.name);
     errdefer allocator.free(input_name);
 
-    var input_tensor = try preprocess.tensorFromImage(allocator, image, input_shape, optionsForStage(options, stageFromPath(model_path)));
+    var input_tensor = try preprocess.tensorFromImage(allocator, image, input_shape, optionsForStage(options, stage));
     defer input_tensor.deinit();
 
     const external_data_dir = std.fs.path.dirname(model_path) orelse ".";
@@ -210,6 +216,15 @@ fn optionsForStage(options: preprocess.Options, stage: StageKind) preprocess.Opt
     var stage_options = options;
     if (stage == .rec) stage_options.mode = .recognition;
     return stage_options;
+}
+
+fn shapeStage(stage: StageKind) preprocess.ShapeStage {
+    return switch (stage) {
+        .det => .det,
+        .rec => .rec,
+        .cls => .cls,
+        .unknown => .unknown,
+    };
 }
 
 pub fn findFirstOnnxModelFile(allocator: std.mem.Allocator, model_dir: []const u8) !?[]u8 {
@@ -386,6 +401,18 @@ fn scaledCropRect(
         .width = x1 - x0,
         .height = y1 - y0,
     };
+}
+
+fn boxFromCropRect(rect: imaging.CropRect, score: f32) postprocess.db.Box {
+    const box = postprocess.db.Box{
+        .x_min = rect.x,
+        .y_min = rect.y,
+        .x_max = rect.x + rect.width - 1,
+        .y_max = rect.y + rect.height - 1,
+        .area = rect.width * rect.height,
+        .score = score,
+    };
+    return postprocess.db.boxWithPoints(box);
 }
 
 fn findFirstOnnxByStage(allocator: std.mem.Allocator, model_dir: []const u8, stage: []const u8) !?[]u8 {

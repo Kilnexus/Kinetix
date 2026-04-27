@@ -5,6 +5,9 @@ const common = @import("../common.zig");
 const Tensor = common.Tensor;
 
 pub const ElementwiseMode = enum { add, sub, mul, div };
+pub const CompareMode = enum { equal, greater, less };
+pub const LogicalMode = enum { and_op, or_op };
+pub const UnaryFloatMode = enum { floor, ceil_op };
 
 pub fn constant(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
     if (inputs.len != 0) return error.InvalidOperatorArity;
@@ -66,6 +69,150 @@ pub fn whereOp(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Ten
         .shape = try allocator.dupe(usize, x.shape),
         .buffer = .{ .f32 = out },
     };
+}
+
+pub fn compare(allocator: std.mem.Allocator, inputs: []const *const Tensor, mode: CompareMode) !Tensor {
+    if (inputs.len != 2) return error.InvalidOperatorArity;
+    const lhs = inputs[0].*;
+    const rhs = inputs[1].*;
+    if (!lhs.sameShape(rhs)) return error.ShapeMismatch;
+    const out = try allocator.alloc(i64, lhs.elementCount());
+    errdefer allocator.free(out);
+    switch (lhs.buffer) {
+        .f32 => |lhs_values| {
+            if (rhs.buffer != .f32) return error.UnsupportedTensorDType;
+            for (lhs_values, rhs.buffer.f32, out) |a, b, *slot| slot.* = @intFromBool(compareValues(a, b, mode));
+        },
+        .i32 => |lhs_values| {
+            if (rhs.buffer != .i32) return error.UnsupportedTensorDType;
+            for (lhs_values, rhs.buffer.i32, out) |a, b, *slot| slot.* = @intFromBool(compareValues(a, b, mode));
+        },
+        .i64 => |lhs_values| {
+            if (rhs.buffer != .i64) return error.UnsupportedTensorDType;
+            for (lhs_values, rhs.buffer.i64, out) |a, b, *slot| slot.* = @intFromBool(compareValues(a, b, mode));
+        },
+    }
+    return .{
+        .allocator = allocator,
+        .shape = try allocator.dupe(usize, lhs.shape),
+        .buffer = .{ .i64 = out },
+    };
+}
+
+pub fn logical(allocator: std.mem.Allocator, inputs: []const *const Tensor, mode: LogicalMode) !Tensor {
+    if (inputs.len != 2) return error.InvalidOperatorArity;
+    const lhs = inputs[0].*;
+    const rhs = inputs[1].*;
+    if (!lhs.sameShape(rhs) or lhs.buffer != .i64 or rhs.buffer != .i64) return error.UnsupportedTensorDType;
+    const out = try allocator.alloc(i64, lhs.buffer.i64.len);
+    errdefer allocator.free(out);
+    for (lhs.buffer.i64, rhs.buffer.i64, out) |a, b, *slot| {
+        slot.* = switch (mode) {
+            .and_op => @intFromBool(a != 0 and b != 0),
+            .or_op => @intFromBool(a != 0 or b != 0),
+        };
+    }
+    return .{
+        .allocator = allocator,
+        .shape = try allocator.dupe(usize, lhs.shape),
+        .buffer = .{ .i64 = out },
+    };
+}
+
+pub fn notOp(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Tensor {
+    if (inputs.len != 1) return error.InvalidOperatorArity;
+    const input = inputs[0].*;
+    if (input.buffer != .i64) return error.UnsupportedTensorDType;
+    const out = try allocator.alloc(i64, input.buffer.i64.len);
+    errdefer allocator.free(out);
+    for (input.buffer.i64, out) |value, *slot| slot.* = @intFromBool(value == 0);
+    return .{
+        .allocator = allocator,
+        .shape = try allocator.dupe(usize, input.shape),
+        .buffer = .{ .i64 = out },
+    };
+}
+
+pub fn unaryFloat(allocator: std.mem.Allocator, inputs: []const *const Tensor, mode: UnaryFloatMode) !Tensor {
+    if (inputs.len != 1) return error.InvalidOperatorArity;
+    const input = inputs[0].*;
+    if (input.buffer != .f32) return error.UnsupportedTensorDType;
+    const out = try allocator.alloc(f32, input.buffer.f32.len);
+    errdefer allocator.free(out);
+    for (input.buffer.f32, out) |value, *slot| {
+        slot.* = switch (mode) {
+            .floor => @floor(value),
+            .ceil_op => @ceil(value),
+        };
+    }
+    return .{
+        .allocator = allocator,
+        .shape = try allocator.dupe(usize, input.shape),
+        .buffer = .{ .f32 = out },
+    };
+}
+
+pub fn range(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Tensor {
+    if (inputs.len != 3) return error.InvalidOperatorArity;
+    const start = inputs[0].*;
+    const limit = inputs[1].*;
+    const delta = inputs[2].*;
+    if (start.elementCount() != 1 or limit.elementCount() != 1 or delta.elementCount() != 1) return error.ShapeMismatch;
+    return switch (start.buffer) {
+        .i64 => try rangeI64(allocator, start.buffer.i64[0], try scalarI64(limit), try scalarI64(delta)),
+        .i32 => try rangeI64(allocator, start.buffer.i32[0], try scalarI64(limit), try scalarI64(delta)),
+        .f32 => try rangeF32(allocator, start.buffer.f32[0], try scalarF32(limit), try scalarF32(delta)),
+    };
+}
+
+fn compareValues(a: anytype, b: @TypeOf(a), mode: CompareMode) bool {
+    return switch (mode) {
+        .equal => a == b,
+        .greater => a > b,
+        .less => a < b,
+    };
+}
+
+fn scalarI64(tensor: Tensor) !i64 {
+    if (tensor.elementCount() != 1) return error.ShapeMismatch;
+    return switch (tensor.buffer) {
+        .i64 => |values| values[0],
+        .i32 => |values| values[0],
+        .f32 => |values| @intFromFloat(values[0]),
+    };
+}
+
+fn rangeI64(allocator: std.mem.Allocator, start: i64, limit: i64, delta: i64) !Tensor {
+    if (delta == 0) return error.InvalidOperatorAttribute;
+    const len = rangeLength(i64, start, limit, delta);
+    const out = try allocator.alloc(i64, len);
+    errdefer allocator.free(out);
+    var value = start;
+    for (out) |*slot| {
+        slot.* = value;
+        value += delta;
+    }
+    return .{ .allocator = allocator, .shape = try allocator.dupe(usize, &.{len}), .buffer = .{ .i64 = out } };
+}
+
+fn rangeF32(allocator: std.mem.Allocator, start: f32, limit: f32, delta: f32) !Tensor {
+    if (delta == 0) return error.InvalidOperatorAttribute;
+    const len = rangeLength(f32, start, limit, delta);
+    const out = try allocator.alloc(f32, len);
+    errdefer allocator.free(out);
+    var value = start;
+    for (out) |*slot| {
+        slot.* = value;
+        value += delta;
+    }
+    return .{ .allocator = allocator, .shape = try allocator.dupe(usize, &.{len}), .buffer = .{ .f32 = out } };
+}
+
+fn rangeLength(comptime T: type, start: T, limit: T, delta: T) usize {
+    var len: usize = 0;
+    var value = start;
+    while ((delta > 0 and value < limit) or (delta < 0 and value > limit)) : (value += delta) len += 1;
+    return len;
 }
 
 pub fn relu(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Tensor {

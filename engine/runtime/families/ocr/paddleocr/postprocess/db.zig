@@ -5,7 +5,14 @@ pub const Options = struct {
     min_area: usize = 1,
     min_score: f32 = 0.0,
     expand_pixels: usize = 1,
+    unclip_ratio: f32 = 1.5,
+    nms_threshold: f32 = 0.3,
     sort_reading_order: bool = true,
+};
+
+pub const Point = struct {
+    x: f32,
+    y: f32,
 };
 
 pub const Box = struct {
@@ -15,6 +22,7 @@ pub const Box = struct {
     y_max: usize,
     area: usize,
     score: f32,
+    points: [4]Point = undefined,
 };
 
 const Component = struct {
@@ -57,23 +65,41 @@ pub fn boxesFromProbabilityMap(
             .y_max = component.y_max,
             .area = component.area,
             .score = score,
-        }, width, height, options.expand_pixels));
+        }, width, height, options.expand_pixels, options.unclip_ratio));
     }
 
     if (options.sort_reading_order) sortBoxesReadingOrder(boxes.items);
+    if (options.nms_threshold > 0 and boxes.items.len > 1) try applyNms(allocator, &boxes, options.nms_threshold);
     return try boxes.toOwnedSlice(allocator);
 }
 
-fn expandBox(box: Box, width: usize, height: usize, pixels: usize) Box {
-    if (pixels == 0) return box;
-    return .{
-        .x_min = if (box.x_min > pixels) box.x_min - pixels else 0,
-        .y_min = if (box.y_min > pixels) box.y_min - pixels else 0,
-        .x_max = @min(width - 1, box.x_max + pixels),
-        .y_max = @min(height - 1, box.y_max + pixels),
+fn expandBox(box: Box, width: usize, height: usize, pixels: usize, unclip_ratio: f32) Box {
+    const box_w = box.x_max - box.x_min + 1;
+    const box_h = box.y_max - box.y_min + 1;
+    const ratio_pad: usize = if (unclip_ratio <= 1.0)
+        0
+    else
+        @intFromFloat(@ceil(@as(f32, @floatFromInt(@max(box_w, box_h))) * (unclip_ratio - 1.0) * 0.5));
+    const pad = pixels + ratio_pad;
+    return boxWithPoints(.{
+        .x_min = if (box.x_min > pad) box.x_min - pad else 0,
+        .y_min = if (box.y_min > pad) box.y_min - pad else 0,
+        .x_max = @min(width - 1, box.x_max + pad),
+        .y_max = @min(height - 1, box.y_max + pad),
         .area = box.area,
         .score = box.score,
+    });
+}
+
+pub fn boxWithPoints(box: Box) Box {
+    var out = box;
+    out.points = .{
+        .{ .x = @floatFromInt(box.x_min), .y = @floatFromInt(box.y_min) },
+        .{ .x = @floatFromInt(box.x_max), .y = @floatFromInt(box.y_min) },
+        .{ .x = @floatFromInt(box.x_max), .y = @floatFromInt(box.y_max) },
+        .{ .x = @floatFromInt(box.x_min), .y = @floatFromInt(box.y_max) },
     };
+    return out;
 }
 
 fn sortBoxesReadingOrder(boxes: []Box) void {
@@ -85,6 +111,48 @@ fn sortBoxesReadingOrder(boxes: []Box) void {
             return lhs.x_min < rhs.x_min;
         }
     }.lessThan);
+}
+
+fn applyNms(allocator: std.mem.Allocator, boxes: *std.ArrayListUnmanaged(Box), threshold: f32) !void {
+    std.mem.sort(Box, boxes.items, {}, struct {
+        fn lessThan(_: void, lhs: Box, rhs: Box) bool {
+            return lhs.score > rhs.score;
+        }
+    }.lessThan);
+
+    const keep = try allocator.alloc(bool, boxes.items.len);
+    defer allocator.free(keep);
+    @memset(keep, true);
+    for (boxes.items, 0..) |candidate, index| {
+        if (!keep[index]) continue;
+        for (boxes.items[index + 1 ..], index + 1..) |other, other_index| {
+            if (!keep[other_index]) continue;
+            if (boxIou(candidate, other) > threshold) keep[other_index] = false;
+        }
+    }
+
+    var write_index: usize = 0;
+    for (boxes.items, keep) |box, should_keep| {
+        if (!should_keep) continue;
+        boxes.items[write_index] = box;
+        write_index += 1;
+    }
+    boxes.items.len = write_index;
+    if (boxes.items.len > 1) sortBoxesReadingOrder(boxes.items);
+}
+
+fn boxIou(a: Box, b: Box) f32 {
+    const x0 = @max(a.x_min, b.x_min);
+    const y0 = @max(a.y_min, b.y_min);
+    const x1 = @min(a.x_max, b.x_max);
+    const y1 = @min(a.y_max, b.y_max);
+    if (x1 < x0 or y1 < y0) return 0;
+    const intersection = (x1 - x0 + 1) * (y1 - y0 + 1);
+    const a_area = (a.x_max - a.x_min + 1) * (a.y_max - a.y_min + 1);
+    const b_area = (b.x_max - b.x_min + 1) * (b.y_max - b.y_min + 1);
+    const union_area = a_area + b_area - intersection;
+    if (union_area == 0) return 0;
+    return @as(f32, @floatFromInt(intersection)) / @as(f32, @floatFromInt(union_area));
 }
 
 fn floodFill(
@@ -170,7 +238,7 @@ test "paddleocr db postprocess extracts connected box" {
         },
         4,
         3,
-        .{ .threshold = 0.5, .min_area = 2, .expand_pixels = 0 },
+        .{ .threshold = 0.5, .min_area = 2, .expand_pixels = 0, .unclip_ratio = 1.0 },
     );
     defer std.testing.allocator.free(boxes);
 
@@ -194,7 +262,7 @@ test "paddleocr db postprocess filters expands and sorts boxes" {
         },
         4,
         4,
-        .{ .threshold = 0.5, .min_score = 0.75, .expand_pixels = 1 },
+        .{ .threshold = 0.5, .min_score = 0.75, .expand_pixels = 1, .unclip_ratio = 1.0 },
     );
     defer std.testing.allocator.free(boxes);
 
@@ -204,4 +272,23 @@ test "paddleocr db postprocess filters expands and sorts boxes" {
     try std.testing.expectEqual(@as(usize, 2), boxes[0].x_max);
     try std.testing.expectEqual(@as(usize, 2), boxes[0].y_max);
     try std.testing.expectEqual(@as(usize, 2), boxes[1].x_min);
+}
+
+test "paddleocr db postprocess emits quad points and suppresses overlaps" {
+    const boxes = try boxesFromProbabilityMap(
+        std.testing.allocator,
+        &.{
+            0.9, 0.8, 0.0,
+            0.7, 0.6, 0.0,
+            0.0, 0.0, 0.9,
+        },
+        3,
+        3,
+        .{ .threshold = 0.5, .expand_pixels = 0, .unclip_ratio = 1.5, .nms_threshold = 0.1 },
+    );
+    defer std.testing.allocator.free(boxes);
+
+    try std.testing.expect(boxes.len >= 1);
+    try std.testing.expectEqual(@as(f32, 0), boxes[0].points[0].x);
+    try std.testing.expectEqual(@as(f32, 0), boxes[0].points[0].y);
 }

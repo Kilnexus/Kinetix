@@ -25,7 +25,9 @@ pub const Input = struct {
 };
 
 pub fn runtimeResult(allocator: std.mem.Allocator, input: Input) !types.RuntimeResult {
-    const receipt = receiptFromInput(input);
+    const lines = try ocrLinesFromPipeline(allocator, input.pipeline_result);
+    defer allocator.free(lines);
+    const receipt = receiptFromInput(input, lines);
 
     var out: std.Io.Writer.Allocating = .init(allocator);
     defer out.deinit();
@@ -38,13 +40,14 @@ pub fn runtimeResult(allocator: std.mem.Allocator, input: Input) !types.RuntimeR
     };
 }
 
-fn receiptFromInput(input: Input) Receipt {
+fn receiptFromInput(input: Input, lines: []const OcrLine) Receipt {
     const image_result = input.image_graph_result;
     const pipeline = input.pipeline_result;
     const recognized = input.recognized_text;
+    const ocr_text = if (pipeline) |result| result.text else "";
 
     return .{
-        .status = "paddleocr_runtime_ready",
+        .status = if (ocr_text.len != 0) "ocr_infer_completed" else "paddleocr_runtime_ready",
         .provider_key = input.provider_key,
         .model_family = input.model_family,
         .model_id = input.model_id,
@@ -103,9 +106,74 @@ fn receiptFromInput(input: Input) Receipt {
         .pipeline_rec_decoded_count = if (pipeline) |result| result.rec_decoded_count else 0,
         .pipeline_text = if (pipeline) |result| if (result.text.len != 0) result.text else null else null,
         .pipeline_error = if (pipeline) |result| result.error_message orelse input.pipeline_error else input.pipeline_error,
-        .message = "PaddleOCR is routed through the unified runtime. Native zero-dependency PP-OCR graph execution loads ONNX initializers and runs staged det/cls/rec image graphs; production quality still depends on remaining operator coverage and dynamic-shape handling.",
+        .ocr_result = .{
+            .schema_version = "kinetix.ocr.v1",
+            .text = ocr_text,
+            .line_count = lines.len,
+            .lines = lines,
+        },
+        .message = "PaddleOCR is routed through the unified runtime. Native zero-dependency PP-OCR graph execution loads ONNX initializers and runs staged det/cls/rec image graphs.",
     };
 }
+
+fn ocrLinesFromPipeline(allocator: std.mem.Allocator, pipeline: ?*const inference.runtime.PipelineResult) ![]OcrLine {
+    const result = pipeline orelse return try allocator.alloc(OcrLine, 0);
+    const lines = try allocator.alloc(OcrLine, result.lines.len);
+    errdefer allocator.free(lines);
+    for (result.lines, lines, 0..) |line, *slot, index| {
+        slot.* = .{
+            .index = index,
+            .text = line.text,
+            .token_count = line.token_count,
+            .box = if (line.box) |box| ocrBox(box) else null,
+        };
+    }
+    return lines;
+}
+
+fn ocrBox(box: postprocess.db.Box) OcrBox {
+    return .{
+        .x_min = box.x_min,
+        .y_min = box.y_min,
+        .x_max = box.x_max,
+        .y_max = box.y_max,
+        .score = box.score,
+        .points = .{
+            .{ .x = box.points[0].x, .y = box.points[0].y },
+            .{ .x = box.points[1].x, .y = box.points[1].y },
+            .{ .x = box.points[2].x, .y = box.points[2].y },
+            .{ .x = box.points[3].x, .y = box.points[3].y },
+        },
+    };
+}
+
+const OcrOutput = struct {
+    schema_version: []const u8,
+    text: []const u8,
+    line_count: usize,
+    lines: []const OcrLine,
+};
+
+const OcrLine = struct {
+    index: usize,
+    text: []const u8,
+    token_count: usize,
+    box: ?OcrBox,
+};
+
+const OcrBox = struct {
+    x_min: usize,
+    y_min: usize,
+    x_max: usize,
+    y_max: usize,
+    score: f32,
+    points: [4]OcrPoint,
+};
+
+const OcrPoint = struct {
+    x: f32,
+    y: f32,
+};
 
 const Receipt = struct {
     status: []const u8,
@@ -167,5 +235,6 @@ const Receipt = struct {
     pipeline_rec_decoded_count: usize,
     pipeline_text: ?[]const u8,
     pipeline_error: ?[]const u8,
+    ocr_result: OcrOutput,
     message: []const u8,
 };

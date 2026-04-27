@@ -76,6 +76,15 @@ fn executeSingle(
     if (std.mem.eql(u8, name, "Div")) return try core.elementwise(allocator, inputs, .div);
     if (std.mem.eql(u8, name, "Relu")) return try core.relu(allocator, inputs);
     if (std.mem.eql(u8, name, "Clip")) return try core.clip(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "Equal")) return try core.compare(allocator, inputs, .equal);
+    if (std.mem.eql(u8, name, "Greater")) return try core.compare(allocator, inputs, .greater);
+    if (std.mem.eql(u8, name, "Less")) return try core.compare(allocator, inputs, .less);
+    if (std.mem.eql(u8, name, "And")) return try core.logical(allocator, inputs, .and_op);
+    if (std.mem.eql(u8, name, "Or")) return try core.logical(allocator, inputs, .or_op);
+    if (std.mem.eql(u8, name, "Not")) return try core.notOp(allocator, inputs);
+    if (std.mem.eql(u8, name, "Floor")) return try core.unaryFloat(allocator, inputs, .floor);
+    if (std.mem.eql(u8, name, "Ceil")) return try core.unaryFloat(allocator, inputs, .ceil_op);
+    if (std.mem.eql(u8, name, "Range")) return try core.range(allocator, inputs);
     if (std.mem.eql(u8, name, "Sigmoid")) return try activation.sigmoid(allocator, inputs);
     if (std.mem.eql(u8, name, "Tanh")) return try activation.tanh(allocator, inputs);
     if (std.mem.eql(u8, name, "HardSwish")) return try activation.hardSwish(allocator, inputs);
@@ -92,6 +101,7 @@ fn executeSingle(
     if (std.mem.eql(u8, name, "Resize")) return try shape.resize(allocator, node, inputs);
     if (std.mem.eql(u8, name, "Pad")) return try shape.pad(allocator, node, inputs);
     if (std.mem.eql(u8, name, "Expand")) return try shape.expand(allocator, inputs);
+    if (std.mem.eql(u8, name, "Tile")) return try shape.tile(allocator, inputs);
     if (std.mem.eql(u8, name, "Split")) return try shape.split(allocator, node, inputs);
     if (std.mem.eql(u8, name, "Unsqueeze")) return try shape.unsqueeze(allocator, node, inputs);
     if (std.mem.eql(u8, name, "Squeeze")) return try shape.squeeze(allocator, node, inputs);
@@ -99,6 +109,7 @@ fn executeSingle(
     if (std.mem.eql(u8, name, "Transpose")) return try shape.transpose(allocator, node, inputs);
     if (std.mem.eql(u8, name, "Gather")) return try indexing.gather(allocator, node, inputs);
     if (std.mem.eql(u8, name, "ArgMax")) return try indexing.argMax(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "NonZero")) return try indexing.nonZero(allocator, inputs);
     if (std.mem.eql(u8, name, "Slice")) return try indexing.slice(allocator, node, inputs);
     if (std.mem.eql(u8, name, "Softmax")) return try normalization.softmax(allocator, node, inputs);
     if (std.mem.eql(u8, name, "ReduceMean")) return try normalization.reduceMean(allocator, node, inputs);
@@ -235,6 +246,48 @@ test "graph dispatcher executes where op" {
     var output = try execute(std.testing.allocator, testNode("Where"), &inputs);
     defer output.deinit();
     try std.testing.expectEqualSlices(f32, &.{ 3, 7 }, output.buffer.f32);
+}
+
+test "graph dispatcher executes control and dynamic shape helpers" {
+    var lhs = try Tensor.fromF32(std.testing.allocator, &.{ 2 }, &.{ 1.2, 3.8 });
+    defer lhs.deinit();
+    var rhs = try Tensor.fromF32(std.testing.allocator, &.{ 2 }, &.{ 1.2, 4.0 });
+    defer rhs.deinit();
+    const compare_inputs = [_]*const Tensor{ &lhs, &rhs };
+
+    var eq = try execute(std.testing.allocator, testNode("Equal"), &compare_inputs);
+    defer eq.deinit();
+    try std.testing.expectEqualSlices(i64, &.{ 1, 0 }, eq.buffer.i64);
+
+    var floor = try execute(std.testing.allocator, testNode("Floor"), &.{&lhs});
+    defer floor.deinit();
+    try std.testing.expectEqualSlices(f32, &.{ 1, 3 }, floor.buffer.f32);
+
+    var start = try Tensor.fromI64(std.testing.allocator, &.{1}, &.{0});
+    defer start.deinit();
+    var limit = try Tensor.fromI64(std.testing.allocator, &.{1}, &.{5});
+    defer limit.deinit();
+    var delta = try Tensor.fromI64(std.testing.allocator, &.{1}, &.{2});
+    defer delta.deinit();
+    var range = try execute(std.testing.allocator, testNode("Range"), &.{ &start, &limit, &delta });
+    defer range.deinit();
+    try std.testing.expectEqualSlices(i64, &.{ 0, 2, 4 }, range.buffer.i64);
+}
+
+test "graph dispatcher executes tile and nonzero" {
+    var input = try Tensor.fromI64(std.testing.allocator, &.{ 2 }, &.{ 1, 0 });
+    defer input.deinit();
+    var repeats = try Tensor.fromI64(std.testing.allocator, &.{1}, &.{2});
+    defer repeats.deinit();
+
+    var tiled = try execute(std.testing.allocator, testNode("Tile"), &.{ &input, &repeats });
+    defer tiled.deinit();
+    try std.testing.expectEqualSlices(i64, &.{ 1, 0, 1, 0 }, tiled.buffer.i64);
+
+    var nz = try execute(std.testing.allocator, testNode("NonZero"), &.{&tiled});
+    defer nz.deinit();
+    try std.testing.expectEqualSlices(usize, &.{ 1, 2 }, nz.shape);
+    try std.testing.expectEqualSlices(i64, &.{ 0, 2 }, nz.buffer.i64);
 }
 
 test "graph dispatcher executes conservative nearest resize" {

@@ -111,6 +111,47 @@ pub fn argMax(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs
     };
 }
 
+pub fn nonZero(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Tensor {
+    if (inputs.len != 1) return error.InvalidOperatorArity;
+    const input = inputs[0].*;
+    const rank = input.shape.len;
+    const count = countNonZero(input);
+    const out = try allocator.alloc(i64, rank * count);
+    errdefer allocator.free(out);
+    const strides = try common.stridesOwned(allocator, input.shape);
+    defer allocator.free(strides);
+    const coords = try allocator.alloc(usize, rank);
+    defer allocator.free(coords);
+    var write_col: usize = 0;
+    for (0..input.elementCount()) |linear| {
+        if (!isNonZero(input, linear)) continue;
+        common.linearToCoords(linear, input.shape, strides, coords);
+        for (coords, 0..) |coord, axis| out[axis * count + write_col] = @intCast(coord);
+        write_col += 1;
+    }
+    return .{
+        .allocator = allocator,
+        .shape = try allocator.dupe(usize, &.{ rank, count }),
+        .buffer = .{ .i64 = out },
+    };
+}
+
+fn countNonZero(input: Tensor) usize {
+    var count: usize = 0;
+    for (0..input.elementCount()) |index| {
+        if (isNonZero(input, index)) count += 1;
+    }
+    return count;
+}
+
+fn isNonZero(input: Tensor, index: usize) bool {
+    return switch (input.buffer) {
+        .f32 => |values| values[index] != 0,
+        .i32 => |values| values[index] != 0,
+        .i64 => |values| values[index] != 0,
+    };
+}
+
 fn gatherValues(
     comptime T: type,
     allocator: std.mem.Allocator,

@@ -49,6 +49,15 @@ pub const entries = [_]Entry{
     .{ .name = "Div", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
     .{ .name = "Relu", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
     .{ .name = "Clip", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
+    .{ .name = "Equal", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
+    .{ .name = "Greater", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
+    .{ .name = "Less", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
+    .{ .name = "And", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
+    .{ .name = "Or", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
+    .{ .name = "Not", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
+    .{ .name = "Floor", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
+    .{ .name = "Ceil", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
+    .{ .name = "Range", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
     .{ .name = "Sigmoid", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/activation/index.zig" },
     .{ .name = "Tanh", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/activation/index.zig" },
     .{ .name = "HardSwish", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/activation/index.zig" },
@@ -65,6 +74,7 @@ pub const entries = [_]Entry{
     .{ .name = "Resize", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/shape/index.zig" },
     .{ .name = "Pad", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/shape/index.zig" },
     .{ .name = "Expand", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/shape/index.zig" },
+    .{ .name = "Tile", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/shape/index.zig" },
     .{ .name = "Split", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/shape/index.zig" },
     .{ .name = "Unsqueeze", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/shape/index.zig" },
     .{ .name = "Squeeze", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/shape/index.zig" },
@@ -72,6 +82,7 @@ pub const entries = [_]Entry{
     .{ .name = "Transpose", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/shape/index.zig" },
     .{ .name = "Gather", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/indexing/index.zig" },
     .{ .name = "ArgMax", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/indexing/index.zig" },
+    .{ .name = "NonZero", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/indexing/index.zig" },
     .{ .name = "Slice", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/indexing/index.zig" },
     .{ .name = "Softmax", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/normalization/index.zig" },
     .{ .name = "ReduceMean", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/normalization/index.zig" },
@@ -276,6 +287,10 @@ test "unified ops registry includes graph executable and native kernels" {
     try std.testing.expect(isGraphExecutableOnnx("AveragePool"));
     try std.testing.expect(isGraphExecutableOnnx("GlobalAveragePool"));
     try std.testing.expect(isGraphExecutableOnnx("Clip"));
+    try std.testing.expect(isGraphExecutableOnnx("Equal"));
+    try std.testing.expect(isGraphExecutableOnnx("Range"));
+    try std.testing.expect(isGraphExecutableOnnx("Tile"));
+    try std.testing.expect(isGraphExecutableOnnx("NonZero"));
     try std.testing.expect(isGraphExecutableOnnx("SwiGLU"));
     try std.testing.expect(has("Conv2d", .vision_nn));
     try std.testing.expect(has("RmsNorm", .text_core));
