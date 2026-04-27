@@ -40,6 +40,7 @@ pub fn build(b: *std.Build) void {
 }
 
 const RuntimeImports = struct {
+    runtime_abi: *std.Build.Module,
     engine_root: *std.Build.Module,
     shared_graph: *std.Build.Module,
     shared_ops: *std.Build.Module,
@@ -81,11 +82,17 @@ fn addRuntimeImports(
     optimize: std.builtin.OptimizeMode,
     local_pixio: bool,
 ) RuntimeImports {
+    const runtime_abi = b.createModule(.{
+        .root_source_file = b.path("engine/runtime/abi/index.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     const engine_root = b.createModule(.{
         .root_source_file = b.path("engine/kinetix.zig"),
         .target = target,
         .optimize = optimize,
     });
+    engine_root.addImport("runtime_abi", runtime_abi);
     const shared_graph = b.createModule(.{
         .root_source_file = b.path("engine/runtime/shared/graph/index.zig"),
         .target = target,
@@ -96,6 +103,7 @@ fn addRuntimeImports(
         .target = target,
         .optimize = optimize,
     });
+    shared_ops.addImport("runtime_abi", runtime_abi);
     shared_graph.addImport("shared_ops", shared_ops);
     shared_ops.addImport("shared_graph", shared_graph);
     const sdk_execution = b.createModule(.{
@@ -104,6 +112,7 @@ fn addRuntimeImports(
         .optimize = optimize,
     });
     sdk_execution.addImport("engine_root", engine_root);
+    sdk_execution.addImport("runtime_abi", runtime_abi);
     const kinetix_sdk = b.createModule(.{
         .root_source_file = b.path("sdk/kinetix.zig"),
         .target = target,
@@ -111,6 +120,7 @@ fn addRuntimeImports(
     });
     kinetix_sdk.addImport("engine_root", engine_root);
     kinetix_sdk.addImport("sdk_execution", sdk_execution);
+    kinetix_sdk.addImport("runtime_abi", runtime_abi);
 
     const pixio = resolvePixioModule(b, target, optimize, local_pixio);
     engine_root.addImport("Pixio", pixio);
@@ -145,6 +155,7 @@ fn addRuntimeImports(
         .optimize = optimize,
     });
     ops.addImport("shared_ops", shared_ops);
+    ops.addImport("runtime_abi", runtime_abi);
     ops.addImport("tensor", tensor);
     engine_vision_base.addImport("ops", ops);
 
@@ -210,6 +221,7 @@ fn addRuntimeImports(
     engine_root.addImport("vision", vision_preprocess);
 
     return .{
+        .runtime_abi = runtime_abi,
         .engine_root = engine_root,
         .shared_graph = shared_graph,
         .shared_ops = shared_ops,
@@ -252,6 +264,7 @@ fn resolvePixioModule(
 }
 
 fn addImportsToRoot(root: *std.Build.Module, imports: RuntimeImports) void {
+    root.addImport("runtime_abi", imports.runtime_abi);
     root.addImport("engine_root", imports.engine_root);
     root.addImport("shared_graph", imports.shared_graph);
     root.addImport("shared_ops", imports.shared_ops);

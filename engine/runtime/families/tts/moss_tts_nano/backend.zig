@@ -299,7 +299,7 @@ fn execute(
     try std.json.Stringify.value(receipt, .{}, &out.writer);
 
     return .{
-        .origin = .shared_adapter,
+        .origin = .runtime_backend,
         .note = .tts_model_ready,
         .output = .{ .json = try allocator.dupe(u8, out.written()) },
     };

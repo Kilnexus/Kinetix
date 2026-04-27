@@ -75,7 +75,7 @@ fn execute(
     else
         try swiftocr_native.execute(allocator, context);
     return .{
-        .origin = .shared_adapter,
+        .origin = .runtime_backend,
         .note = .ocr_swiftocr_native,
         .output = .{ .json = output },
     };

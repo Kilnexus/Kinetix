@@ -71,7 +71,46 @@ pub const RuntimeCapabilitySet = struct {
     supports_batch: bool = false,
     supports_native_exec: bool = false,
     supported_operations: []const []const u8 = &.{},
+    supported_operation_ids: []const types.RuntimeOperation = &.{},
     accepted_inputs: []const types.InputKind = &.{},
+
+    pub fn supportsOperation(self: RuntimeCapabilitySet, operation: []const u8, operation_id: types.RuntimeOperation) bool {
+        if (self.supported_operation_ids.len != 0) {
+            for (self.supported_operation_ids) |supported| {
+                if (supported == operation_id) return true;
+            }
+            return false;
+        }
+
+        if (self.supported_operations.len == 0) return true;
+        for (self.supported_operations) |supported| {
+            if (std.mem.eql(u8, supported, operation)) return true;
+        }
+        return false;
+    }
+
+    pub fn acceptsInput(self: RuntimeCapabilitySet, kind: types.InputKind) bool {
+        if (kind == .none) return true;
+        if (self.accepted_inputs.len == 0) return true;
+        for (self.accepted_inputs) |accepted| {
+            if (accepted == kind) return true;
+        }
+        return false;
+    }
+
+    pub fn abiCapabilities(self: RuntimeCapabilitySet) types.RuntimeAbi.CapabilitySet {
+        return .{
+            .flags = .{
+                .sync = self.supports_sync,
+                .async_exec = self.supports_async,
+                .stream = self.supports_stream,
+                .batch = self.supports_batch,
+                .native_exec = self.supports_native_exec,
+            },
+            .operations = self.supported_operation_ids,
+            .accepted_inputs = self.accepted_inputs,
+        };
+    }
 };
 
 pub const NormalizedModel = struct {

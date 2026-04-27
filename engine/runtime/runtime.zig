@@ -1,4 +1,5 @@
 pub const load_plan = @import("load_plan.zig");
+pub const abi = @import("runtime_abi");
 pub const ocr_pipeline = @import("ocr_pipeline.zig");
 pub const text = @import("text/text.zig");
 pub const types = @import("types.zig");

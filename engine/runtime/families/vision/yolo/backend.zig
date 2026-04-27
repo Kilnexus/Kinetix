@@ -130,7 +130,7 @@ fn execute(
         .class_count = summary.class_count,
     }, detection_output);
     return .{
-        .origin = .shared_adapter,
+        .origin = .runtime_backend,
         .note = if (detection_output != null) .vision_shared_detect else .vision_graph_ready,
         .output = .{ .json = output },
     };

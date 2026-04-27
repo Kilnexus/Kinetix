@@ -1,7 +1,11 @@
 const std = @import("std");
 const backend = @import("../artifacts/backend/backend.zig");
+const abi = @import("runtime_abi");
 const task = @import("../core/task.zig");
 
+pub const RuntimeAbi = abi;
+pub const RuntimeAbiVersion = abi.Version;
+pub const RuntimeOperation = abi.Operation;
 pub const Modality = task.Modality;
 pub const ExecutionMode = task.ExecutionMode;
 pub const InputPayload = task.InputPayload;
@@ -16,8 +20,26 @@ pub const Descriptor = struct {
     supports_batching: bool = false,
     supports_streaming: bool = false,
     supported_operations: []const []const u8 = &.{},
+    supported_operation_ids: []const RuntimeOperation = &.{},
 
     pub fn supportsOperation(self: Descriptor, operation: []const u8) bool {
+        if (self.supported_operations.len == 0 and self.supported_operation_ids.len == 0) return true;
+        for (self.supported_operations) |supported| {
+            if (std.mem.eql(u8, supported, operation)) return true;
+        }
+        if (RuntimeOperation.parse(operation)) |operation_id| return self.supportsRuntimeOperation(operation_id);
+        return false;
+    }
+
+    pub fn supportsRuntimeOperation(self: Descriptor, operation: RuntimeOperation) bool {
+        if (self.supported_operation_ids.len == 0) return self.supportsOperationNameFallback(operation.name());
+        for (self.supported_operation_ids) |supported| {
+            if (supported == operation) return true;
+        }
+        return false;
+    }
+
+    fn supportsOperationNameFallback(self: Descriptor, operation: []const u8) bool {
         if (self.supported_operations.len == 0) return true;
         for (self.supported_operations) |supported| {
             if (std.mem.eql(u8, supported, operation)) return true;
@@ -49,11 +71,7 @@ pub const OutputPayload = union(enum) {
     }
 };
 
-pub const ExecutionOrigin = enum {
-    shared_adapter,
-    native_single,
-    native_batch,
-};
+pub const ExecutionOrigin = abi.ExecutionOrigin;
 
 pub const ExecutionNote = enum {
     none,
@@ -71,7 +89,7 @@ pub const ExecutionNote = enum {
 
 pub const ExecutionResult = struct {
     submission: Submission,
-    origin: ExecutionOrigin = .shared_adapter,
+    origin: ExecutionOrigin = .runtime_backend,
     note: ExecutionNote = .none,
     output: OutputPayload = .none,
 
@@ -81,19 +99,9 @@ pub const ExecutionResult = struct {
     }
 };
 
-pub const BatchExecutionPath = enum {
-    adapter_batch,
-    per_request_fallback,
-};
+pub const BatchExecutionPath = abi.BatchExecutionPath;
 
-pub const InputKind = enum {
-    none,
-    text,
-    image_path,
-    document_path,
-    audio_path,
-    video_path,
-};
+pub const InputKind = abi.InputKind;
 
 pub const ProviderKey = enum {
     qwen3_text,
@@ -160,6 +168,7 @@ pub const Diagnostic = struct {
 
 pub const RuntimeRequest = struct {
     operation: []const u8,
+    operation_id: RuntimeOperation = .infer,
     input: InputPayload = .none,
     execution: ExecutionMode = .sync,
     generation: GenerationOptions = .{},
@@ -174,6 +183,7 @@ pub const PlanBatch = struct {
     allocator: std.mem.Allocator,
     request_indices: []usize,
     operation: []const u8,
+    operation_id: RuntimeOperation = .infer,
     execution: ExecutionMode,
     allows_batching: bool,
 
@@ -183,12 +193,7 @@ pub const PlanBatch = struct {
     }
 };
 
-pub const ExecutionPath = enum {
-    runtime_backend,
-    stream,
-    native_accelerated,
-    fallback,
-};
+pub const ExecutionPath = abi.ExecutionPath;
 
 pub const ExecutionPlan = struct {
     allocator: std.mem.Allocator,
@@ -208,7 +213,7 @@ pub const ExecutionPlan = struct {
 };
 
 pub const RuntimeResult = struct {
-    origin: ExecutionOrigin = .shared_adapter,
+    origin: ExecutionOrigin = .runtime_backend,
     note: ExecutionNote = .none,
     output: OutputPayload = .none,
     diagnostics: []const Diagnostic = &.{},

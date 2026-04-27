@@ -999,7 +999,7 @@ test "client detect smoke test runs official yolo26n on bundled bus image" {
 
     try std.testing.expectEqualStrings("detect_completed", result.status);
     try std.testing.expectEqualStrings("yolo", result.model_family);
-    try std.testing.expectEqual(runtime_types.ExecutionOrigin.shared_adapter, result.origin);
+    try std.testing.expectEqual(runtime_types.ExecutionOrigin.runtime_backend, result.origin);
     try std.testing.expectEqual(runtime_types.ExecutionNote.vision_shared_detect, result.note);
     try std.testing.expect(result.candidate_count != null);
     try std.testing.expect(result.candidate_count.? >= result.detections.len);

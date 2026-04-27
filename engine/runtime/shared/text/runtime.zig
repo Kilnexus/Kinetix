@@ -68,7 +68,7 @@ pub fn buildSubmission(adapter_id: []const u8, execution: task.ExecutionMode) ty
 pub fn buildReadyResult(submission: types.Submission) types.ExecutionResult {
     return .{
         .submission = submission,
-        .origin = .shared_adapter,
+        .origin = .runtime_backend,
         .note = .text_request_ready,
     };
 }

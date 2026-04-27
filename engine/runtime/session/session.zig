@@ -204,7 +204,7 @@ test "runtime session can execute yolo vision requests through the unified execu
     var result = try session.execute(&handle, &plan);
     defer result.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(types.ExecutionOrigin.shared_adapter, result.origin);
+    try std.testing.expectEqual(types.ExecutionOrigin.runtime_backend, result.origin);
     try std.testing.expectEqualStrings("vision_shared_detect", result.note);
 }
 
@@ -290,7 +290,7 @@ test "runtime session can execute swiftocr requests through the unified executor
     var result = try session.execute(&handle, &plan);
     defer result.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(types.ExecutionOrigin.shared_adapter, result.origin);
+    try std.testing.expectEqual(types.ExecutionOrigin.runtime_backend, result.origin);
     try std.testing.expectEqualStrings("ocr_shared_infer", result.note);
 }
 
@@ -547,7 +547,7 @@ test "runtime session routes moss tts nano bundles through the unified backend r
     var result = try session.execute(&handle, &plan);
     defer result.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(types.ExecutionOrigin.shared_adapter, result.origin);
+    try std.testing.expectEqual(types.ExecutionOrigin.runtime_backend, result.origin);
     try std.testing.expectEqual(types.ExecutionNote.tts_model_ready, result.note);
 
     const payload = switch (result.output) {

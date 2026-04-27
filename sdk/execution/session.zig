@@ -343,6 +343,7 @@ fn buildRuntimeRequest(descriptor: runtime_types.Descriptor, request: ContextReq
     const resolved = resolveContextRequest(descriptor, request);
     return .{
         .operation = resolved.operation,
+        .operation_id = runtime_types.RuntimeOperation.parse(resolved.operation) orelse .infer,
         .input = resolved.input,
         .execution = resolved.execution,
         .generation = resolved.generation,
@@ -362,6 +363,7 @@ fn buildRuntimeBatchRequest(
         const resolved = resolveContextBatchItem(descriptor, item);
         slot.* = .{
             .operation = resolved.operation,
+            .operation_id = runtime_types.RuntimeOperation.parse(resolved.operation) orelse .infer,
             .input = resolved.input,
             .execution = resolved.execution,
             .generation = resolved.generation,
@@ -486,7 +488,7 @@ fn executeBatchWithUnifiedRuntime(
             .execution = plan_batch.execution,
             .supports_batching = plan_batch.allows_batching,
             .execute_path = if (plan_batch.allows_batching and plan_batch.request_indices.len > 1)
-                .adapter_batch
+                .backend_batch
             else
                 .per_request_fallback,
             .request_results = request_results,

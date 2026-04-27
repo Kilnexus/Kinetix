@@ -26,6 +26,7 @@ pub const Planner = struct {
             .allocator = self.allocator,
             .request_indices = indices,
             .operation = request.operation,
+            .operation_id = request.operation_id,
             .execution = request.execution,
             .allows_batching = handle.normalized.capabilities.supports_batch and request.allows_batching,
         };
@@ -70,8 +71,8 @@ pub const Planner = struct {
 };
 
 fn validateRequest(handle: *const handle_mod.ModelHandle, request: types.RuntimeRequest) !void {
-    if (!supportsOperation(handle, request.operation)) return error.OperationNotSupported;
-    if (!acceptsInput(handle, types.inputKind(request.input))) return error.InvalidInputPayload;
+    if (!handle.normalized.capabilities.supportsOperation(request.operation, request.operation_id)) return error.OperationNotSupported;
+    if (!handle.normalized.capabilities.acceptsInput(types.inputKind(request.input))) return error.InvalidInputPayload;
     if (request.execution == .stream and !handle.normalized.capabilities.supports_stream) return error.StreamingNotSupported;
 }
 
@@ -81,20 +82,6 @@ fn choosePath(handle: *const handle_mod.ModelHandle, request: types.RuntimeReque
     return .runtime_backend;
 }
 
-fn supportsOperation(handle: *const handle_mod.ModelHandle, operation: []const u8) bool {
-    for (handle.normalized.capabilities.supported_operations) |supported| {
-        if (std.mem.eql(u8, supported, operation)) return true;
-    }
-    return false;
-}
-
-fn acceptsInput(handle: *const handle_mod.ModelHandle, kind: types.InputKind) bool {
-    for (handle.normalized.capabilities.accepted_inputs) |accepted| {
-        if (accepted == kind) return true;
-    }
-    return kind == .none;
-}
-
 fn buildBatches(
     allocator: std.mem.Allocator,
     handle: *const handle_mod.ModelHandle,
@@ -102,6 +89,7 @@ fn buildBatches(
 ) ![]types.PlanBatch {
     const Builder = struct {
         operation: []const u8,
+        operation_id: types.RuntimeOperation,
         execution: types.ExecutionMode,
         input_tag: std.meta.Tag(types.InputPayload),
         generation_max_tokens: ?usize,
@@ -132,11 +120,13 @@ fn buildBatches(
                 if (builder.generation_max_tokens != item.generation.max_tokens) continue;
                 if (builder.native_execution != item.generation.native_execution) continue;
                 if (!std.mem.eql(u8, builder.operation, item.operation)) continue;
+                if (builder.operation_id != item.operation_id) continue;
                 try builder.indices.append(allocator, index);
                 break;
             } else {
                 var builder = Builder{
                     .operation = item.operation,
+                    .operation_id = item.operation_id,
                     .execution = item.execution,
                     .input_tag = payload_tag,
                     .generation_max_tokens = item.generation.max_tokens,
@@ -151,6 +141,7 @@ fn buildBatches(
 
         var builder = Builder{
             .operation = item.operation,
+            .operation_id = item.operation_id,
             .execution = item.execution,
             .input_tag = payload_tag,
             .generation_max_tokens = item.generation.max_tokens,
@@ -174,6 +165,7 @@ fn buildBatches(
             .allocator = allocator,
             .request_indices = try builder.indices.toOwnedSlice(allocator),
             .operation = builder.operation,
+            .operation_id = builder.operation_id,
             .execution = builder.execution,
             .allows_batching = builder.allows_batching,
         };
