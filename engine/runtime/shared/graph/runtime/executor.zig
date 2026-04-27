@@ -76,9 +76,22 @@ pub fn execute(
             slot.* = table.get(name) orelse return error.TensorNotFound;
         }
 
-        var output = try graph_ops.execute(allocator, node, input_ptrs);
-        errdefer output.deinit();
-        try table.putOwned(node.outputs[0], output);
+        var outputs = try graph_ops.executeAll(allocator, node, input_ptrs);
+        if (outputs.tensors.len != node.outputs.len) {
+            outputs.deinit();
+            return error.OperatorOutputCountMismatch;
+        }
+        var stored: usize = 0;
+        errdefer {
+            for (outputs.tensors[stored..]) |*tensor| tensor.deinit();
+            allocator.free(outputs.tensors);
+        }
+        for (node.outputs, outputs.tensors) |name, tensor| {
+            if (name.len == 0) return error.TensorNotFound;
+            try table.putOwned(name, tensor);
+            stored += 1;
+        }
+        allocator.free(outputs.tensors);
     }
 
     const outputs = try allocator.alloc(NamedTensor, graph.outputs.len);
@@ -138,6 +151,23 @@ test "runtime executor runs constant reshape graph" {
     try std.testing.expectEqualSlices(f32, &.{ 1, 2, 3, 4 }, result.outputs[0].tensor.buffer.f32);
 }
 
+test "runtime executor stores multi-output split graph" {
+    var graph = try onnx_metadata.parseModel(std.testing.allocator, try splitModelBytes(std.testing.allocator));
+    defer graph.deinit();
+
+    var input = try Tensor.fromF32(std.testing.allocator, &.{ 1, 2 }, &.{ 5, 6 });
+    defer input.deinit();
+
+    var result = try execute(std.testing.allocator, graph.graph, &.{
+        .{ .name = "x", .tensor = input },
+    });
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), result.outputs.len);
+    try std.testing.expectEqualSlices(f32, &.{5}, result.outputs[0].tensor.buffer.f32);
+    try std.testing.expectEqualSlices(f32, &.{6}, result.outputs[1].tensor.buffer.f32);
+}
+
 fn simpleModelBytes(allocator: std.mem.Allocator) ![]u8 {
     var graph = std.ArrayList(u8).init(allocator);
     defer graph.deinit();
@@ -162,6 +192,23 @@ fn reshapeModelBytes(allocator: std.mem.Allocator) ![]u8 {
     try appendOwnedMessageField(&graph, 12, try valueInfoMessage(allocator, "y", 1, &.{ 1, 4 }));
     try appendOwnedMessageField(&graph, 1, try constantNodeMessage(allocator, "shape_const", "shape", &.{ 1, 4 }));
     try appendOwnedMessageField(&graph, 1, try nodeMessage(allocator, "reshape", "Reshape", &.{ "x", "shape" }, &.{"y"}));
+
+    var model = std.ArrayList(u8).init(allocator);
+    errdefer model.deinit();
+    try appendVarintField(&model, 1, 8);
+    try appendMessageField(&model, 7, graph.items);
+    return try model.toOwnedSlice();
+}
+
+fn splitModelBytes(allocator: std.mem.Allocator) ![]u8 {
+    var graph = std.ArrayList(u8).init(allocator);
+    defer graph.deinit();
+    try appendStringField(&graph, 2, "split");
+    try appendOwnedMessageField(&graph, 11, try valueInfoMessage(allocator, "x", 1, &.{ 1, 2 }));
+    try appendOwnedMessageField(&graph, 12, try valueInfoMessage(allocator, "left", 1, &.{ 1, 1 }));
+    try appendOwnedMessageField(&graph, 12, try valueInfoMessage(allocator, "right", 1, &.{ 1, 1 }));
+    try appendOwnedMessageField(&graph, 1, try constantNodeMessage(allocator, "split_sizes_const", "split_sizes", &.{ 1, 1 }));
+    try appendOwnedMessageField(&graph, 1, try nodeMessage(allocator, "split", "Split", &.{ "x", "split_sizes" }, &.{ "left", "right" }));
 
     var model = std.ArrayList(u8).init(allocator);
     errdefer model.deinit();

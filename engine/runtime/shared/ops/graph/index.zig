@@ -13,8 +13,37 @@ pub const spatial = @import("spatial/index.zig");
 
 pub const Tensor = shared_graph.runtime.tensor.Tensor;
 
+pub const ExecutionOutputs = struct {
+    allocator: std.mem.Allocator,
+    tensors: []Tensor,
+
+    pub fn deinit(self: *ExecutionOutputs) void {
+        for (self.tensors) |*tensor| tensor.deinit();
+        self.allocator.free(self.tensors);
+        self.* = undefined;
+    }
+};
+
 pub fn isSupported(op_type: []const u8) bool {
     return op_registry.isGraphExecutableOnnx(op_type);
+}
+
+pub fn executeAll(
+    allocator: std.mem.Allocator,
+    node: shared_graph.onnx.metadata.NodeInfo,
+    inputs: []const *const Tensor,
+) !ExecutionOutputs {
+    const entry = op_registry.findGraphExecutableOnnx(node.op_type) orelse return error.UnsupportedOnnxOperator;
+    const kernel_abi = entry.kernelAbi();
+    if (kernel_abi.class != .graph_op) return error.UnsupportedOnnxOperator;
+
+    if (std.mem.eql(u8, entry.name, "Split")) {
+        return .{ .allocator = allocator, .tensors = try shape.splitAll(allocator, node, inputs) };
+    }
+
+    var tensor = try executeSingle(allocator, entry.name, node, inputs);
+    errdefer tensor.deinit();
+    return try singleOutput(allocator, tensor);
 }
 
 pub fn execute(
@@ -22,49 +51,68 @@ pub fn execute(
     node: shared_graph.onnx.metadata.NodeInfo,
     inputs: []const *const Tensor,
 ) !Tensor {
-    const entry = op_registry.findGraphExecutableOnnx(node.op_type) orelse return error.UnsupportedOnnxOperator;
-    const kernel_abi = entry.kernelAbi();
-    if (kernel_abi.class != .graph_op) return error.UnsupportedOnnxOperator;
+    var outputs = try executeAll(allocator, node, inputs);
+    if (outputs.tensors.len == 0) {
+        outputs.deinit();
+        return error.InvalidOperatorArity;
+    }
+    const first = outputs.tensors[0];
+    for (outputs.tensors[1..]) |*tensor| tensor.deinit();
+    allocator.free(outputs.tensors);
+    return first;
+}
 
-    if (std.mem.eql(u8, entry.name, "Constant")) return try core.constant(allocator, node, inputs);
-    if (std.mem.eql(u8, entry.name, "Identity")) return try core.identity(allocator, inputs);
-    if (std.mem.eql(u8, entry.name, "Add")) return try core.elementwise(allocator, inputs, .add);
-    if (std.mem.eql(u8, entry.name, "Sub")) return try core.elementwise(allocator, inputs, .sub);
-    if (std.mem.eql(u8, entry.name, "Mul")) return try core.elementwise(allocator, inputs, .mul);
-    if (std.mem.eql(u8, entry.name, "Div")) return try core.elementwise(allocator, inputs, .div);
-    if (std.mem.eql(u8, entry.name, "Relu")) return try core.relu(allocator, inputs);
-    if (std.mem.eql(u8, entry.name, "Sigmoid")) return try activation.sigmoid(allocator, inputs);
-    if (std.mem.eql(u8, entry.name, "Tanh")) return try activation.tanh(allocator, inputs);
-    if (std.mem.eql(u8, entry.name, "HardSwish")) return try activation.hardSwish(allocator, inputs);
-    if (std.mem.eql(u8, entry.name, "LeakyRelu")) return try activation.leakyRelu(allocator, node, inputs);
-    if (std.mem.eql(u8, entry.name, "Gelu")) return try activation.gelu(allocator, inputs);
-    if (std.mem.eql(u8, entry.name, "SwiGLU")) return try activation.swiglu(allocator, inputs);
-    if (std.mem.eql(u8, entry.name, "Cast")) return try core.cast(allocator, node, inputs);
-    if (std.mem.eql(u8, entry.name, "Where")) return try core.whereOp(allocator, inputs);
-    if (std.mem.eql(u8, entry.name, "MatMul")) return try linear.matmul(allocator, inputs);
-    if (std.mem.eql(u8, entry.name, "Gemm")) return try linear.gemm(allocator, node, inputs);
-    if (std.mem.eql(u8, entry.name, "Reshape")) return try shape.reshape(allocator, inputs);
-    if (std.mem.eql(u8, entry.name, "Flatten")) return try shape.flatten(allocator, node, inputs);
-    if (std.mem.eql(u8, entry.name, "Shape")) return try shape.shapeOp(allocator, inputs);
-    if (std.mem.eql(u8, entry.name, "Resize")) return try shape.resize(allocator, node, inputs);
-    if (std.mem.eql(u8, entry.name, "Pad")) return try shape.pad(allocator, node, inputs);
-    if (std.mem.eql(u8, entry.name, "Expand")) return try shape.expand(allocator, inputs);
-    if (std.mem.eql(u8, entry.name, "Split")) return try shape.split(allocator, node, inputs);
-    if (std.mem.eql(u8, entry.name, "Unsqueeze")) return try shape.unsqueeze(allocator, node, inputs);
-    if (std.mem.eql(u8, entry.name, "Squeeze")) return try shape.squeeze(allocator, node, inputs);
-    if (std.mem.eql(u8, entry.name, "Concat")) return try shape.concat(allocator, node, inputs);
-    if (std.mem.eql(u8, entry.name, "Transpose")) return try shape.transpose(allocator, node, inputs);
-    if (std.mem.eql(u8, entry.name, "Gather")) return try indexing.gather(allocator, node, inputs);
-    if (std.mem.eql(u8, entry.name, "ArgMax")) return try indexing.argMax(allocator, node, inputs);
-    if (std.mem.eql(u8, entry.name, "Slice")) return try indexing.slice(allocator, node, inputs);
-    if (std.mem.eql(u8, entry.name, "Softmax")) return try normalization.softmax(allocator, node, inputs);
-    if (std.mem.eql(u8, entry.name, "ReduceMean")) return try normalization.reduceMean(allocator, node, inputs);
-    if (std.mem.eql(u8, entry.name, "BatchNormalization")) return try normalization.batchNormalization(allocator, node, inputs);
-    if (std.mem.eql(u8, entry.name, "LayerNormalization")) return try normalization.layerNormalization(allocator, node, inputs);
-    if (std.mem.eql(u8, entry.name, "RMSNormalization")) return try normalization.rmsNormalization(allocator, node, inputs);
-    if (std.mem.eql(u8, entry.name, "Conv")) return try spatial.conv(allocator, node, inputs);
-    if (std.mem.eql(u8, entry.name, "MaxPool")) return try spatial.maxPool(allocator, node, inputs);
+fn executeSingle(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    node: shared_graph.onnx.metadata.NodeInfo,
+    inputs: []const *const Tensor,
+) !Tensor {
+    if (std.mem.eql(u8, name, "Constant")) return try core.constant(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "Identity")) return try core.identity(allocator, inputs);
+    if (std.mem.eql(u8, name, "Add")) return try core.elementwise(allocator, inputs, .add);
+    if (std.mem.eql(u8, name, "Sub")) return try core.elementwise(allocator, inputs, .sub);
+    if (std.mem.eql(u8, name, "Mul")) return try core.elementwise(allocator, inputs, .mul);
+    if (std.mem.eql(u8, name, "Div")) return try core.elementwise(allocator, inputs, .div);
+    if (std.mem.eql(u8, name, "Relu")) return try core.relu(allocator, inputs);
+    if (std.mem.eql(u8, name, "Sigmoid")) return try activation.sigmoid(allocator, inputs);
+    if (std.mem.eql(u8, name, "Tanh")) return try activation.tanh(allocator, inputs);
+    if (std.mem.eql(u8, name, "HardSwish")) return try activation.hardSwish(allocator, inputs);
+    if (std.mem.eql(u8, name, "LeakyRelu")) return try activation.leakyRelu(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "Gelu")) return try activation.gelu(allocator, inputs);
+    if (std.mem.eql(u8, name, "SwiGLU")) return try activation.swiglu(allocator, inputs);
+    if (std.mem.eql(u8, name, "Cast")) return try core.cast(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "Where")) return try core.whereOp(allocator, inputs);
+    if (std.mem.eql(u8, name, "MatMul")) return try linear.matmul(allocator, inputs);
+    if (std.mem.eql(u8, name, "Gemm")) return try linear.gemm(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "Reshape")) return try shape.reshape(allocator, inputs);
+    if (std.mem.eql(u8, name, "Flatten")) return try shape.flatten(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "Shape")) return try shape.shapeOp(allocator, inputs);
+    if (std.mem.eql(u8, name, "Resize")) return try shape.resize(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "Pad")) return try shape.pad(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "Expand")) return try shape.expand(allocator, inputs);
+    if (std.mem.eql(u8, name, "Split")) return try shape.split(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "Unsqueeze")) return try shape.unsqueeze(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "Squeeze")) return try shape.squeeze(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "Concat")) return try shape.concat(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "Transpose")) return try shape.transpose(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "Gather")) return try indexing.gather(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "ArgMax")) return try indexing.argMax(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "Slice")) return try indexing.slice(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "Softmax")) return try normalization.softmax(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "ReduceMean")) return try normalization.reduceMean(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "BatchNormalization")) return try normalization.batchNormalization(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "LayerNormalization")) return try normalization.layerNormalization(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "RMSNormalization")) return try normalization.rmsNormalization(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "Conv")) return try spatial.conv(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "MaxPool")) return try spatial.maxPool(allocator, node, inputs);
     return error.UnsupportedOnnxOperator;
+}
+
+fn singleOutput(allocator: std.mem.Allocator, tensor: Tensor) !ExecutionOutputs {
+    const tensors = try allocator.alloc(Tensor, 1);
+    tensors[0] = tensor;
+    return .{ .allocator = allocator, .tensors = tensors };
 }
 
 test "graph dispatcher executes registry-backed arithmetic ops" {
@@ -160,6 +208,12 @@ test "graph dispatcher executes paddleocr shape utility ops" {
     defer split.deinit();
     try std.testing.expectEqualSlices(usize, &.{ 1, 1 }, split.shape);
     try std.testing.expectEqualSlices(f32, &.{5}, split.buffer.f32);
+
+    var split_all = try executeAll(std.testing.allocator, testNode("Split"), &split_inputs);
+    defer split_all.deinit();
+    try std.testing.expectEqual(@as(usize, 2), split_all.tensors.len);
+    try std.testing.expectEqualSlices(f32, &.{5}, split_all.tensors[0].buffer.f32);
+    try std.testing.expectEqualSlices(f32, &.{6}, split_all.tensors[1].buffer.f32);
 }
 
 test "graph dispatcher executes where op" {

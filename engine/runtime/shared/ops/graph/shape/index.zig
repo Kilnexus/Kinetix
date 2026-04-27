@@ -204,11 +204,40 @@ pub fn split(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs:
     return try splitOutput(allocator, node, inputs, @intCast(index));
 }
 
+pub fn splitAll(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) ![]Tensor {
+    if (inputs.len != 1 and inputs.len != 2) return error.InvalidOperatorArity;
+    const input = inputs[0].*;
+    if (input.shape.len == 0) return error.UnsupportedTensorRank;
+    const split_sizes = if (inputs.len == 2)
+        try common.indicesToOwnedI64(allocator, inputs[1].*)
+    else
+        try common.attributeIntsOwned(allocator, node, "split");
+    defer allocator.free(split_sizes);
+    if (split_sizes.len == 0) return error.MissingOperatorAttribute;
+
+    const outputs = try allocator.alloc(Tensor, split_sizes.len);
+    errdefer allocator.free(outputs);
+    var initialized: usize = 0;
+    errdefer {
+        for (outputs[0..initialized]) |*output| output.deinit();
+    }
+
+    var offset: usize = 0;
+    for (split_sizes, outputs) |size, *output| {
+        if (size < 0) return error.InvalidTensorShape;
+        output.* = try splitOutputAtOffset(allocator, node, inputs, offset, @intCast(size));
+        initialized += 1;
+        offset += @intCast(size);
+    }
+    const axis = try common.normalizeAxis(common.attributeInt(node, "axis") orelse 0, input.shape.len);
+    if (offset != input.shape[axis]) return error.ShapeMismatch;
+    return outputs;
+}
+
 pub fn splitOutput(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor, output_index: usize) !Tensor {
     if (inputs.len != 1 and inputs.len != 2) return error.InvalidOperatorArity;
     const input = inputs[0].*;
     if (input.shape.len == 0) return error.UnsupportedTensorRank;
-    const axis = try common.normalizeAxis(common.attributeInt(node, "axis") orelse 0, input.shape.len);
     const split_sizes = if (inputs.len == 2)
         try common.indicesToOwnedI64(allocator, inputs[1].*)
     else
@@ -223,11 +252,23 @@ pub fn splitOutput(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, i
     }
     const selected_size = split_sizes[output_index];
     if (selected_size < 0) return error.InvalidTensorShape;
-    if (offset + @as(usize, @intCast(selected_size)) > input.shape[axis]) return error.ShapeMismatch;
+    return try splitOutputAtOffset(allocator, node, inputs, offset, @intCast(selected_size));
+}
+
+fn splitOutputAtOffset(
+    allocator: std.mem.Allocator,
+    node: onnx_metadata.NodeInfo,
+    inputs: []const *const Tensor,
+    offset: usize,
+    selected_size: usize,
+) !Tensor {
+    const input = inputs[0].*;
+    const axis = try common.normalizeAxis(common.attributeInt(node, "axis") orelse 0, input.shape.len);
+    if (offset + selected_size > input.shape[axis]) return error.ShapeMismatch;
 
     const out_shape = try allocator.dupe(usize, input.shape);
     defer allocator.free(out_shape);
-    out_shape[axis] = @intCast(selected_size);
+    out_shape[axis] = selected_size;
     return switch (input.buffer) {
         .f32 => |values| Tensor{ .allocator = allocator, .shape = try allocator.dupe(usize, out_shape), .buffer = .{ .f32 = try splitValues(f32, allocator, values, input.shape, axis, offset, out_shape) } },
         .i32 => |values| Tensor{ .allocator = allocator, .shape = try allocator.dupe(usize, out_shape), .buffer = .{ .i32 = try splitValues(i32, allocator, values, input.shape, axis, offset, out_shape) } },

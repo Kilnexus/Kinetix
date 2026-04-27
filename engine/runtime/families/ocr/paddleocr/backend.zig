@@ -4,6 +4,7 @@ const handle_mod = @import("../../../model/handle.zig");
 const normalized = @import("../../../model/resolver/normalized_model.zig");
 const types = @import("../../../types.zig");
 const inference = @import("inference/index.zig");
+const postprocess = @import("postprocess/index.zig");
 const resolver = @import("resolver.zig");
 
 pub const backend = backend_mod.RuntimeBackend{
@@ -93,6 +94,8 @@ fn execute(
         onnx_metadata_supported_node_count: usize,
         onnx_metadata_unsupported_node_count: usize,
         onnx_metadata_unsupported_ops: []const inference.planning.onnx_metadata.UnsupportedOpEntry,
+        ctc_postprocess_ready: bool,
+        db_postprocess_ready: bool,
         message: []const u8,
     };
 
@@ -124,6 +127,8 @@ fn execute(
         .onnx_metadata_supported_node_count = onnx_metadata.supported_node_count,
         .onnx_metadata_unsupported_node_count = onnx_metadata.unsupported_node_count,
         .onnx_metadata_unsupported_ops = onnx_metadata.unsupported_ops[0..onnx_metadata.unsupported_op_entry_count],
+        .ctc_postprocess_ready = @hasDecl(postprocess, "ctc"),
+        .db_postprocess_ready = @hasDecl(postprocess, "db"),
         .message = "PaddleOCR is routed through the unified runtime. Native zero-dependency PP-OCRv5 detection, recognition, classification, and postprocess execution will be enabled by expanding shared graph ops and Paddle/ONNX model loading.",
     };
 
