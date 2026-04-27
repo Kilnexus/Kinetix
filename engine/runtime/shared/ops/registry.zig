@@ -55,11 +55,16 @@ pub const entries = [_]Entry{
     .{ .name = "Gelu", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/activation/index.zig" },
     .{ .name = "SwiGLU", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/activation/index.zig" },
     .{ .name = "Cast", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
+    .{ .name = "Where", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
     .{ .name = "MatMul", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/linear/index.zig" },
     .{ .name = "Gemm", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/linear/index.zig" },
     .{ .name = "Reshape", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/shape/index.zig" },
     .{ .name = "Flatten", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/shape/index.zig" },
     .{ .name = "Shape", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/shape/index.zig" },
+    .{ .name = "Resize", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/shape/index.zig" },
+    .{ .name = "Pad", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/shape/index.zig" },
+    .{ .name = "Expand", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/shape/index.zig" },
+    .{ .name = "Split", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/shape/index.zig" },
     .{ .name = "Unsqueeze", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/shape/index.zig" },
     .{ .name = "Squeeze", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/shape/index.zig" },
     .{ .name = "Concat", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/shape/index.zig" },
@@ -258,6 +263,11 @@ test "unified ops registry includes graph executable and native kernels" {
     try std.testing.expect(isGraphExecutableOnnx("ArgMax"));
     try std.testing.expect(isGraphExecutableOnnx("ReduceMean"));
     try std.testing.expect(isGraphExecutableOnnx("BatchNormalization"));
+    try std.testing.expect(isGraphExecutableOnnx("Where"));
+    try std.testing.expect(isGraphExecutableOnnx("Resize"));
+    try std.testing.expect(isGraphExecutableOnnx("Pad"));
+    try std.testing.expect(isGraphExecutableOnnx("Expand"));
+    try std.testing.expect(isGraphExecutableOnnx("Split"));
     try std.testing.expect(isGraphExecutableOnnx("Conv"));
     try std.testing.expect(isGraphExecutableOnnx("MaxPool"));
     try std.testing.expect(isGraphExecutableOnnx("SwiGLU"));

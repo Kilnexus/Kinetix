@@ -40,11 +40,16 @@ pub fn execute(
     if (std.mem.eql(u8, entry.name, "Gelu")) return try activation.gelu(allocator, inputs);
     if (std.mem.eql(u8, entry.name, "SwiGLU")) return try activation.swiglu(allocator, inputs);
     if (std.mem.eql(u8, entry.name, "Cast")) return try core.cast(allocator, node, inputs);
+    if (std.mem.eql(u8, entry.name, "Where")) return try core.whereOp(allocator, inputs);
     if (std.mem.eql(u8, entry.name, "MatMul")) return try linear.matmul(allocator, inputs);
     if (std.mem.eql(u8, entry.name, "Gemm")) return try linear.gemm(allocator, node, inputs);
     if (std.mem.eql(u8, entry.name, "Reshape")) return try shape.reshape(allocator, inputs);
     if (std.mem.eql(u8, entry.name, "Flatten")) return try shape.flatten(allocator, node, inputs);
     if (std.mem.eql(u8, entry.name, "Shape")) return try shape.shapeOp(allocator, inputs);
+    if (std.mem.eql(u8, entry.name, "Resize")) return try shape.resize(allocator, node, inputs);
+    if (std.mem.eql(u8, entry.name, "Pad")) return try shape.pad(allocator, node, inputs);
+    if (std.mem.eql(u8, entry.name, "Expand")) return try shape.expand(allocator, inputs);
+    if (std.mem.eql(u8, entry.name, "Split")) return try shape.split(allocator, node, inputs);
     if (std.mem.eql(u8, entry.name, "Unsqueeze")) return try shape.unsqueeze(allocator, node, inputs);
     if (std.mem.eql(u8, entry.name, "Squeeze")) return try shape.squeeze(allocator, node, inputs);
     if (std.mem.eql(u8, entry.name, "Concat")) return try shape.concat(allocator, node, inputs);
@@ -127,6 +132,65 @@ test "graph dispatcher executes batch normalization" {
     var output = try execute(std.testing.allocator, testNode("BatchNormalization"), &inputs);
     defer output.deinit();
     try std.testing.expect(output.buffer.f32[0] > 0.99 and output.buffer.f32[0] < 1.01);
+}
+
+test "graph dispatcher executes paddleocr shape utility ops" {
+    var input = try Tensor.fromF32(std.testing.allocator, &.{ 1, 2 }, &.{ 5, 6 });
+    defer input.deinit();
+    var pads = try Tensor.fromI64(std.testing.allocator, &.{4}, &.{ 0, 1, 0, 1 });
+    defer pads.deinit();
+    var expanded_shape = try Tensor.fromI64(std.testing.allocator, &.{2}, &.{ 2, 2 });
+    defer expanded_shape.deinit();
+    var split_sizes = try Tensor.fromI64(std.testing.allocator, &.{2}, &.{ 1, 1 });
+    defer split_sizes.deinit();
+
+    const pad_inputs = [_]*const Tensor{ &input, &pads };
+    var padded = try execute(std.testing.allocator, testNode("Pad"), &pad_inputs);
+    defer padded.deinit();
+    try std.testing.expectEqualSlices(usize, &.{ 1, 4 }, padded.shape);
+    try std.testing.expectEqualSlices(f32, &.{ 0, 5, 6, 0 }, padded.buffer.f32);
+
+    const expand_inputs = [_]*const Tensor{ &input, &expanded_shape };
+    var expanded = try execute(std.testing.allocator, testNode("Expand"), &expand_inputs);
+    defer expanded.deinit();
+    try std.testing.expectEqualSlices(f32, &.{ 5, 6, 5, 6 }, expanded.buffer.f32);
+
+    const split_inputs = [_]*const Tensor{ &input, &split_sizes };
+    var split = try execute(std.testing.allocator, testNode("Split"), &split_inputs);
+    defer split.deinit();
+    try std.testing.expectEqualSlices(usize, &.{ 1, 1 }, split.shape);
+    try std.testing.expectEqualSlices(f32, &.{5}, split.buffer.f32);
+}
+
+test "graph dispatcher executes where op" {
+    var condition = try Tensor.fromI64(std.testing.allocator, &.{ 2 }, &.{ 1, 0 });
+    defer condition.deinit();
+    var x = try Tensor.fromF32(std.testing.allocator, &.{ 2 }, &.{ 3, 3 });
+    defer x.deinit();
+    var y = try Tensor.fromF32(std.testing.allocator, &.{ 2 }, &.{ 7, 7 });
+    defer y.deinit();
+    const inputs = [_]*const Tensor{ &condition, &x, &y };
+
+    var output = try execute(std.testing.allocator, testNode("Where"), &inputs);
+    defer output.deinit();
+    try std.testing.expectEqualSlices(f32, &.{ 3, 7 }, output.buffer.f32);
+}
+
+test "graph dispatcher executes conservative nearest resize" {
+    var input = try Tensor.fromF32(std.testing.allocator, &.{ 1, 1, 2, 2 }, &.{ 1, 2, 3, 4 });
+    defer input.deinit();
+    var roi = try Tensor.fromF32(std.testing.allocator, &.{0}, &.{});
+    defer roi.deinit();
+    var scales = try Tensor.fromF32(std.testing.allocator, &.{0}, &.{});
+    defer scales.deinit();
+    var sizes = try Tensor.fromI64(std.testing.allocator, &.{4}, &.{ 1, 1, 4, 4 });
+    defer sizes.deinit();
+    const inputs = [_]*const Tensor{ &input, &roi, &scales, &sizes };
+
+    var output = try execute(std.testing.allocator, testNode("Resize"), &inputs);
+    defer output.deinit();
+    try std.testing.expectEqualSlices(usize, &.{ 1, 1, 4, 4 }, output.shape);
+    try std.testing.expectEqualSlices(f32, &.{ 1, 1, 2, 2, 1, 1, 2, 2, 3, 3, 4, 4, 3, 3, 4, 4 }, output.buffer.f32);
 }
 
 fn testNode(op_type: []const u8) shared_graph.onnx.metadata.NodeInfo {

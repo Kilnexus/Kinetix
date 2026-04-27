@@ -49,6 +49,25 @@ pub fn elementwise(allocator: std.mem.Allocator, inputs: []const *const Tensor, 
     };
 }
 
+pub fn whereOp(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Tensor {
+    if (inputs.len != 3) return error.InvalidOperatorArity;
+    const condition = inputs[0].*;
+    const x = inputs[1].*;
+    const y = inputs[2].*;
+    if (!condition.sameShape(x) or !x.sameShape(y)) return error.ShapeMismatch;
+    if (condition.buffer != .i64 or x.buffer != .f32 or y.buffer != .f32) return error.UnsupportedTensorDType;
+    const out = try allocator.alloc(f32, x.buffer.f32.len);
+    errdefer allocator.free(out);
+    for (condition.buffer.i64, x.buffer.f32, y.buffer.f32, out) |cond, x_value, y_value, *slot| {
+        slot.* = if (cond != 0) x_value else y_value;
+    }
+    return .{
+        .allocator = allocator,
+        .shape = try allocator.dupe(usize, x.shape),
+        .buffer = .{ .f32 = out },
+    };
+}
+
 pub fn relu(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Tensor {
     if (inputs.len != 1) return error.InvalidOperatorArity;
     const input = inputs[0].*;
