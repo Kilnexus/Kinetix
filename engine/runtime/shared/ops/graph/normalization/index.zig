@@ -4,6 +4,12 @@ const common = @import("../common.zig");
 
 const Tensor = common.Tensor;
 
+pub const ReduceMode = enum {
+    mean,
+    sum,
+    max,
+};
+
 pub fn softmax(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
     if (inputs.len != 1) return error.InvalidOperatorArity;
     const input = inputs[0].*;
@@ -43,6 +49,18 @@ pub fn softmax(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, input
 }
 
 pub fn reduceMean(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
+    return try reduce(allocator, node, inputs, .mean);
+}
+
+pub fn reduceSum(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
+    return try reduce(allocator, node, inputs, .sum);
+}
+
+pub fn reduceMax(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
+    return try reduce(allocator, node, inputs, .max);
+}
+
+fn reduce(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor, mode: ReduceMode) !Tensor {
     if (inputs.len != 1 and inputs.len != 2) return error.InvalidOperatorArity;
     const input = inputs[0].*;
     if (input.buffer != .f32) return error.UnsupportedTensorDType;
@@ -74,7 +92,7 @@ pub fn reduceMean(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, in
     const out_count = common.elementCountFromShape(out_shape_list.items);
     const out = try allocator.alloc(f32, out_count);
     errdefer allocator.free(out);
-    @memset(out, 0);
+    @memset(out, initialReduceValue(mode));
     const counts = try allocator.alloc(usize, out_count);
     defer allocator.free(counts);
     @memset(counts, 0);
@@ -92,17 +110,27 @@ pub fn reduceMean(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, in
         common.linearToCoords(linear, input.shape, in_strides, in_coords);
         projectReduceCoords(in_coords, axes, keepdims, out_coords);
         const out_index = common.coordsToLinear(out_coords, out_strides);
-        out[out_index] += value;
+        out[out_index] = switch (mode) {
+            .mean, .sum => out[out_index] + value,
+            .max => @max(out[out_index], value),
+        };
         counts[out_index] += 1;
     }
     for (out, counts) |*value, count| {
         if (count == 0) return error.InvalidTensorShape;
-        value.* /= @floatFromInt(count);
+        if (mode == .mean) value.* /= @floatFromInt(count);
     }
     return .{
         .allocator = allocator,
         .shape = try allocator.dupe(usize, out_shape_list.items),
         .buffer = .{ .f32 = out },
+    };
+}
+
+fn initialReduceValue(mode: ReduceMode) f32 {
+    return switch (mode) {
+        .mean, .sum => 0,
+        .max => -std.math.inf(f32),
     };
 }
 

@@ -4,10 +4,10 @@ const common = @import("../common.zig");
 
 const Tensor = common.Tensor;
 
-pub const ElementwiseMode = enum { add, sub, mul, div };
+pub const ElementwiseMode = enum { add, sub, mul, div, min, max, pow };
 pub const CompareMode = enum { equal, greater, less };
 pub const LogicalMode = enum { and_op, or_op };
-pub const UnaryFloatMode = enum { floor, ceil_op };
+pub const UnaryFloatMode = enum { floor, ceil_op, sqrt, exp, log };
 
 pub fn constant(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
     if (inputs.len != 0) return error.InvalidOperatorArity;
@@ -43,6 +43,9 @@ pub fn elementwise(allocator: std.mem.Allocator, inputs: []const *const Tensor, 
             .sub => a - b,
             .mul => a * b,
             .div => a / b,
+            .min => @min(a, b),
+            .max => @max(a, b),
+            .pow => std.math.pow(f32, a, b),
         };
     }
     return .{
@@ -143,6 +146,9 @@ pub fn unaryFloat(allocator: std.mem.Allocator, inputs: []const *const Tensor, m
         slot.* = switch (mode) {
             .floor => @floor(value),
             .ceil_op => @ceil(value),
+            .sqrt => @sqrt(value),
+            .exp => @exp(value),
+            .log => @log(value),
         };
     }
     return .{

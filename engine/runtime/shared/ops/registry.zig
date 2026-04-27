@@ -47,6 +47,9 @@ pub const entries = [_]Entry{
     .{ .name = "Sub", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
     .{ .name = "Mul", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
     .{ .name = "Div", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
+    .{ .name = "Min", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
+    .{ .name = "Max", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
+    .{ .name = "Pow", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
     .{ .name = "Relu", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
     .{ .name = "Clip", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
     .{ .name = "Equal", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
@@ -57,6 +60,9 @@ pub const entries = [_]Entry{
     .{ .name = "Not", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
     .{ .name = "Floor", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
     .{ .name = "Ceil", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
+    .{ .name = "Sqrt", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
+    .{ .name = "Exp", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
+    .{ .name = "Log", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
     .{ .name = "Range", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
     .{ .name = "Sigmoid", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/activation/index.zig" },
     .{ .name = "Tanh", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/activation/index.zig" },
@@ -83,9 +89,12 @@ pub const entries = [_]Entry{
     .{ .name = "Gather", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/indexing/index.zig" },
     .{ .name = "ArgMax", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/indexing/index.zig" },
     .{ .name = "NonZero", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/indexing/index.zig" },
+    .{ .name = "TopK", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/indexing/index.zig" },
     .{ .name = "Slice", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/indexing/index.zig" },
     .{ .name = "Softmax", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/normalization/index.zig" },
     .{ .name = "ReduceMean", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/normalization/index.zig" },
+    .{ .name = "ReduceSum", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/normalization/index.zig" },
+    .{ .name = "ReduceMax", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/normalization/index.zig" },
     .{ .name = "BatchNormalization", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/normalization/index.zig" },
     .{ .name = "LayerNormalization", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/normalization/index.zig" },
     .{ .name = "RMSNormalization", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/normalization/index.zig" },
@@ -273,11 +282,15 @@ test "unified ops registry includes graph executable and native kernels" {
     try std.testing.expect(isGraphExecutableOnnx("Sigmoid"));
     try std.testing.expect(isGraphExecutableOnnx("Sub"));
     try std.testing.expect(isGraphExecutableOnnx("Div"));
+    try std.testing.expect(isGraphExecutableOnnx("Pow"));
+    try std.testing.expect(isGraphExecutableOnnx("Sqrt"));
     try std.testing.expect(isGraphExecutableOnnx("Tanh"));
     try std.testing.expect(isGraphExecutableOnnx("HardSwish"));
     try std.testing.expect(isGraphExecutableOnnx("Flatten"));
     try std.testing.expect(isGraphExecutableOnnx("ArgMax"));
     try std.testing.expect(isGraphExecutableOnnx("ReduceMean"));
+    try std.testing.expect(isGraphExecutableOnnx("ReduceSum"));
+    try std.testing.expect(isGraphExecutableOnnx("ReduceMax"));
     try std.testing.expect(isGraphExecutableOnnx("BatchNormalization"));
     try std.testing.expect(isGraphExecutableOnnx("Where"));
     try std.testing.expect(isGraphExecutableOnnx("Resize"));
@@ -295,6 +308,7 @@ test "unified ops registry includes graph executable and native kernels" {
     try std.testing.expect(isGraphExecutableOnnx("Range"));
     try std.testing.expect(isGraphExecutableOnnx("Tile"));
     try std.testing.expect(isGraphExecutableOnnx("NonZero"));
+    try std.testing.expect(isGraphExecutableOnnx("TopK"));
     try std.testing.expect(isGraphExecutableOnnx("SwiGLU"));
     try std.testing.expect(has("Conv2d", .vision_nn));
     try std.testing.expect(has("RmsNorm", .text_core));

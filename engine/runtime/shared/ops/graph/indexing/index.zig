@@ -136,6 +136,122 @@ pub fn nonZero(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Ten
     };
 }
 
+pub const TopKOutputs = struct {
+    values: Tensor,
+    indices: Tensor,
+};
+
+pub fn topKAll(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) ![]Tensor {
+    const result = try topK(allocator, node, inputs);
+    errdefer {
+        var values = result.values;
+        var indices = result.indices;
+        values.deinit();
+        indices.deinit();
+    }
+    const outputs = try allocator.alloc(Tensor, 2);
+    outputs[0] = result.values;
+    outputs[1] = result.indices;
+    return outputs;
+}
+
+pub fn topKOutput(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor, output_index: usize) !Tensor {
+    const result = try topK(allocator, node, inputs);
+    if (output_index == 0) {
+        var indices = result.indices;
+        indices.deinit();
+        return result.values;
+    }
+    if (output_index == 1) {
+        var values = result.values;
+        values.deinit();
+        return result.indices;
+    }
+    var values = result.values;
+    var indices = result.indices;
+    values.deinit();
+    indices.deinit();
+    return error.InvalidTensorIndex;
+}
+
+fn topK(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !TopKOutputs {
+    if (inputs.len != 2) return error.InvalidOperatorArity;
+    const input = inputs[0].*;
+    if (input.buffer != .f32) return error.UnsupportedTensorDType;
+    if (input.shape.len == 0) return error.UnsupportedTensorRank;
+    const k_value = try scalarK(inputs[1].*);
+    if (k_value == 0) return error.InvalidOperatorAttribute;
+    const axis = try common.normalizeAxis(common.attributeInt(node, "axis") orelse -1, input.shape.len);
+    const largest = (common.attributeInt(node, "largest") orelse 1) != 0;
+    const sorted = (common.attributeInt(node, "sorted") orelse 1) != 0;
+    const axis_dim = input.shape[axis];
+    if (k_value > axis_dim) return error.InvalidOperatorAttribute;
+
+    const out_shape = try allocator.dupe(usize, input.shape);
+    defer allocator.free(out_shape);
+    out_shape[axis] = k_value;
+    const out_count = common.elementCountFromShape(out_shape);
+    const values = try allocator.alloc(f32, out_count);
+    errdefer allocator.free(values);
+    const indices = try allocator.alloc(i64, out_count);
+    errdefer allocator.free(indices);
+
+    const inner = common.elementCountFromShape(input.shape[axis + 1 ..]);
+    const outer = common.elementCountFromShape(input.shape[0..axis]);
+    const candidates = try allocator.alloc(TopKCandidate, axis_dim);
+    defer allocator.free(candidates);
+    for (0..outer) |outer_index| {
+        for (0..inner) |inner_index| {
+            for (0..axis_dim) |axis_index| {
+                const input_index = outer_index * axis_dim * inner + axis_index * inner + inner_index;
+                candidates[axis_index] = .{ .index = axis_index, .value = input.buffer.f32[input_index] };
+            }
+            if (sorted) sortTopKCandidates(candidates, largest);
+            const out_base = outer_index * k_value * inner + inner_index;
+            for (0..k_value) |rank| {
+                const selected = if (sorted) candidates[rank] else selectUnsorted(candidates, rank, largest);
+                const out_index = out_base + rank * inner;
+                values[out_index] = selected.value;
+                indices[out_index] = @intCast(selected.index);
+            }
+        }
+    }
+    return .{
+        .values = .{ .allocator = allocator, .shape = try allocator.dupe(usize, out_shape), .buffer = .{ .f32 = values } },
+        .indices = .{ .allocator = allocator, .shape = try allocator.dupe(usize, out_shape), .buffer = .{ .i64 = indices } },
+    };
+}
+
+const TopKCandidate = struct {
+    index: usize,
+    value: f32,
+};
+
+fn scalarK(tensor: Tensor) !usize {
+    if (tensor.elementCount() != 1) return error.ShapeMismatch;
+    const value: i64 = switch (tensor.buffer) {
+        .i64 => |values| values[0],
+        .i32 => |values| values[0],
+        .f32 => |values| @intFromFloat(values[0]),
+    };
+    if (value < 0) return error.InvalidOperatorAttribute;
+    return @intCast(value);
+}
+
+fn sortTopKCandidates(candidates: []TopKCandidate, largest: bool) void {
+    std.mem.sort(TopKCandidate, candidates, largest, struct {
+        fn lessThan(want_largest: bool, lhs: TopKCandidate, rhs: TopKCandidate) bool {
+            if (lhs.value == rhs.value) return lhs.index < rhs.index;
+            return if (want_largest) lhs.value > rhs.value else lhs.value < rhs.value;
+        }
+    }.lessThan);
+}
+
+fn selectUnsorted(candidates: []TopKCandidate, rank: usize, largest: bool) TopKCandidate {
+    sortTopKCandidates(candidates, largest);
+    return candidates[rank];
+}
+
 fn countNonZero(input: Tensor) usize {
     var count: usize = 0;
     for (0..input.elementCount()) |index| {
