@@ -8,10 +8,16 @@ pub const KernelBackend = types.KernelBackend;
 pub const IsaTag = types.IsaTag;
 pub const KernelSpec = types.KernelSpec;
 pub const Entry = types.Entry;
+pub const KernelAbi = types.KernelAbi;
+pub const KernelClass = types.KernelClass;
+pub const ScalarType = types.ScalarType;
+pub const TensorAbi = types.TensorAbi;
+pub const TensorLayout = types.TensorLayout;
 
 pub const shapeForWidth = types.shapeForWidth;
 pub const backendForGemvOp = types.backendForGemvOp;
 pub const activeIsa = types.activeIsa;
+pub const kernelAbiForSpec = types.kernelAbiForSpec;
 
 pub const resolve = resolve_mod.resolve;
 pub const resolveGemvRow = resolve_mod.resolveGemvRow;
@@ -24,6 +30,8 @@ test "registry resolves hot gemv row as specialized entry" {
     try std.testing.expectEqualStrings("gemv_q6_3072", entry.name);
     try std.testing.expectEqual(ShapeTag.qwen3_intermediate_3072, entry.shape);
     try std.testing.expectEqual(KernelBackend.q6, entry.backend);
+    try std.testing.expectEqual(KernelClass.linalg, entry.abi.class);
+    try std.testing.expectEqual(ScalarType.q6, entry.abi.input.scalar);
     try std.testing.expect(entry.specialized);
     try std.testing.expect(entry.layout == null);
 }
@@ -36,6 +44,8 @@ test "registry preserves attention layout and backend" {
     try std.testing.expectEqualStrings("attn_q8_decode_head_major_128", entry.name);
     try std.testing.expectEqual(ShapeTag.qwen3_head_dim_128, entry.shape);
     try std.testing.expectEqual(KernelBackend.q8, entry.backend);
+    try std.testing.expectEqual(KernelClass.attention, entry.abi.class);
+    try std.testing.expectEqual(TensorLayout.head_major, entry.abi.input.layout);
     try std.testing.expectEqual(AttentionQ8Layout.head_major, entry.layout.?);
     try std.testing.expect(entry.specialized);
 }

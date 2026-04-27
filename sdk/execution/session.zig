@@ -271,10 +271,12 @@ fn buildDescriptor(handle: *const runtime_model.ModelHandle) runtime_types.Descr
         .supports_batching = handle.normalized.capabilities.supports_batch,
         .supports_streaming = handle.normalized.capabilities.supports_stream,
         .supported_operations = handle.normalized.capabilities.supported_operations,
+        .supported_operation_ids = handle.normalized.capabilities.supported_operation_ids,
     };
 }
 
 fn defaultOperation(descriptor: runtime_types.Descriptor) []const u8 {
+    if (descriptor.supported_operation_ids.len != 0) return descriptor.supported_operation_ids[0].name();
     if (descriptor.supported_operations.len == 0) return "infer";
     return descriptor.supported_operations[0];
 }

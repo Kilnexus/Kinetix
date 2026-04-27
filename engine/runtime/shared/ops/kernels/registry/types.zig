@@ -1,4 +1,11 @@
 const builtin = @import("builtin");
+const abi = @import("runtime_abi");
+
+pub const KernelAbi = abi.KernelAbi;
+pub const KernelClass = abi.KernelClass;
+pub const ScalarType = abi.ScalarType;
+pub const TensorAbi = abi.TensorAbi;
+pub const TensorLayout = abi.TensorLayout;
 
 pub const ShapeTag = enum {
     generic,
@@ -83,12 +90,64 @@ pub const KernelSpec = union(enum) {
 
 pub const Entry = struct {
     name: []const u8,
+    abi: KernelAbi,
     shape: ShapeTag,
     backend: KernelBackend,
     layout: ?AttentionQ8Layout,
     isa: IsaTag,
     specialized: bool,
 };
+
+pub fn kernelAbiForSpec(spec: KernelSpec, backend: KernelBackend, layout: ?AttentionQ8Layout, specialized: bool) KernelAbi {
+    return switch (spec) {
+        .gemv_row => .{
+            .class = .linalg,
+            .input = .{
+                .scalar = scalarForBackend(backend),
+                .layout = .row_major,
+                .rank = 2,
+            },
+            .output = .{
+                .scalar = .f32,
+                .layout = .contiguous,
+                .rank = 1,
+            },
+            .specialized = specialized,
+        },
+        .attention_q8_decode => .{
+            .class = .attention,
+            .input = .{
+                .scalar = scalarForBackend(backend),
+                .layout = tensorLayoutForAttention(layout orelse .token_major),
+                .rank = 3,
+            },
+            .output = .{
+                .scalar = .f32,
+                .layout = .contiguous,
+                .rank = 2,
+            },
+            .specialized = specialized,
+        },
+    };
+}
+
+pub fn scalarForBackend(backend: KernelBackend) ScalarType {
+    return switch (backend) {
+        .f32 => .f32,
+        .bf16 => .bf16,
+        .q8 => .q8,
+        .q6 => .q6,
+        .q4 => .q4,
+    };
+}
+
+pub fn tensorLayoutForAttention(layout: AttentionQ8Layout) TensorLayout {
+    return switch (layout) {
+        .token_major => .token_major,
+        .head_major => .head_major,
+        .paged_head_major => .paged_head_major,
+    };
+}
 
 pub fn shapeForWidth(width: usize) ShapeTag {
     return switch (width) {

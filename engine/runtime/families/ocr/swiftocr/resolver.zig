@@ -5,6 +5,7 @@ const report_mod = @import("../../../model/resolver/support_report.zig");
 const types = @import("../../../types.zig");
 
 const operations = [_][]const u8{"infer-ocr"};
+const operation_ids = [_]types.RuntimeOperation{.ocr};
 const accepted_inputs = [_]types.InputKind{.image_path};
 
 pub fn tryNormalize(
@@ -56,6 +57,7 @@ pub fn tryNormalize(
             .supports_batch = false,
             .supports_native_exec = true,
             .supported_operations = &operations,
+            .supported_operation_ids = &operation_ids,
             .accepted_inputs = &accepted_inputs,
         },
         .support = support,

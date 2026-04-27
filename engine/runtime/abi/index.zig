@@ -24,6 +24,8 @@ pub const Operation = enum {
     detect,
     ocr,
     render_markdown,
+    render_html,
+    render_json,
     synthesize,
     fill_mask,
     profile,
@@ -38,6 +40,8 @@ pub const Operation = enum {
             .detect => "detect",
             .ocr => "infer-ocr",
             .render_markdown => "render-markdown",
+            .render_html => "render-html",
+            .render_json => "render-json",
             .synthesize => "synthesize",
             .fill_mask => "fill-mask",
             .profile => "profile",
@@ -171,6 +175,8 @@ test "runtime ABI operation parser preserves public names" {
     try std.testing.expectEqual(Operation.generate, Operation.parse("generate").?);
     try std.testing.expectEqual(Operation.ocr, Operation.parse("infer-ocr").?);
     try std.testing.expectEqual(Operation.render_markdown, Operation.parse("render-markdown").?);
+    try std.testing.expectEqual(Operation.render_html, Operation.parse("render-html").?);
+    try std.testing.expectEqual(Operation.render_json, Operation.parse("render-json").?);
     try std.testing.expect(Operation.parse("unknown-op") == null);
 }
 

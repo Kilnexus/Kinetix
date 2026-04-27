@@ -26,7 +26,7 @@ pub const Planner = struct {
             .allocator = self.allocator,
             .request_indices = indices,
             .operation = request.operation,
-            .operation_id = request.operation_id,
+            .operation_id = request.resolvedOperationId(),
             .execution = request.execution,
             .allows_batching = handle.normalized.capabilities.supports_batch and request.allows_batching,
         };
@@ -71,7 +71,7 @@ pub const Planner = struct {
 };
 
 fn validateRequest(handle: *const handle_mod.ModelHandle, request: types.RuntimeRequest) !void {
-    if (!handle.normalized.capabilities.supportsOperation(request.operation, request.operation_id)) return error.OperationNotSupported;
+    if (!handle.normalized.capabilities.supportsOperation(request.operation, request.resolvedOperationId())) return error.OperationNotSupported;
     if (!handle.normalized.capabilities.acceptsInput(types.inputKind(request.input))) return error.InvalidInputPayload;
     if (request.execution == .stream and !handle.normalized.capabilities.supports_stream) return error.StreamingNotSupported;
 }
@@ -120,13 +120,13 @@ fn buildBatches(
                 if (builder.generation_max_tokens != item.generation.max_tokens) continue;
                 if (builder.native_execution != item.generation.native_execution) continue;
                 if (!std.mem.eql(u8, builder.operation, item.operation)) continue;
-                if (builder.operation_id != item.operation_id) continue;
+                if (builder.operation_id != item.resolvedOperationId()) continue;
                 try builder.indices.append(allocator, index);
                 break;
             } else {
                 var builder = Builder{
                     .operation = item.operation,
-                    .operation_id = item.operation_id,
+                    .operation_id = item.resolvedOperationId(),
                     .execution = item.execution,
                     .input_tag = payload_tag,
                     .generation_max_tokens = item.generation.max_tokens,
@@ -141,7 +141,7 @@ fn buildBatches(
 
         var builder = Builder{
             .operation = item.operation,
-            .operation_id = item.operation_id,
+            .operation_id = item.resolvedOperationId(),
             .execution = item.execution,
             .input_tag = payload_tag,
             .generation_max_tokens = item.generation.max_tokens,

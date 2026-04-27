@@ -173,6 +173,10 @@ pub const RuntimeRequest = struct {
     execution: ExecutionMode = .sync,
     generation: GenerationOptions = .{},
     allows_batching: bool = true,
+
+    pub fn resolvedOperationId(self: RuntimeRequest) RuntimeOperation {
+        return RuntimeOperation.parse(self.operation) orelse self.operation_id;
+    }
 };
 
 pub const RuntimeBatchRequest = struct {

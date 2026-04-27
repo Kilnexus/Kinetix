@@ -11,6 +11,12 @@ const operations = [_][]const u8{
     "render-html",
     "render-json",
 };
+const operation_ids = [_]types.RuntimeOperation{
+    .ocr,
+    .render_markdown,
+    .render_html,
+    .render_json,
+};
 const accepted_inputs = [_]types.InputKind{ .image_path, .document_path };
 
 pub fn tryNormalize(
@@ -70,6 +76,7 @@ pub fn tryNormalize(
             .supports_batch = false,
             .supports_native_exec = true,
             .supported_operations = &operations,
+            .supported_operation_ids = &operation_ids,
             .accepted_inputs = &accepted_inputs,
         },
         .support = support,

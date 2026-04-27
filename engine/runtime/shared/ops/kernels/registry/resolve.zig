@@ -9,25 +9,30 @@ pub fn resolve(spec: types.KernelSpec) types.Entry {
 
 pub fn resolveGemvRow(op: types.GemvOp, cols: usize) types.Entry {
     const shape = types.shapeForWidth(cols);
+    const backend = types.backendForGemvOp(op);
+    const specialized = shape != .generic;
     return .{
         .name = gemvName(op, shape),
+        .abi = types.kernelAbiForSpec(.{ .gemv_row = .{ .op = op, .cols = cols } }, backend, null, specialized),
         .shape = shape,
-        .backend = types.backendForGemvOp(op),
+        .backend = backend,
         .layout = null,
         .isa = types.activeIsa(),
-        .specialized = shape != .generic,
+        .specialized = specialized,
     };
 }
 
 pub fn resolveAttentionQ8Decode(head_dim: usize, layout: types.AttentionQ8Layout) types.Entry {
     const shape = types.shapeForWidth(head_dim);
+    const specialized = shape != .generic;
     return .{
         .name = attentionQ8Name(shape, layout),
+        .abi = types.kernelAbiForSpec(.{ .attention_q8_decode = .{ .head_dim = head_dim, .layout = layout } }, .q8, layout, specialized),
         .shape = shape,
         .backend = .q8,
         .layout = layout,
         .isa = types.activeIsa(),
-        .specialized = shape != .generic,
+        .specialized = specialized,
     };
 }
 

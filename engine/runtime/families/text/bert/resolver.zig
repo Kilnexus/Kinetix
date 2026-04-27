@@ -6,6 +6,7 @@ const report_mod = @import("../../../model/resolver/support_report.zig");
 const types = @import("../../../types.zig");
 
 const operations = [_][]const u8{ "fill-mask", "embed" };
+const operation_ids = [_]types.RuntimeOperation{ .fill_mask, .embed };
 const accepted_inputs = [_]types.InputKind{.text};
 
 pub fn tryNormalize(
@@ -60,6 +61,7 @@ pub fn tryNormalize(
             .supports_batch = true,
             .supports_native_exec = false,
             .supported_operations = &operations,
+            .supported_operation_ids = &operation_ids,
             .accepted_inputs = &accepted_inputs,
         },
         .support = support,
