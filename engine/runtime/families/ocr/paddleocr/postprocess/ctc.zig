@@ -24,10 +24,10 @@ pub fn decodeIds(
     dictionary: []const []const u8,
     options: DecodeOptions,
 ) !DecodedText {
-    var text = std.ArrayList(u8).init(allocator);
-    errdefer text.deinit();
-    var tokens = std.ArrayList(u32).init(allocator);
-    errdefer tokens.deinit();
+    var text = std.ArrayListUnmanaged(u8).empty;
+    errdefer text.deinit(allocator);
+    var tokens = std.ArrayListUnmanaged(u32).empty;
+    errdefer tokens.deinit(allocator);
 
     var previous: ?u32 = null;
     for (ids) |id| {
@@ -35,14 +35,14 @@ pub fn decodeIds(
         previous = id;
         if (id == options.blank_id) continue;
         const piece = tokenText(dictionary, id, options.dictionary_base_id) orelse return error.DictionaryTokenNotFound;
-        try text.appendSlice(piece);
-        try tokens.append(id);
+        try text.appendSlice(allocator, piece);
+        try tokens.append(allocator, id);
     }
 
     return .{
         .allocator = allocator,
-        .text = try text.toOwnedSlice(),
-        .token_ids = try tokens.toOwnedSlice(),
+        .text = try text.toOwnedSlice(allocator),
+        .token_ids = try tokens.toOwnedSlice(allocator),
     };
 }
 

@@ -46,6 +46,10 @@ pub const TensorInfo = struct {
     elem_type: ElementType = .{},
     dims: []Dimension = &.{},
     raw_data_len: usize = 0,
+    raw_data: []u8 = &.{},
+    float_data: []f32 = &.{},
+    int32_data: []i32 = &.{},
+    int64_data: []i64 = &.{},
     data_location: u32 = 0,
     external_data: []ExternalDataEntry = &.{},
 
@@ -53,6 +57,10 @@ pub const TensorInfo = struct {
         self.allocator.free(self.name);
         for (self.dims) |dim| dim.deinit(self.allocator);
         self.allocator.free(self.dims);
+        self.allocator.free(self.raw_data);
+        self.allocator.free(self.float_data);
+        self.allocator.free(self.int32_data);
+        self.allocator.free(self.int64_data);
         for (self.external_data) |*entry| entry.deinit();
         self.allocator.free(self.external_data);
         self.* = undefined;
@@ -768,6 +776,12 @@ fn parseTensorProto(allocator: std.mem.Allocator, bytes: []const u8) !TensorInfo
         for (dims.items) |dim| dim.deinit(allocator);
         dims.deinit(allocator);
     }
+    var float_data = std.ArrayListUnmanaged(f32).empty;
+    errdefer float_data.deinit(allocator);
+    var int32_data = std.ArrayListUnmanaged(i32).empty;
+    errdefer int32_data.deinit(allocator);
+    var int64_data = std.ArrayListUnmanaged(i64).empty;
+    errdefer int64_data.deinit(allocator);
     var external_data = std.ArrayListUnmanaged(ExternalDataEntry).empty;
     errdefer deinitExternalDataList(allocator, &external_data);
 
@@ -785,6 +799,9 @@ fn parseTensorProto(allocator: std.mem.Allocator, bytes: []const u8) !TensorInfo
                 if (wire_type != 0) return error.InvalidOnnxTensor;
                 info.elem_type = .{ .raw = @intCast(try reader.readVarint()) };
             },
+            4 => try readFloatDataField(allocator, &reader, wire_type, &float_data),
+            5 => try readInt32DataField(allocator, &reader, wire_type, &int32_data),
+            7 => try readInt64DataField(allocator, &reader, wire_type, &int64_data),
             8 => {
                 if (wire_type != 2) return error.InvalidOnnxTensor;
                 const len: usize = @intCast(try reader.readVarint());
@@ -794,7 +811,9 @@ fn parseTensorProto(allocator: std.mem.Allocator, bytes: []const u8) !TensorInfo
             9 => {
                 if (wire_type != 2) return error.InvalidOnnxTensor;
                 const len: usize = @intCast(try reader.readVarint());
-                _ = try reader.readBytes(len);
+                const raw = try reader.readBytes(len);
+                allocator.free(info.raw_data);
+                info.raw_data = try allocator.dupe(u8, raw);
                 info.raw_data_len = len;
             },
             13 => {
@@ -811,8 +830,73 @@ fn parseTensorProto(allocator: std.mem.Allocator, bytes: []const u8) !TensorInfo
     }
 
     info.dims = try dims.toOwnedSlice(allocator);
+    info.float_data = try float_data.toOwnedSlice(allocator);
+    info.int32_data = try int32_data.toOwnedSlice(allocator);
+    info.int64_data = try int64_data.toOwnedSlice(allocator);
     info.external_data = try external_data.toOwnedSlice(allocator);
     return info;
+}
+
+fn readFloatDataField(
+    allocator: std.mem.Allocator,
+    reader: *Reader,
+    wire_type: u3,
+    out: *std.ArrayListUnmanaged(f32),
+) !void {
+    if (wire_type == 5) {
+        const raw = try reader.readBytes(4);
+        try out.append(allocator, @bitCast(std.mem.readInt(u32, raw[0..4], .little)));
+        return;
+    }
+    if (wire_type == 2) {
+        var packed_reader = Reader{ .bytes = try reader.readBytes(@intCast(try reader.readVarint())) };
+        while (!packed_reader.eof()) {
+            const raw = try packed_reader.readBytes(4);
+            try out.append(allocator, @bitCast(std.mem.readInt(u32, raw[0..4], .little)));
+        }
+        return;
+    }
+    return error.InvalidOnnxTensor;
+}
+
+fn readInt32DataField(
+    allocator: std.mem.Allocator,
+    reader: *Reader,
+    wire_type: u3,
+    out: *std.ArrayListUnmanaged(i32),
+) !void {
+    if (wire_type == 0) {
+        try out.append(allocator, @intCast(try reader.readVarint()));
+        return;
+    }
+    if (wire_type == 2) {
+        var packed_reader = Reader{ .bytes = try reader.readBytes(@intCast(try reader.readVarint())) };
+        while (!packed_reader.eof()) {
+            try out.append(allocator, @intCast(try packed_reader.readVarint()));
+        }
+        return;
+    }
+    return error.InvalidOnnxTensor;
+}
+
+fn readInt64DataField(
+    allocator: std.mem.Allocator,
+    reader: *Reader,
+    wire_type: u3,
+    out: *std.ArrayListUnmanaged(i64),
+) !void {
+    if (wire_type == 0) {
+        try out.append(allocator, @intCast(try reader.readVarint()));
+        return;
+    }
+    if (wire_type == 2) {
+        var packed_reader = Reader{ .bytes = try reader.readBytes(@intCast(try reader.readVarint())) };
+        while (!packed_reader.eof()) {
+            try out.append(allocator, @intCast(try packed_reader.readVarint()));
+        }
+        return;
+    }
+    return error.InvalidOnnxTensor;
 }
 
 fn parseExternalDataEntry(allocator: std.mem.Allocator, bytes: []const u8) !ExternalDataEntry {

@@ -36,16 +36,16 @@ pub fn boxesFromProbabilityMap(
     defer allocator.free(visited);
     @memset(visited, false);
 
-    var stack = std.ArrayList(usize).init(allocator);
-    defer stack.deinit();
-    var boxes = std.ArrayList(Box).init(allocator);
-    errdefer boxes.deinit();
+    var stack = std.ArrayListUnmanaged(usize).empty;
+    defer stack.deinit(allocator);
+    var boxes = std.ArrayListUnmanaged(Box).empty;
+    errdefer boxes.deinit(allocator);
 
     for (map, 0..) |value, index| {
         if (visited[index] or value < options.threshold) continue;
-        const component = try floodFill(map, width, height, options.threshold, visited, &stack, index);
+        const component = try floodFill(allocator, map, width, height, options.threshold, visited, &stack, index);
         if (component.area < options.min_area) continue;
-        try boxes.append(.{
+        try boxes.append(allocator, .{
             .x_min = component.x_min,
             .y_min = component.y_min,
             .x_max = component.x_max,
@@ -55,20 +55,21 @@ pub fn boxesFromProbabilityMap(
         });
     }
 
-    return try boxes.toOwnedSlice();
+    return try boxes.toOwnedSlice(allocator);
 }
 
 fn floodFill(
+    allocator: std.mem.Allocator,
     map: []const f32,
     width: usize,
     height: usize,
     threshold: f32,
     visited: []bool,
-    stack: *std.ArrayList(usize),
+    stack: *std.ArrayListUnmanaged(usize),
     start: usize,
 ) !Component {
     stack.clearRetainingCapacity();
-    try stack.append(start);
+    try stack.append(allocator, start);
     visited[start] = true;
 
     var component = Component{
@@ -81,7 +82,8 @@ fn floodFill(
     };
 
     while (stack.items.len != 0) {
-        const index = stack.pop().?;
+        const index = stack.items[stack.items.len - 1];
+        stack.items.len -= 1;
         const x = index % width;
         const y = index / width;
         const score = map[index];
@@ -93,22 +95,23 @@ fn floodFill(
         component.x_max = @max(component.x_max, x);
         component.y_max = @max(component.y_max, y);
 
-        try pushNeighbor(map, width, height, threshold, visited, stack, x, y, -1, 0);
-        try pushNeighbor(map, width, height, threshold, visited, stack, x, y, 1, 0);
-        try pushNeighbor(map, width, height, threshold, visited, stack, x, y, 0, -1);
-        try pushNeighbor(map, width, height, threshold, visited, stack, x, y, 0, 1);
+        try pushNeighbor(allocator, map, width, height, threshold, visited, stack, x, y, -1, 0);
+        try pushNeighbor(allocator, map, width, height, threshold, visited, stack, x, y, 1, 0);
+        try pushNeighbor(allocator, map, width, height, threshold, visited, stack, x, y, 0, -1);
+        try pushNeighbor(allocator, map, width, height, threshold, visited, stack, x, y, 0, 1);
     }
 
     return component;
 }
 
 fn pushNeighbor(
+    allocator: std.mem.Allocator,
     map: []const f32,
     width: usize,
     height: usize,
     threshold: f32,
     visited: []bool,
-    stack: *std.ArrayList(usize),
+    stack: *std.ArrayListUnmanaged(usize),
     x: usize,
     y: usize,
     dx: isize,
@@ -125,7 +128,7 @@ fn pushNeighbor(
     if (visited[index]) return;
     visited[index] = true;
     if (map[index] < threshold) return;
-    try stack.append(index);
+    try stack.append(allocator, index);
 }
 
 test "paddleocr db postprocess extracts connected box" {
@@ -150,4 +153,3 @@ test "paddleocr db postprocess extracts connected box" {
     try std.testing.expectEqual(@as(usize, 3), boxes[0].area);
     try std.testing.expect(boxes[0].score > 0.79 and boxes[0].score < 0.81);
 }
-

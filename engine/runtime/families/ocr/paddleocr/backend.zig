@@ -65,6 +65,66 @@ fn execute(
         loaded.onnx_metadata
     else
         inference.planning.onnx_metadata.inspect(allocator, handle.normalized.artifacts.model_dir) catch inference.planning.onnx_metadata.Summary{};
+    const image_path = switch (request.input) {
+        .image_path => request.input.asString(),
+        else => null,
+    };
+    var image_graph_model_path: ?[]u8 = null;
+    defer if (image_graph_model_path) |path| allocator.free(path);
+    var image_graph_result: ?inference.runtime.ImageModelResult = null;
+    defer if (image_graph_result) |*result| result.deinit();
+    var image_graph_error: ?[]const u8 = null;
+    var postprocess_error: ?[]const u8 = null;
+    var detected_boxes: ?[]postprocess.db.Box = null;
+    defer if (detected_boxes) |boxes| allocator.free(boxes);
+    var dictionary_path: ?[]u8 = null;
+    defer if (dictionary_path) |path| allocator.free(path);
+    var dictionary: ?postprocess.dictionary.Dictionary = null;
+    defer if (dictionary) |*loaded| loaded.deinit();
+    var recognized_text: ?postprocess.ctc.DecodedText = null;
+    defer if (recognized_text) |*text| text.deinit();
+    if (image_path) |path| {
+        image_graph_model_path = inference.runtime.findFirstOnnxModelFile(allocator, handle.normalized.artifacts.model_dir) catch |err| blk: {
+            image_graph_error = @errorName(err);
+            break :blk null;
+        };
+        if (image_graph_model_path) |model_path| {
+            image_graph_result = inference.runtime.executeImageModelFile(allocator, model_path, path, .{}) catch |err| blk: {
+                image_graph_error = @errorName(err);
+                break :blk null;
+            };
+        }
+    }
+    const image_graph_stage = if (image_graph_model_path) |model_path| inference.runtime.stageFromPath(model_path) else .unknown;
+    if (image_graph_result) |*result| {
+        switch (image_graph_stage) {
+            .det => {
+                detected_boxes = inference.runtime.boxesFromDetectionResult(allocator, &result.outputs, .{}) catch |err| blk: {
+                    postprocess_error = @errorName(err);
+                    break :blk null;
+                };
+            },
+            .rec => {
+                dictionary_path = inference.runtime.findFirstDictionaryFile(allocator, handle.normalized.artifacts.model_dir) catch |err| blk: {
+                    postprocess_error = @errorName(err);
+                    break :blk null;
+                };
+                if (dictionary_path) |path| {
+                    dictionary = postprocess.dictionary.loadFromFile(allocator, path) catch |err| blk: {
+                        postprocess_error = @errorName(err);
+                        break :blk null;
+                    };
+                }
+                if (dictionary) |loaded| {
+                    recognized_text = inference.runtime.decodeRecognitionResult(allocator, &result.outputs, loaded.tokens) catch |err| blk: {
+                        postprocess_error = @errorName(err);
+                        break :blk null;
+                    };
+                }
+            },
+            else => {},
+        }
+    }
 
     const Receipt = struct {
         status: []const u8,
@@ -96,6 +156,21 @@ fn execute(
         onnx_metadata_unsupported_ops: []const inference.planning.onnx_metadata.UnsupportedOpEntry,
         ctc_postprocess_ready: bool,
         db_postprocess_ready: bool,
+        image_graph_execute_attempted: bool,
+        image_graph_executed: bool,
+        image_graph_model_path: ?[]const u8,
+        image_graph_stage: []const u8,
+        image_graph_input_name: ?[]const u8,
+        image_graph_input_shape: ?[]const usize,
+        image_graph_output_count: usize,
+        image_graph_first_output_name: ?[]const u8,
+        image_graph_first_output_shape: ?[]const usize,
+        image_graph_error: ?[]const u8,
+        detection_box_count: usize,
+        recognition_text: ?[]const u8,
+        recognition_token_count: usize,
+        dictionary_path: ?[]const u8,
+        postprocess_error: ?[]const u8,
         message: []const u8,
     };
 
@@ -129,7 +204,22 @@ fn execute(
         .onnx_metadata_unsupported_ops = onnx_metadata.unsupported_ops[0..onnx_metadata.unsupported_op_entry_count],
         .ctc_postprocess_ready = @hasDecl(postprocess, "ctc"),
         .db_postprocess_ready = @hasDecl(postprocess, "db"),
-        .message = "PaddleOCR is routed through the unified runtime. Native zero-dependency PP-OCRv5 detection, recognition, classification, and postprocess execution will be enabled by expanding shared graph ops and Paddle/ONNX model loading.",
+        .image_graph_execute_attempted = image_path != null and image_graph_model_path != null,
+        .image_graph_executed = image_graph_result != null,
+        .image_graph_model_path = image_graph_model_path,
+        .image_graph_stage = image_graph_stage.name(),
+        .image_graph_input_name = if (image_graph_result) |result| result.input_name else null,
+        .image_graph_input_shape = if (image_graph_result) |result| result.input_shape else null,
+        .image_graph_output_count = if (image_graph_result) |result| result.outputs.outputs.len else 0,
+        .image_graph_first_output_name = if (image_graph_result) |result| if (result.outputs.outputs.len != 0) result.outputs.outputs[0].name else null else null,
+        .image_graph_first_output_shape = if (image_graph_result) |result| if (result.outputs.outputs.len != 0) result.outputs.outputs[0].tensor.shape else null else null,
+        .image_graph_error = image_graph_error,
+        .detection_box_count = if (detected_boxes) |boxes| boxes.len else 0,
+        .recognition_text = if (recognized_text) |text| text.text else null,
+        .recognition_token_count = if (recognized_text) |text| text.token_ids.len else 0,
+        .dictionary_path = dictionary_path,
+        .postprocess_error = postprocess_error,
+        .message = "PaddleOCR is routed through the unified runtime. Native zero-dependency PP-OCRv5 graph execution now loads ONNX initializers and runs static NCHW image graphs; full det-to-rec multi-stage OCR quality depends on remaining operator coverage and model-specific dynamic-shape handling.",
     };
 
     var out: std.Io.Writer.Allocating = .init(allocator);

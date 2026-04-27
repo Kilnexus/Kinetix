@@ -1,6 +1,7 @@
 const std = @import("std");
 const onnx_metadata = @import("../onnx/metadata.zig");
 const tensor_mod = @import("tensor.zig");
+const graph_weights = @import("../weights/index.zig");
 const graph_ops = @import("shared_ops").graph;
 
 pub const Tensor = tensor_mod.Tensor;
@@ -56,8 +57,46 @@ pub fn execute(
     graph: onnx_metadata.GraphMetadata,
     inputs: []const NamedTensor,
 ) !ExecutionResult {
+    return try executeInternal(allocator, graph, inputs, null);
+}
+
+pub fn executeWithExternalData(
+    allocator: std.mem.Allocator,
+    graph: onnx_metadata.GraphMetadata,
+    inputs: []const NamedTensor,
+    external_data_dir: []const u8,
+) !ExecutionResult {
+    var store = try graph_weights.external.Store.init(allocator, external_data_dir);
+    defer store.deinit();
+    return try executeInternal(allocator, graph, inputs, &store);
+}
+
+pub fn executeModelFile(
+    allocator: std.mem.Allocator,
+    model_path: []const u8,
+    inputs: []const NamedTensor,
+) !ExecutionResult {
+    var model = try onnx_metadata.loadFromFile(allocator, model_path);
+    defer model.deinit();
+    const external_data_dir = std.fs.path.dirname(model_path) orelse ".";
+    return try executeWithExternalData(allocator, model.graph, inputs, external_data_dir);
+}
+
+fn executeInternal(
+    allocator: std.mem.Allocator,
+    graph: onnx_metadata.GraphMetadata,
+    inputs: []const NamedTensor,
+    external_store: ?*graph_weights.external.Store,
+) !ExecutionResult {
     var table = ValueTable{ .allocator = allocator };
     defer table.deinit();
+
+    for (graph.initializers) |initializer| {
+        if (initializer.name.len == 0) continue;
+        var tensor = try graph_weights.initializer.materialize(allocator, initializer, external_store);
+        errdefer tensor.deinit();
+        try table.putOwned(initializer.name, tensor);
+    }
 
     for (inputs) |input| {
         try table.putOwned(input.name, try input.tensor.clone(allocator));
@@ -135,6 +174,22 @@ test "runtime executor runs simple graph" {
     try std.testing.expectEqualSlices(f32, &.{50}, result.outputs[0].tensor.buffer.f32);
 }
 
+test "runtime executor preloads onnx initializers" {
+    var graph = try onnx_metadata.parseModel(std.testing.allocator, try initializerModelBytes(std.testing.allocator));
+    defer graph.deinit();
+
+    var input = try Tensor.fromF32(std.testing.allocator, &.{ 1, 2 }, &.{ 1, 2 });
+    defer input.deinit();
+
+    var result = try execute(std.testing.allocator, graph.graph, &.{
+        .{ .name = "x", .tensor = input },
+    });
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), result.outputs.len);
+    try std.testing.expectEqualSlices(f32, &.{50}, result.outputs[0].tensor.buffer.f32);
+}
+
 test "runtime executor runs constant reshape graph" {
     var graph = try onnx_metadata.parseModel(std.testing.allocator, try reshapeModelBytes(std.testing.allocator));
     defer graph.deinit();
@@ -182,6 +237,40 @@ fn simpleModelBytes(allocator: std.mem.Allocator) ![]u8 {
     try appendVarintField(&model, 1, 8);
     try appendMessageField(&model, 7, graph.items);
     return try model.toOwnedSlice();
+}
+
+fn initializerModelBytes(allocator: std.mem.Allocator) ![]u8 {
+    var graph = std.ArrayList(u8).init(allocator);
+    defer graph.deinit();
+    try appendStringField(&graph, 2, "initializer");
+    try appendOwnedMessageField(&graph, 11, try valueInfoMessage(allocator, "x", 1, &.{ 1, 2 }));
+    try appendOwnedMessageField(&graph, 5, try tensorRawF32Message(allocator, "w", &.{ 2, 1 }, &.{ 10, 20 }));
+    try appendOwnedMessageField(&graph, 12, try valueInfoMessage(allocator, "y", 1, &.{ 1, 1 }));
+    try appendOwnedMessageField(&graph, 1, try nodeMessage(allocator, "matmul", "MatMul", &.{ "x", "w" }, &.{"y"}));
+
+    var model = std.ArrayList(u8).init(allocator);
+    errdefer model.deinit();
+    try appendVarintField(&model, 1, 8);
+    try appendMessageField(&model, 7, graph.items);
+    return try model.toOwnedSlice();
+}
+
+fn tensorRawF32Message(allocator: std.mem.Allocator, name: []const u8, dims: []const i64, values: []const f32) ![]u8 {
+    var raw = std.ArrayList(u8).init(allocator);
+    defer raw.deinit();
+    for (values) |value| {
+        var bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, bytes[0..4], @bitCast(value), .little);
+        try raw.appendSlice(&bytes);
+    }
+
+    var out = std.ArrayList(u8).init(allocator);
+    errdefer out.deinit();
+    for (dims) |dim| try appendVarintField(&out, 1, @intCast(dim));
+    try appendVarintField(&out, 2, 1);
+    try appendStringField(&out, 8, name);
+    try appendMessageField(&out, 9, raw.items);
+    return try out.toOwnedSlice();
 }
 
 fn reshapeModelBytes(allocator: std.mem.Allocator) ![]u8 {
