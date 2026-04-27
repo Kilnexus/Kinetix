@@ -1,4 +1,5 @@
 const std = @import("std");
+const abi = @import("runtime_abi");
 
 pub const Modality = enum {
     vision,
@@ -19,6 +20,7 @@ pub const ExecutionMode = enum {
 pub const TaskSpec = struct {
     modality: Modality,
     operation: []const u8,
+    operation_id: abi.Operation = .infer,
     model_family: []const u8,
     adapter_id: ?[]const u8 = null,
     model_name: ?[]const u8 = null,
@@ -62,9 +64,11 @@ test "task spec defaults are stable" {
     const spec = TaskSpec{
         .modality = .text,
         .operation = "generate",
+        .operation_id = .generate,
         .model_family = "qwen3",
     };
 
+    try std.testing.expectEqual(abi.Operation.generate, spec.operation_id);
     try std.testing.expectEqual(ExecutionMode.sync, spec.execution);
     try std.testing.expect(spec.allows_batching);
     try std.testing.expectEqual(@as(u8, 0), spec.priority);
@@ -75,6 +79,7 @@ test "task request carries typed payload and generation options" {
         .spec = .{
             .modality = .text,
             .operation = "generate",
+            .operation_id = .generate,
             .model_family = "qwen3",
         },
         .input = .{ .text = "hello" },

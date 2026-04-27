@@ -20,6 +20,22 @@ pub fn sigmoid(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Ten
     };
 }
 
+pub fn tanh(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Tensor {
+    if (inputs.len != 1) return error.InvalidOperatorArity;
+    const input = inputs[0].*;
+    if (input.buffer != .f32) return error.UnsupportedTensorDType;
+    const out = try allocator.alloc(f32, input.buffer.f32.len);
+    errdefer allocator.free(out);
+    for (input.buffer.f32, out) |value, *slot| {
+        slot.* = std.math.tanh(value);
+    }
+    return .{
+        .allocator = allocator,
+        .shape = try allocator.dupe(usize, input.shape),
+        .buffer = .{ .f32 = out },
+    };
+}
+
 pub fn leakyRelu(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
     if (inputs.len != 1) return error.InvalidOperatorArity;
     const input = inputs[0].*;

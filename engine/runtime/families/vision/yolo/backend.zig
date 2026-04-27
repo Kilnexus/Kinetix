@@ -95,6 +95,7 @@ fn execute(
         loaded_summary.?;
 
     var detection_output = detect: {
+        const operation_id = request.resolvedOperationId();
         if (maybe_state) |state| {
             if (state.graph) |*model_graph| {
                 if (state.weights) |*weights_blob| {
@@ -102,7 +103,7 @@ fn execute(
                         allocator,
                         model_graph,
                         weights_blob,
-                        request.operation,
+                        operation_id,
                         request.execution,
                         request.input.asString(),
                     );
@@ -113,7 +114,7 @@ fn execute(
             allocator,
             graph_path,
             weights_path,
-            request.operation,
+            operation_id,
             request.execution,
             request.input.asString(),
         );

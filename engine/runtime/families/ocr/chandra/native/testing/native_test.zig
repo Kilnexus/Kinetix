@@ -204,6 +204,7 @@ test "native chandra execute preprocesses image and runs patch embedding stage" 
 
     const payload = try exec.execute(std.testing.allocator, .{
         .operation = "render-markdown",
+        .operation_id = .render_markdown,
         .model_path = root_path,
         .input_path = image_path,
         .execution = .sync,
@@ -537,6 +538,7 @@ test "native chandra execute exposes mrope prefill metadata" {
 
     const payload = try exec.execute(std.testing.allocator, .{
         .operation = "render-markdown",
+        .operation_id = .render_markdown,
         .model_path = root_path,
         .input_path = image_path,
         .execution = .sync,
@@ -627,6 +629,7 @@ test "native chandra execute decodes content with synthetic tokenizer" {
 
     const payload = try exec.execute(std.testing.allocator, .{
         .operation = "render-markdown",
+        .operation_id = .render_markdown,
         .model_path = root_path,
         .input_path = image_path,
         .execution = .sync,
@@ -719,6 +722,7 @@ test "native chandra detailed execution materializes markdown output" {
 
     const context = core.Context{
         .operation = "render-markdown",
+        .operation_id = .render_markdown,
         .model_path = root_path,
         .input_path = image_path,
         .execution = .sync,
@@ -728,7 +732,7 @@ test "native chandra detailed execution materializes markdown output" {
     var result = try exec.executeDetailed(std.testing.allocator, context);
     defer result.deinit(std.testing.allocator);
 
-    var materialized = (try result.materializeOutput(std.testing.allocator, context.operation)) orelse return error.ExpectedMaterializedOutput;
+    var materialized = (try result.materializeOutput(std.testing.allocator, context.operation_id)) orelse return error.ExpectedMaterializedOutput;
     defer materialized.deinit(std.testing.allocator);
 
     try std.testing.expectEqualStrings("OCR", materialized.text);

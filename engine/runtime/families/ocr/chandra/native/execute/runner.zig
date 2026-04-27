@@ -36,15 +36,15 @@ pub const NativeExecutionResult = struct {
     pub fn materializeOutput(
         self: *const NativeExecutionResult,
         allocator: std.mem.Allocator,
-        operation: []const u8,
+        operation: core.Operation,
     ) !?MaterializedOutput {
         const summary = self.summary orelse return null;
         const generated = summary.generated_output orelse return null;
 
-        if (std.mem.eql(u8, operation, "render-json")) {
-            return .{ .json = try allocator.dupe(u8, generated) };
-        }
-        return .{ .text = try allocator.dupe(u8, generated) };
+        return switch (operation) {
+            .render_json => .{ .json = try allocator.dupe(u8, generated) },
+            else => .{ .text = try allocator.dupe(u8, generated) },
+        };
     }
 
     pub fn toJsonAlloc(
@@ -288,7 +288,7 @@ fn runTextPipeline(
     ) catch null;
     defer if (tokenizer) |*loaded| loaded.deinit();
 
-    const prompt_token_ids = try encodePromptTokenIds(allocator, context.operation, &text_runtime, if (tokenizer) |*loaded| loaded else null);
+    const prompt_token_ids = try encodePromptTokenIds(allocator, context.operation_id, &text_runtime, if (tokenizer) |*loaded| loaded else null);
     defer if (prompt_token_ids) |ids| allocator.free(ids);
     if (prompt_token_ids) |ids| summary.text_prompt_token_count = ids.len;
 
@@ -410,7 +410,7 @@ fn runTextPipeline(
 
 fn encodePromptTokenIds(
     allocator: std.mem.Allocator,
-    operation: []const u8,
+    operation: core.Operation,
     runtime: *const decoder_runtime.Runtime,
     tokenizer: ?*decoder_family.Tokenizer,
 ) !?[]usize {
@@ -536,7 +536,7 @@ fn buildOutputJson(
         .input_path = context.input_path,
         .backend = "kinetix_native",
         .method = "native",
-        .requested_output = requestedOutput(context.operation),
+        .requested_output = requestedOutput(context.operation_id),
         .native_stage = if (preprocess_summary) |summary|
             if (summary.text_decode_executed)
                 "text_decode"
@@ -560,21 +560,21 @@ fn buildOutputJson(
             "model_loading",
         .content = if (preprocess_summary) |summary| summary.generated_output else null,
         .markdown = if (preprocess_summary) |summary|
-            if (std.mem.eql(u8, context.operation, "render-markdown"))
+            if (context.operation_id == .render_markdown)
                 summary.generated_output
             else
                 null
         else
             null,
         .html = if (preprocess_summary) |summary|
-            if (std.mem.eql(u8, context.operation, "render-html"))
+            if (context.operation_id == .render_html)
                 summary.generated_output
             else
                 null
         else
             null,
         .json_output = if (preprocess_summary) |summary|
-            if (std.mem.eql(u8, context.operation, "render-json"))
+            if (context.operation_id == .render_json)
                 summary.generated_output
             else
                 null
@@ -644,16 +644,20 @@ fn buildOutputJson(
     return try allocator.dupe(u8, out.written());
 }
 
-fn requestedOutput(operation: []const u8) []const u8 {
-    if (std.mem.eql(u8, operation, "render-markdown")) return "markdown";
-    if (std.mem.eql(u8, operation, "render-html")) return "html";
-    if (std.mem.eql(u8, operation, "render-json")) return "json";
-    return "markdown";
+fn requestedOutput(operation: core.Operation) []const u8 {
+    return switch (operation) {
+        .render_markdown, .ocr => "markdown",
+        .render_html => "html",
+        .render_json => "json",
+        else => "markdown",
+    };
 }
 
-fn instructionForOperation(operation: []const u8) []const u8 {
-    if (std.mem.eql(u8, operation, "render-markdown")) return "Read the document image and transcribe it as markdown.";
-    if (std.mem.eql(u8, operation, "render-html")) return "Read the document image and transcribe it as semantic HTML.";
-    if (std.mem.eql(u8, operation, "render-json")) return "Read the document image and transcribe it as structured JSON.";
-    return "Read the document image and transcribe all visible text.";
+fn instructionForOperation(operation: core.Operation) []const u8 {
+    return switch (operation) {
+        .render_markdown => "Read the document image and transcribe it as markdown.",
+        .render_html => "Read the document image and transcribe it as semantic HTML.",
+        .render_json => "Read the document image and transcribe it as structured JSON.",
+        else => "Read the document image and transcribe all visible text.",
+    };
 }

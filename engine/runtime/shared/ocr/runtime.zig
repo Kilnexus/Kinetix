@@ -1,6 +1,7 @@
 const std = @import("std");
 const ocr_pipeline = @import("../../ocr_pipeline.zig");
 const task = @import("../../../core/task.zig");
+const types = @import("../../types.zig");
 
 pub const InferResult = ocr_pipeline.InferResult;
 
@@ -14,11 +15,11 @@ pub const ReceiptContext = struct {
 pub fn maybeRunInfer(
     allocator: std.mem.Allocator,
     model_path: []const u8,
-    operation: []const u8,
+    operation_id: types.RuntimeOperation,
     execution: task.ExecutionMode,
     input_path: ?[]const u8,
 ) !?InferResult {
-    if (!std.mem.eql(u8, operation, "infer-ocr")) return null;
+    if (operation_id != .ocr) return null;
     if (execution != .sync) return null;
 
     const image_path = input_path orelse return null;

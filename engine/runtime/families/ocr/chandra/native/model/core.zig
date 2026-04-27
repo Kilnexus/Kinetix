@@ -1,4 +1,5 @@
 const std = @import("std");
+const abi = @import("runtime_abi");
 const task = @import("../../../../../../core/task.zig");
 const preprocess = @import("../../preprocess.zig");
 const store = @import("../../store.zig");
@@ -7,6 +8,7 @@ const decoder_types = @import("../../../../../text/decoder_types.zig");
 const input = @import("../input/loader.zig");
 
 pub const io = std.Options.debug_io;
+pub const Operation = abi.Operation;
 
 pub const TextConfig = struct {
     model_type: []const u8,
@@ -63,6 +65,7 @@ pub const ParsedConfig = struct {
 
 pub const Context = struct {
     operation: []const u8,
+    operation_id: abi.Operation = .ocr,
     model_path: []const u8,
     input_path: []const u8,
     execution: task.ExecutionMode,

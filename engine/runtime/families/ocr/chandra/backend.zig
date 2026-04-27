@@ -83,6 +83,7 @@ fn execute(
     const input_path = request.input.asString() orelse return error.MissingInputPayload;
     const context = chandra_native.Context{
         .operation = request.operation,
+        .operation_id = request.resolvedOperationId(),
         .model_path = handle.normalized.artifacts.model_dir,
         .input_path = input_path,
         .execution = request.execution,
@@ -100,7 +101,7 @@ fn execute(
         try chandra_native.executeDetailed(allocator, context);
     defer native_result.deinit(allocator);
 
-    if (try native_result.materializeOutput(allocator, request.operation)) |materialized| {
+    if (try native_result.materializeOutput(allocator, request.resolvedOperationId())) |materialized| {
         defer {
             var owned = materialized;
             owned.deinit(allocator);

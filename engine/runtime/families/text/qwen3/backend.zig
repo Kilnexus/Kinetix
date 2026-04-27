@@ -155,6 +155,7 @@ fn buildTaskRequest(handle: *const handle_mod.ModelHandle, request: types.Runtim
         .spec = .{
             .modality = handle.normalized.descriptor.modality,
             .operation = request.operation,
+            .operation_id = request.resolvedOperationId(),
             .model_family = handle.normalized.descriptor.family,
             .adapter_id = handle.normalized.descriptor.id,
             .execution = request.execution,

@@ -134,7 +134,7 @@ pub fn executeQwenBatch(
 fn canUseNativeQwenSingle(request: task.TaskRequest) bool {
     if (!request.generation.native_execution) return false;
     if (request.spec.execution != .sync) return false;
-    if (!std.mem.eql(u8, request.spec.operation, "generate") and !std.mem.eql(u8, request.spec.operation, "chat")) return false;
+    if (!isQwenGenerationOperation(request.spec.operation_id)) return false;
     return switch (request.input) {
         .none, .text => true,
         else => false,
@@ -147,7 +147,7 @@ fn canUseNativeQwenBatch(requests: []const task.TaskRequest) bool {
     for (requests, 0..) |request, index| {
         if (!request.generation.native_execution) return false;
         if (request.spec.execution != .sync) return false;
-        if (!std.mem.eql(u8, request.spec.operation, "generate") and !std.mem.eql(u8, request.spec.operation, "chat")) return false;
+        if (!isQwenGenerationOperation(request.spec.operation_id)) return false;
         switch (request.input) {
             .text => {},
             else => return false,
@@ -157,6 +157,10 @@ fn canUseNativeQwenBatch(requests: []const task.TaskRequest) bool {
     }
 
     return true;
+}
+
+fn isQwenGenerationOperation(operation: types.RuntimeOperation) bool {
+    return operation == .generate or operation == .chat;
 }
 
 fn buildNativeQwenBatchResults(

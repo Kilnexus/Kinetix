@@ -283,6 +283,7 @@ fn defaultOperation(descriptor: runtime_types.Descriptor) []const u8 {
 
 const ResolvedRequest = struct {
     operation: []const u8,
+    operation_id: runtime_types.RuntimeOperation,
     input: task.InputPayload,
     execution: task.ExecutionMode,
     generation: task.GenerationOptions,
@@ -297,6 +298,7 @@ fn buildTaskRequest(descriptor: runtime_types.Descriptor, request: ContextReques
         .spec = .{
             .modality = descriptor.modality,
             .operation = resolved.operation,
+            .operation_id = resolved.operation_id,
             .model_family = model_family,
             .adapter_id = descriptor.id,
             .execution = resolved.execution,
@@ -318,6 +320,7 @@ fn buildTaskRequests(allocator: std.mem.Allocator, descriptor: runtime_types.Des
             .spec = .{
                 .modality = descriptor.modality,
                 .operation = resolved.operation,
+                .operation_id = resolved.operation_id,
                 .model_family = model_family,
                 .adapter_id = descriptor.id,
                 .execution = resolved.execution,
@@ -345,7 +348,7 @@ fn buildRuntimeRequest(descriptor: runtime_types.Descriptor, request: ContextReq
     const resolved = resolveContextRequest(descriptor, request);
     return .{
         .operation = resolved.operation,
-        .operation_id = runtime_types.RuntimeOperation.parse(resolved.operation) orelse .infer,
+        .operation_id = resolved.operation_id,
         .input = resolved.input,
         .execution = resolved.execution,
         .generation = resolved.generation,
@@ -365,7 +368,7 @@ fn buildRuntimeBatchRequest(
         const resolved = resolveContextBatchItem(descriptor, item);
         slot.* = .{
             .operation = resolved.operation,
-            .operation_id = runtime_types.RuntimeOperation.parse(resolved.operation) orelse .infer,
+            .operation_id = resolved.operation_id,
             .input = resolved.input,
             .execution = resolved.execution,
             .generation = resolved.generation,
@@ -380,8 +383,10 @@ fn buildRuntimeBatchRequest(
 }
 
 fn resolveContextRequest(descriptor: runtime_types.Descriptor, request: ContextRequest) ResolvedRequest {
+    const operation = request.operation orelse defaultOperation(descriptor);
     return .{
-        .operation = request.operation orelse defaultOperation(descriptor),
+        .operation = operation,
+        .operation_id = runtime_types.RuntimeOperation.parse(operation) orelse .infer,
         .input = inferInputPayload(descriptor.modality, request.input),
         .execution = request.execution,
         .generation = .{
@@ -392,8 +397,10 @@ fn resolveContextRequest(descriptor: runtime_types.Descriptor, request: ContextR
 }
 
 fn resolveContextBatchItem(descriptor: runtime_types.Descriptor, item: ContextBatchItem) ResolvedRequest {
+    const operation = item.operation orelse defaultOperation(descriptor);
     return .{
-        .operation = item.operation orelse defaultOperation(descriptor),
+        .operation = operation,
+        .operation_id = runtime_types.RuntimeOperation.parse(operation) orelse .infer,
         .input = inferInputPayload(descriptor.modality, item.input),
         .execution = item.execution orelse .sync,
         .generation = .{

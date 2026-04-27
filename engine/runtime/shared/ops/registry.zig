@@ -1,4 +1,5 @@
 const std = @import("std");
+const abi = @import("runtime_abi");
 
 pub const Domain = enum {
     onnx_graph,
@@ -20,6 +21,10 @@ pub const Entry = struct {
     domain: Domain,
     status: Status,
     module: []const u8,
+
+    pub fn kernelAbi(self: Entry) abi.KernelAbi {
+        return kernelAbiForEntry(self);
+    }
 };
 
 pub const Summary = struct {
@@ -39,9 +44,12 @@ pub const entries = [_]Entry{
     .{ .name = "Constant", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
     .{ .name = "Identity", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
     .{ .name = "Add", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
+    .{ .name = "Sub", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
     .{ .name = "Mul", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
+    .{ .name = "Div", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
     .{ .name = "Relu", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
     .{ .name = "Sigmoid", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/activation/index.zig" },
+    .{ .name = "Tanh", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/activation/index.zig" },
     .{ .name = "LeakyRelu", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/activation/index.zig" },
     .{ .name = "Gelu", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/activation/index.zig" },
     .{ .name = "SwiGLU", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/activation/index.zig" },
@@ -139,6 +147,12 @@ pub fn isGraphExecutableOnnx(name: []const u8) bool {
     return false;
 }
 
+pub fn findGraphExecutableOnnx(name: []const u8) ?Entry {
+    const entry = find(name, .onnx_graph) orelse return null;
+    if (entry.status != .graph_executable) return null;
+    return entry;
+}
+
 pub fn hasNativeKernel(name: []const u8) bool {
     for (entries) |entry| {
         if (entry.status == .native_kernel and std.mem.eql(u8, entry.name, name)) return true;
@@ -182,17 +196,67 @@ pub fn summarize() Summary {
     return summary;
 }
 
+pub fn kernelAbiForEntry(entry: Entry) abi.KernelAbi {
+    return .{
+        .class = kernelClassForEntry(entry),
+        .input = tensorAbiForDomain(entry.domain),
+        .output = tensorAbiForDomain(entry.domain),
+        .specialized = entry.status == .native_kernel,
+    };
+}
+
+fn kernelClassForEntry(entry: Entry) abi.KernelClass {
+    if (entry.status == .graph_executable) return .graph_op;
+    return switch (entry.domain) {
+        .onnx_graph => .graph_op,
+        .vision_nn => visionKernelClass(entry.name),
+        .text_core => textCoreKernelClass(entry.name),
+        .text_attention, .text_gqa => .attention,
+        .text_quantized => .quantized,
+    };
+}
+
+fn tensorAbiForDomain(domain: Domain) abi.TensorAbi {
+    return switch (domain) {
+        .onnx_graph => .{ .scalar = .f32, .layout = .contiguous, .rank = 4 },
+        .vision_nn => .{ .scalar = .f32, .layout = .nchw, .rank = 4 },
+        .text_core => .{ .scalar = .f32, .layout = .contiguous, .rank = 2 },
+        .text_attention, .text_gqa => .{ .scalar = .f32, .layout = .head_major, .rank = 3 },
+        .text_quantized => .{ .scalar = .q8, .layout = .row_major, .rank = 2 },
+    };
+}
+
+fn visionKernelClass(name: []const u8) abi.KernelClass {
+    if (std.mem.indexOf(u8, name, "Conv") != null) return .conv;
+    if (std.mem.indexOf(u8, name, "Pool") != null) return .pooling;
+    if (std.mem.indexOf(u8, name, "Concat") != null or std.mem.indexOf(u8, name, "Copy") != null or std.mem.indexOf(u8, name, "Upsample") != null) return .layout;
+    if (std.mem.indexOf(u8, name, "MatMul") != null or std.mem.indexOf(u8, name, "Softmax") != null) return .linalg;
+    return .activation;
+}
+
+fn textCoreKernelClass(name: []const u8) abi.KernelClass {
+    if (std.mem.indexOf(u8, name, "Norm") != null) return .normalization;
+    if (std.mem.indexOf(u8, name, "MatMul") != null or std.mem.indexOf(u8, name, "Dot") != null or std.mem.indexOf(u8, name, "Axpy") != null) return .linalg;
+    return .activation;
+}
+
 test "unified ops registry includes graph executable and native kernels" {
     try std.testing.expect(isGraphExecutableOnnx("MatMul"));
     try std.testing.expect(isGraphExecutableOnnx("LayerNormalization"));
     try std.testing.expect(isGraphExecutableOnnx("RMSNormalization"));
     try std.testing.expect(isGraphExecutableOnnx("Sigmoid"));
+    try std.testing.expect(isGraphExecutableOnnx("Sub"));
+    try std.testing.expect(isGraphExecutableOnnx("Div"));
+    try std.testing.expect(isGraphExecutableOnnx("Tanh"));
     try std.testing.expect(isGraphExecutableOnnx("Conv"));
     try std.testing.expect(isGraphExecutableOnnx("MaxPool"));
     try std.testing.expect(isGraphExecutableOnnx("SwiGLU"));
     try std.testing.expect(has("Conv2d", .vision_nn));
     try std.testing.expect(has("RmsNorm", .text_core));
     try std.testing.expect(has("MatMulQ8Rows", .text_quantized));
+    try std.testing.expectEqual(abi.KernelClass.graph_op, findGraphExecutableOnnx("MatMul").?.kernelAbi().class);
+    try std.testing.expectEqual(abi.KernelClass.conv, find("Conv2d", .vision_nn).?.kernelAbi().class);
+    try std.testing.expectEqual(abi.KernelClass.quantized, find("MatMulQ8Rows", .text_quantized).?.kernelAbi().class);
     try std.testing.expect(countByStatus(.graph_executable) >= 18);
     try std.testing.expect(countByStatus(.native_kernel) >= 45);
     const summary = summarize();

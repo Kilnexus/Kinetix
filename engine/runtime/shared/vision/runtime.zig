@@ -164,11 +164,11 @@ pub fn maybeRunDetect(
     allocator: std.mem.Allocator,
     graph_path: []const u8,
     weights_path: []const u8,
-    operation: []const u8,
+    operation_id: types.RuntimeOperation,
     execution: task.ExecutionMode,
     input_path: ?[]const u8,
 ) !?DetectOutput {
-    if (!std.mem.eql(u8, operation, "detect")) return null;
+    if (operation_id != .detect) return null;
     if (execution != .sync) return null;
     if (input_path == null) return null;
 
@@ -198,7 +198,7 @@ pub fn maybeRunDetect(
         allocator,
         &model_graph,
         &weights_blob,
-        operation,
+        operation_id,
         execution,
         input_path,
     );
@@ -208,11 +208,11 @@ pub fn maybeRunDetectWithLoaded(
     allocator: std.mem.Allocator,
     model_graph: *const Graph,
     weights_blob: *const WeightsBlob,
-    operation: []const u8,
+    operation_id: types.RuntimeOperation,
     execution: task.ExecutionMode,
     input_path: ?[]const u8,
 ) !?DetectOutput {
-    if (!std.mem.eql(u8, operation, "detect")) return null;
+    if (operation_id != .detect) return null;
     if (execution != .sync) return null;
 
     const image_path = input_path orelse return null;

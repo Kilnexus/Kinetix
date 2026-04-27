@@ -4,7 +4,7 @@ const common = @import("../common.zig");
 
 const Tensor = common.Tensor;
 
-pub const ElementwiseMode = enum { add, mul };
+pub const ElementwiseMode = enum { add, sub, mul, div };
 
 pub fn constant(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
     if (inputs.len != 0) return error.InvalidOperatorArity;
@@ -37,7 +37,9 @@ pub fn elementwise(allocator: std.mem.Allocator, inputs: []const *const Tensor, 
     for (lhs.buffer.f32, rhs.buffer.f32, out) |a, b, *slot| {
         slot.* = switch (mode) {
             .add => a + b,
+            .sub => a - b,
             .mul => a * b,
+            .div => a / b,
         };
     }
     return .{

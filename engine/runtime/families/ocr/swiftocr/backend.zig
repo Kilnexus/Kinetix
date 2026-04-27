@@ -66,6 +66,7 @@ fn execute(
     const model_path = handle.normalized.artifacts.ocr_model_path orelse return error.MissingOCRModelArtifact;
     const context = swiftocr_native.Context{
         .operation = request.operation,
+        .operation_id = request.resolvedOperationId(),
         .model_path = model_path,
         .input_path = input_path,
         .execution = request.execution,

@@ -2,11 +2,13 @@ const std = @import("std");
 const ocr_artifacts = @import("../../../../artifacts/ocr/ocr.zig");
 const ocr_pipeline = @import("../../../ocr_pipeline.zig");
 const task = @import("../../../../core/task.zig");
+const types = @import("../../../types.zig");
 
 pub const InferResult = ocr_pipeline.InferResult;
 
 pub const Context = struct {
     operation: []const u8,
+    operation_id: types.RuntimeOperation = .ocr,
     model_path: []const u8,
     input_path: []const u8,
     execution: task.ExecutionMode,
@@ -27,7 +29,7 @@ pub fn executeWithLoadedModel(
 }
 
 fn maybeRunInfer(allocator: std.mem.Allocator, context: Context) !?InferResult {
-    if (!std.mem.eql(u8, context.operation, "infer-ocr")) return null;
+    if (context.operation_id != .ocr) return null;
     if (context.execution != .sync) return null;
 
     var pipeline = ocr_pipeline.OCRPipeline.init(allocator);
@@ -43,7 +45,7 @@ fn maybeRunInferWithLoadedModel(
     context: Context,
     model: *const ocr_artifacts.Model,
 ) !?InferResult {
-    if (!std.mem.eql(u8, context.operation, "infer-ocr")) return null;
+    if (context.operation_id != .ocr) return null;
     if (context.execution != .sync) return null;
 
     var image = try ocr_artifacts.Image.loadPpmFile(allocator, context.input_path);
@@ -116,6 +118,7 @@ test "swiftocr native execute emits infer receipt" {
 
     const payload = try execute(std.testing.allocator, .{
         .operation = "infer-ocr",
+        .operation_id = .ocr,
         .model_path = model_path,
         .input_path = image_path,
         .execution = .sync,
