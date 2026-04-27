@@ -108,6 +108,87 @@ pub fn maxPool(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, input
     };
 }
 
+pub fn averagePool(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
+    if (inputs.len != 1) return error.InvalidOperatorArity;
+    const input = inputs[0].*;
+    if (input.buffer != .f32) return error.UnsupportedTensorDType;
+    if (input.shape.len != 4) return error.UnsupportedTensorRank;
+    if ((common.attributeInt(node, "ceil_mode") orelse 0) != 0) return error.UnsupportedOperatorAttribute;
+    const kernel = try requiredPairAttribute(allocator, node, "kernel_shape");
+    const strides = try pairAttribute(allocator, node, "strides", 1);
+    const pads = try padsAttribute(allocator, node);
+    const count_include_pad = (common.attributeInt(node, "count_include_pad") orelse 0) != 0;
+    const out_h = try convOutputDim(input.shape[2], kernel.h, pads.top, pads.bottom, strides.h);
+    const out_w = try convOutputDim(input.shape[3], kernel.w, pads.left, pads.right, strides.w);
+    const out = try allocator.alloc(f32, input.shape[0] * input.shape[1] * out_h * out_w);
+    errdefer allocator.free(out);
+
+    for (0..input.shape[0]) |batch| {
+        for (0..input.shape[1]) |channel| {
+            for (0..out_h) |oy| {
+                for (0..out_w) |ox| {
+                    var sum: f32 = 0;
+                    var count: usize = 0;
+                    for (0..kernel.h) |ky| {
+                        const in_y = @as(isize, @intCast(oy * strides.h + ky)) - @as(isize, @intCast(pads.top));
+                        if (in_y < 0 or in_y >= @as(isize, @intCast(input.shape[2]))) {
+                            if (count_include_pad) count += kernel.w;
+                            continue;
+                        }
+                        for (0..kernel.w) |kx| {
+                            const in_x = @as(isize, @intCast(ox * strides.w + kx)) - @as(isize, @intCast(pads.left));
+                            if (in_x < 0 or in_x >= @as(isize, @intCast(input.shape[3]))) {
+                                if (count_include_pad) count += 1;
+                                continue;
+                            }
+                            const index = ((batch * input.shape[1] + channel) * input.shape[2] + @as(usize, @intCast(in_y))) * input.shape[3] + @as(usize, @intCast(in_x));
+                            sum += input.buffer.f32[index];
+                            count += 1;
+                        }
+                    }
+                    out[((batch * input.shape[1] + channel) * out_h + oy) * out_w + ox] = if (count == 0) 0 else sum / @as(f32, @floatFromInt(count));
+                }
+            }
+        }
+    }
+    return .{
+        .allocator = allocator,
+        .shape = try allocator.dupe(usize, &.{ input.shape[0], input.shape[1], out_h, out_w }),
+        .buffer = .{ .f32 = out },
+    };
+}
+
+pub fn globalAveragePool(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Tensor {
+    if (inputs.len != 1) return error.InvalidOperatorArity;
+    const input = inputs[0].*;
+    if (input.buffer != .f32) return error.UnsupportedTensorDType;
+    if (input.shape.len != 4) return error.UnsupportedTensorRank;
+    const h = input.shape[2];
+    const w = input.shape[3];
+    if (h == 0 or w == 0) return error.InvalidOperatorAttribute;
+
+    const out = try allocator.alloc(f32, input.shape[0] * input.shape[1]);
+    errdefer allocator.free(out);
+    const denom = @as(f32, @floatFromInt(h * w));
+    for (0..input.shape[0]) |batch| {
+        for (0..input.shape[1]) |channel| {
+            var sum: f32 = 0;
+            for (0..h) |y| {
+                for (0..w) |x| {
+                    const index = ((batch * input.shape[1] + channel) * h + y) * w + x;
+                    sum += input.buffer.f32[index];
+                }
+            }
+            out[batch * input.shape[1] + channel] = sum / denom;
+        }
+    }
+    return .{
+        .allocator = allocator,
+        .shape = try allocator.dupe(usize, &.{ input.shape[0], input.shape[1], 1, 1 }),
+        .buffer = .{ .f32 = out },
+    };
+}
+
 const Pair = struct {
     h: usize,
     w: usize,

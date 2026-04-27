@@ -75,6 +75,7 @@ fn executeSingle(
     if (std.mem.eql(u8, name, "Mul")) return try core.elementwise(allocator, inputs, .mul);
     if (std.mem.eql(u8, name, "Div")) return try core.elementwise(allocator, inputs, .div);
     if (std.mem.eql(u8, name, "Relu")) return try core.relu(allocator, inputs);
+    if (std.mem.eql(u8, name, "Clip")) return try core.clip(allocator, node, inputs);
     if (std.mem.eql(u8, name, "Sigmoid")) return try activation.sigmoid(allocator, inputs);
     if (std.mem.eql(u8, name, "Tanh")) return try activation.tanh(allocator, inputs);
     if (std.mem.eql(u8, name, "HardSwish")) return try activation.hardSwish(allocator, inputs);
@@ -106,6 +107,8 @@ fn executeSingle(
     if (std.mem.eql(u8, name, "RMSNormalization")) return try normalization.rmsNormalization(allocator, node, inputs);
     if (std.mem.eql(u8, name, "Conv")) return try spatial.conv(allocator, node, inputs);
     if (std.mem.eql(u8, name, "MaxPool")) return try spatial.maxPool(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "AveragePool")) return try spatial.averagePool(allocator, node, inputs);
+    if (std.mem.eql(u8, name, "GlobalAveragePool")) return try spatial.globalAveragePool(allocator, inputs);
     return error.UnsupportedOnnxOperator;
 }
 
@@ -162,6 +165,10 @@ test "graph dispatcher executes paddleocr common ops" {
     var hswish = try execute(std.testing.allocator, testNode("HardSwish"), &single_input);
     defer hswish.deinit();
     try std.testing.expect(hswish.buffer.f32[0] > 0);
+
+    var clip = try execute(std.testing.allocator, testNode("Clip"), &single_input);
+    defer clip.deinit();
+    try std.testing.expectEqualSlices(f32, &.{ 1, 3, 2, 4 }, clip.buffer.f32);
 }
 
 test "graph dispatcher executes batch normalization" {
@@ -245,6 +252,36 @@ test "graph dispatcher executes conservative nearest resize" {
     defer output.deinit();
     try std.testing.expectEqualSlices(usize, &.{ 1, 1, 4, 4 }, output.shape);
     try std.testing.expectEqualSlices(f32, &.{ 1, 1, 2, 2, 1, 1, 2, 2, 3, 3, 4, 4, 3, 3, 4, 4 }, output.buffer.f32);
+}
+
+test "graph dispatcher executes average pooling ops" {
+    var input = try Tensor.fromF32(std.testing.allocator, &.{ 1, 1, 2, 2 }, &.{ 1, 2, 3, 4 });
+    defer input.deinit();
+    const inputs = [_]*const Tensor{&input};
+    var kernel_values = [_]i64{ 2, 2 };
+    var attrs = [_]shared_graph.onnx.metadata.AttributeInfo{.{
+        .allocator = std.testing.allocator,
+        .name = @constCast("kernel_shape"),
+        .int_values = &kernel_values,
+        .int_count = kernel_values.len,
+    }};
+    const avg_node = shared_graph.onnx.metadata.NodeInfo{
+        .allocator = std.testing.allocator,
+        .name = @constCast("test"),
+        .op_type = @constCast("AveragePool"),
+        .domain = @constCast(""),
+        .attributes = &attrs,
+    };
+
+    var avg = try execute(std.testing.allocator, avg_node, &inputs);
+    defer avg.deinit();
+    try std.testing.expectEqualSlices(usize, &.{ 1, 1, 1, 1 }, avg.shape);
+    try std.testing.expectEqualSlices(f32, &.{2.5}, avg.buffer.f32);
+
+    var global = try execute(std.testing.allocator, testNode("GlobalAveragePool"), &inputs);
+    defer global.deinit();
+    try std.testing.expectEqualSlices(usize, &.{ 1, 1, 1, 1 }, global.shape);
+    try std.testing.expectEqualSlices(f32, &.{2.5}, global.buffer.f32);
 }
 
 fn testNode(op_type: []const u8) shared_graph.onnx.metadata.NodeInfo {

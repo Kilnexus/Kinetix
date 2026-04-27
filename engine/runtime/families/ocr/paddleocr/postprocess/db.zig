@@ -3,6 +3,9 @@ const std = @import("std");
 pub const Options = struct {
     threshold: f32 = 0.3,
     min_area: usize = 1,
+    min_score: f32 = 0.0,
+    expand_pixels: usize = 1,
+    sort_reading_order: bool = true,
 };
 
 pub const Box = struct {
@@ -45,17 +48,43 @@ pub fn boxesFromProbabilityMap(
         if (visited[index] or value < options.threshold) continue;
         const component = try floodFill(allocator, map, width, height, options.threshold, visited, &stack, index);
         if (component.area < options.min_area) continue;
-        try boxes.append(allocator, .{
+        const score = component.score_sum / @as(f32, @floatFromInt(component.area));
+        if (score < options.min_score) continue;
+        try boxes.append(allocator, expandBox(.{
             .x_min = component.x_min,
             .y_min = component.y_min,
             .x_max = component.x_max,
             .y_max = component.y_max,
             .area = component.area,
-            .score = component.score_sum / @as(f32, @floatFromInt(component.area)),
-        });
+            .score = score,
+        }, width, height, options.expand_pixels));
     }
 
+    if (options.sort_reading_order) sortBoxesReadingOrder(boxes.items);
     return try boxes.toOwnedSlice(allocator);
+}
+
+fn expandBox(box: Box, width: usize, height: usize, pixels: usize) Box {
+    if (pixels == 0) return box;
+    return .{
+        .x_min = if (box.x_min > pixels) box.x_min - pixels else 0,
+        .y_min = if (box.y_min > pixels) box.y_min - pixels else 0,
+        .x_max = @min(width - 1, box.x_max + pixels),
+        .y_max = @min(height - 1, box.y_max + pixels),
+        .area = box.area,
+        .score = box.score,
+    };
+}
+
+fn sortBoxesReadingOrder(boxes: []Box) void {
+    std.mem.sort(Box, boxes, {}, struct {
+        fn lessThan(_: void, lhs: Box, rhs: Box) bool {
+            const lhs_mid_y = lhs.y_min + (lhs.y_max - lhs.y_min) / 2;
+            const rhs_mid_y = rhs.y_min + (rhs.y_max - rhs.y_min) / 2;
+            if (lhs_mid_y != rhs_mid_y) return lhs_mid_y < rhs_mid_y;
+            return lhs.x_min < rhs.x_min;
+        }
+    }.lessThan);
 }
 
 fn floodFill(
@@ -141,7 +170,7 @@ test "paddleocr db postprocess extracts connected box" {
         },
         4,
         3,
-        .{ .threshold = 0.5, .min_area = 2 },
+        .{ .threshold = 0.5, .min_area = 2, .expand_pixels = 0 },
     );
     defer std.testing.allocator.free(boxes);
 
@@ -152,4 +181,27 @@ test "paddleocr db postprocess extracts connected box" {
     try std.testing.expectEqual(@as(usize, 2), boxes[0].y_max);
     try std.testing.expectEqual(@as(usize, 3), boxes[0].area);
     try std.testing.expect(boxes[0].score > 0.79 and boxes[0].score < 0.81);
+}
+
+test "paddleocr db postprocess filters expands and sorts boxes" {
+    const boxes = try boxesFromProbabilityMap(
+        std.testing.allocator,
+        &.{
+            0.0, 0.0, 0.0, 0.0,
+            0.0, 0.9, 0.0, 0.8,
+            0.0, 0.0, 0.0, 0.0,
+            0.7, 0.0, 0.0, 0.0,
+        },
+        4,
+        4,
+        .{ .threshold = 0.5, .min_score = 0.75, .expand_pixels = 1 },
+    );
+    defer std.testing.allocator.free(boxes);
+
+    try std.testing.expectEqual(@as(usize, 2), boxes.len);
+    try std.testing.expectEqual(@as(usize, 0), boxes[0].x_min);
+    try std.testing.expectEqual(@as(usize, 0), boxes[0].y_min);
+    try std.testing.expectEqual(@as(usize, 2), boxes[0].x_max);
+    try std.testing.expectEqual(@as(usize, 2), boxes[0].y_max);
+    try std.testing.expectEqual(@as(usize, 2), boxes[1].x_min);
 }

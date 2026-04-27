@@ -48,6 +48,7 @@ pub const entries = [_]Entry{
     .{ .name = "Mul", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
     .{ .name = "Div", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
     .{ .name = "Relu", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
+    .{ .name = "Clip", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/core/index.zig" },
     .{ .name = "Sigmoid", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/activation/index.zig" },
     .{ .name = "Tanh", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/activation/index.zig" },
     .{ .name = "HardSwish", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/activation/index.zig" },
@@ -79,6 +80,8 @@ pub const entries = [_]Entry{
     .{ .name = "RMSNormalization", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/normalization/index.zig" },
     .{ .name = "Conv", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/spatial/index.zig" },
     .{ .name = "MaxPool", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/spatial/index.zig" },
+    .{ .name = "AveragePool", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/spatial/index.zig" },
+    .{ .name = "GlobalAveragePool", .domain = .onnx_graph, .status = .graph_executable, .module = "shared/ops/graph/spatial/index.zig" },
 
     .{ .name = "SiLU", .domain = .vision_nn, .status = .native_kernel, .module = "shared/ops/kernels/activation/index.zig" },
     .{ .name = "Sigmoid", .domain = .vision_nn, .status = .native_kernel, .module = "shared/ops/kernels/activation/index.zig" },
@@ -270,6 +273,9 @@ test "unified ops registry includes graph executable and native kernels" {
     try std.testing.expect(isGraphExecutableOnnx("Split"));
     try std.testing.expect(isGraphExecutableOnnx("Conv"));
     try std.testing.expect(isGraphExecutableOnnx("MaxPool"));
+    try std.testing.expect(isGraphExecutableOnnx("AveragePool"));
+    try std.testing.expect(isGraphExecutableOnnx("GlobalAveragePool"));
+    try std.testing.expect(isGraphExecutableOnnx("Clip"));
     try std.testing.expect(isGraphExecutableOnnx("SwiGLU"));
     try std.testing.expect(has("Conv2d", .vision_nn));
     try std.testing.expect(has("RmsNorm", .text_core));

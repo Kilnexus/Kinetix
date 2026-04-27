@@ -82,6 +82,33 @@ pub fn relu(allocator: std.mem.Allocator, inputs: []const *const Tensor) !Tensor
     };
 }
 
+pub fn clip(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
+    if (inputs.len < 1 or inputs.len > 3) return error.InvalidOperatorArity;
+    const input = inputs[0].*;
+    if (input.buffer != .f32) return error.UnsupportedTensorDType;
+    const min_value = if (inputs.len >= 2) try scalarF32(inputs[1].*) else common.attributeFloat(node, "min") orelse -std.math.inf(f32);
+    const max_value = if (inputs.len >= 3) try scalarF32(inputs[2].*) else common.attributeFloat(node, "max") orelse std.math.inf(f32);
+    if (min_value > max_value) return error.InvalidOperatorAttribute;
+
+    const out = try allocator.alloc(f32, input.buffer.f32.len);
+    errdefer allocator.free(out);
+    for (input.buffer.f32, out) |value, *slot| slot.* = @min(@max(value, min_value), max_value);
+    return .{
+        .allocator = allocator,
+        .shape = try allocator.dupe(usize, input.shape),
+        .buffer = .{ .f32 = out },
+    };
+}
+
+fn scalarF32(tensor: Tensor) !f32 {
+    if (tensor.elementCount() != 1) return error.ShapeMismatch;
+    return switch (tensor.buffer) {
+        .f32 => |values| values[0],
+        .i32 => |values| @floatFromInt(values[0]),
+        .i64 => |values| @floatFromInt(values[0]),
+    };
+}
+
 pub fn cast(allocator: std.mem.Allocator, node: onnx_metadata.NodeInfo, inputs: []const *const Tensor) !Tensor {
     if (inputs.len != 1) return error.InvalidOperatorArity;
     const to = common.attributeInt(node, "to") orelse return error.MissingOperatorAttribute;

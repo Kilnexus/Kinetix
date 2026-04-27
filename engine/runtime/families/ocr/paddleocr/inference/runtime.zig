@@ -36,6 +36,124 @@ pub const ImageModelResult = struct {
     }
 };
 
+pub const RecognizedLine = struct {
+    box: ?postprocess.db.Box = null,
+    text: []u8,
+    token_count: usize,
+};
+
+pub const PipelineResult = struct {
+    allocator: std.mem.Allocator,
+    det_model_path: ?[]u8 = null,
+    rec_model_path: ?[]u8 = null,
+    cls_model_path: ?[]u8 = null,
+    dictionary_path: ?[]u8 = null,
+    detection_boxes: []postprocess.db.Box = &.{},
+    detection_map_width: usize = 0,
+    detection_map_height: usize = 0,
+    lines: []RecognizedLine = &.{},
+    text: []u8 = &.{},
+    det_executed: bool = false,
+    cls_attempted_count: usize = 0,
+    cls_rotate_180_count: usize = 0,
+    rec_attempted_count: usize = 0,
+    rec_decoded_count: usize = 0,
+    error_message: ?[]const u8 = null,
+
+    pub fn deinit(self: *PipelineResult) void {
+        if (self.det_model_path) |path| self.allocator.free(path);
+        if (self.rec_model_path) |path| self.allocator.free(path);
+        if (self.cls_model_path) |path| self.allocator.free(path);
+        if (self.dictionary_path) |path| self.allocator.free(path);
+        self.allocator.free(self.detection_boxes);
+        for (self.lines) |line| self.allocator.free(line.text);
+        self.allocator.free(self.lines);
+        self.allocator.free(self.text);
+        self.* = undefined;
+    }
+};
+
+pub fn executePipeline(
+    allocator: std.mem.Allocator,
+    model_dir: []const u8,
+    image_path: []const u8,
+) !PipelineResult {
+    var result = PipelineResult{ .allocator = allocator };
+    errdefer result.deinit();
+
+    result.det_model_path = try findFirstOnnxModelFileByStage(allocator, model_dir, .det);
+    result.rec_model_path = try findFirstOnnxModelFileByStage(allocator, model_dir, .rec);
+    result.cls_model_path = try findFirstOnnxModelFileByStage(allocator, model_dir, .cls);
+    result.dictionary_path = try findFirstDictionaryFile(allocator, model_dir);
+
+    var source = try imaging.decodeFileRgb8(allocator, image_path);
+    defer source.deinit();
+
+    if (result.det_model_path) |det_path| {
+        var det = executeImageModelFromImage(allocator, det_path, &source, .{}) catch |err| {
+            result.error_message = @errorName(err);
+            return result;
+        };
+        defer det.deinit();
+        result.det_executed = true;
+        const detected = detectBoxesFromResult(allocator, &det.outputs, .{}) catch |err| blk: {
+            result.error_message = @errorName(err);
+            break :blk null;
+        };
+        if (detected) |value| {
+            result.detection_boxes = value.boxes;
+            result.detection_map_width = value.map_width;
+            result.detection_map_height = value.map_height;
+        }
+    }
+
+    if (result.rec_model_path == null) return result;
+    const rec_path = result.rec_model_path.?;
+    if (result.dictionary_path == null) {
+        result.error_message = "MissingRecognitionDictionary";
+        return result;
+    }
+    var dictionary = try postprocess.dictionary.loadFromFile(allocator, result.dictionary_path.?);
+    defer dictionary.deinit();
+
+    var lines = std.ArrayListUnmanaged(RecognizedLine).empty;
+    errdefer {
+        for (lines.items) |line| allocator.free(line.text);
+        lines.deinit(allocator);
+    }
+    var text = std.ArrayListUnmanaged(u8).empty;
+    errdefer text.deinit(allocator);
+
+    if (result.detection_boxes.len == 0) {
+        try recognizeImage(allocator, rec_path, &source, dictionary.tokens, null, &lines, &text, &result);
+    } else {
+        for (result.detection_boxes) |box| {
+            const rect = scaledCropRect(box, source.width, source.height, result.detection_map_width, result.detection_map_height) catch continue;
+            var crop = imaging.cropImageRect(allocator, &source, rect) catch continue;
+            defer crop.deinit();
+            if (result.cls_model_path) |cls_path| {
+                const orientation = classifyImageOrientation(allocator, cls_path, &crop) catch null;
+                result.cls_attempted_count += 1;
+                if (orientation == .rotate_180) {
+                    result.cls_rotate_180_count += 1;
+                    var rotated = rotateImage180(allocator, &crop) catch {
+                        try recognizeImage(allocator, rec_path, &crop, dictionary.tokens, box, &lines, &text, &result);
+                        continue;
+                    };
+                    defer rotated.deinit();
+                    try recognizeImage(allocator, rec_path, &rotated, dictionary.tokens, box, &lines, &text, &result);
+                    continue;
+                }
+            }
+            try recognizeImage(allocator, rec_path, &crop, dictionary.tokens, box, &lines, &text, &result);
+        }
+    }
+
+    result.lines = try lines.toOwnedSlice(allocator);
+    result.text = try text.toOwnedSlice(allocator);
+    return result;
+}
+
 pub fn executeImageModelFile(
     allocator: std.mem.Allocator,
     model_path: []const u8,
@@ -71,7 +189,7 @@ pub fn executeLoadedImageModel(
     const input_name = try allocator.dupe(u8, input_info.name);
     errdefer allocator.free(input_name);
 
-    var input_tensor = try preprocess.tensorFromImage(allocator, image, input_shape, options);
+    var input_tensor = try preprocess.tensorFromImage(allocator, image, input_shape, optionsForStage(options, stageFromPath(model_path)));
     defer input_tensor.deinit();
 
     const external_data_dir = std.fs.path.dirname(model_path) orelse ".";
@@ -88,11 +206,26 @@ pub fn executeLoadedImageModel(
     };
 }
 
+fn optionsForStage(options: preprocess.Options, stage: StageKind) preprocess.Options {
+    var stage_options = options;
+    if (stage == .rec) stage_options.mode = .recognition;
+    return stage_options;
+}
+
 pub fn findFirstOnnxModelFile(allocator: std.mem.Allocator, model_dir: []const u8) !?[]u8 {
     if (try findFirstOnnxByStage(allocator, model_dir, "det")) |path| return path;
     if (try findFirstOnnxByStage(allocator, model_dir, "rec")) |path| return path;
     if (try findFirstOnnxByStage(allocator, model_dir, "cls")) |path| return path;
     return try findFirstOnnxRecursive(allocator, model_dir, "", null, 0);
+}
+
+pub fn findFirstOnnxModelFileByStage(allocator: std.mem.Allocator, model_dir: []const u8, stage: StageKind) !?[]u8 {
+    return switch (stage) {
+        .det => try findFirstOnnxByStage(allocator, model_dir, "det"),
+        .rec => try findFirstOnnxByStage(allocator, model_dir, "rec"),
+        .cls => try findFirstOnnxByStage(allocator, model_dir, "cls"),
+        .unknown => try findFirstOnnxRecursive(allocator, model_dir, "", null, 0),
+    };
 }
 
 pub fn findFirstDictionaryFile(allocator: std.mem.Allocator, model_dir: []const u8) !?[]u8 {
@@ -111,10 +244,29 @@ pub fn boxesFromDetectionResult(
     result: *const ExecutionResult,
     options: postprocess.db.Options,
 ) ![]postprocess.db.Box {
+    const detected = try detectBoxesFromResult(allocator, result, options);
+    return detected.boxes;
+}
+
+pub const DetectedBoxes = struct {
+    boxes: []postprocess.db.Box,
+    map_width: usize,
+    map_height: usize,
+};
+
+pub fn detectBoxesFromResult(
+    allocator: std.mem.Allocator,
+    result: *const ExecutionResult,
+    options: postprocess.db.Options,
+) !DetectedBoxes {
     if (result.outputs.len == 0) return error.TensorNotFound;
     const tensor = result.outputs[0].tensor;
     const map = try probabilityMap(tensor);
-    return try postprocess.db.boxesFromProbabilityMap(allocator, map.values, map.width, map.height, options);
+    return .{
+        .boxes = try postprocess.db.boxesFromProbabilityMap(allocator, map.values, map.width, map.height, options),
+        .map_width = map.width,
+        .map_height = map.height,
+    };
 }
 
 pub fn decodeRecognitionResult(
@@ -124,6 +276,11 @@ pub fn decodeRecognitionResult(
 ) !postprocess.ctc.DecodedText {
     if (result.outputs.len == 0) return error.TensorNotFound;
     return try postprocess.ctc.decodeTensorBestPath(allocator, result.outputs[0].tensor, dictionary, .{});
+}
+
+pub fn classifyResult(result: *const ExecutionResult) !postprocess.classification.Result {
+    if (result.outputs.len == 0) return error.TensorNotFound;
+    return try postprocess.classification.classifyOrientation(result.outputs[0].tensor);
 }
 
 const ProbabilityMap = struct {
@@ -145,6 +302,89 @@ fn probabilityMap(tensor: Tensor) !ProbabilityMap {
             break :blk .{ .values = tensor.buffer.f32, .height = tensor.shape[2], .width = tensor.shape[3] };
         },
         else => error.UnsupportedTensorRank,
+    };
+}
+
+fn recognizeImage(
+    allocator: std.mem.Allocator,
+    rec_path: []const u8,
+    image: *const imaging.ImageU8,
+    dictionary: []const []const u8,
+    box: ?postprocess.db.Box,
+    lines: *std.ArrayListUnmanaged(RecognizedLine),
+    text: *std.ArrayListUnmanaged(u8),
+    pipeline: *PipelineResult,
+) !void {
+    pipeline.rec_attempted_count += 1;
+    var rec = executeImageModelFromImage(allocator, rec_path, image, .{}) catch |err| {
+        pipeline.error_message = @errorName(err);
+        return;
+    };
+    defer rec.deinit();
+
+    var decoded = decodeRecognitionResult(allocator, &rec.outputs, dictionary) catch |err| {
+        pipeline.error_message = @errorName(err);
+        return;
+    };
+    defer decoded.deinit();
+    if (decoded.text.len == 0) return;
+
+    if (text.items.len != 0) try text.append(allocator, '\n');
+    try text.appendSlice(allocator, decoded.text);
+    try lines.append(allocator, .{
+        .box = box,
+        .text = try allocator.dupe(u8, decoded.text),
+        .token_count = decoded.token_ids.len,
+    });
+    pipeline.rec_decoded_count += 1;
+}
+
+fn classifyImageOrientation(
+    allocator: std.mem.Allocator,
+    cls_path: []const u8,
+    image: *const imaging.ImageU8,
+) !postprocess.classification.Orientation {
+    var cls = try executeImageModelFromImage(allocator, cls_path, image, .{});
+    defer cls.deinit();
+    const result = try classifyResult(&cls.outputs);
+    return result.orientation;
+}
+
+fn rotateImage180(allocator: std.mem.Allocator, image: *const imaging.ImageU8) !imaging.ImageU8 {
+    var rotated = try imaging.ImageU8.init(allocator, image.width, image.height, image.channels);
+    errdefer rotated.deinit();
+    for (0..image.height) |y| {
+        for (0..image.width) |x| {
+            const src_x = image.width - 1 - x;
+            const src_y = image.height - 1 - y;
+            const src_offset = (src_y * image.width + src_x) * image.channels;
+            const dst_offset = (y * rotated.width + x) * rotated.channels;
+            @memcpy(rotated.data[dst_offset .. dst_offset + image.channels], image.data[src_offset .. src_offset + image.channels]);
+        }
+    }
+    return rotated;
+}
+
+fn scaledCropRect(
+    box: postprocess.db.Box,
+    image_width: usize,
+    image_height: usize,
+    map_width: usize,
+    map_height: usize,
+) !imaging.CropRect {
+    if (image_width == 0 or image_height == 0) return error.InvalidImageDimensions;
+    if (map_width == 0 or map_height == 0) return error.InvalidImageDimensions;
+
+    const x0 = @min(image_width - 1, (box.x_min * image_width) / map_width);
+    const y0 = @min(image_height - 1, (box.y_min * image_height) / map_height);
+    const x1 = @min(image_width, ((box.x_max + 1) * image_width + map_width - 1) / map_width);
+    const y1 = @min(image_height, ((box.y_max + 1) * image_height + map_height - 1) / map_height);
+    if (x1 <= x0 or y1 <= y0) return error.InvalidCropBounds;
+    return .{
+        .x = x0,
+        .y = y0,
+        .width = x1 - x0,
+        .height = y1 - y0,
     };
 }
 
@@ -295,6 +535,22 @@ test "paddleocr image runtime selects non-initializer graph input" {
     try std.testing.expectEqualStrings("x", result.input_name);
     try std.testing.expectEqual(@as(usize, 1), result.outputs.outputs.len);
     try std.testing.expectEqualSlices(usize, &.{ 1, 3, 2, 2 }, result.outputs.outputs[0].tensor.shape);
+}
+
+test "paddleocr runtime rotates roi by 180 degrees" {
+    var image = try imaging.ImageU8.init(std.testing.allocator, 2, 1, 3);
+    defer image.deinit();
+    image.data[0] = 1;
+    image.data[1] = 2;
+    image.data[2] = 3;
+    image.data[3] = 4;
+    image.data[4] = 5;
+    image.data[5] = 6;
+
+    var rotated = try rotateImage180(std.testing.allocator, &image);
+    defer rotated.deinit();
+
+    try std.testing.expectEqualSlices(u8, &.{ 4, 5, 6, 1, 2, 3 }, rotated.data);
 }
 
 fn identityModelBytes(allocator: std.mem.Allocator) ![]u8 {
